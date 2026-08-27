@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.9'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -28,7 +28,7 @@ const DEFAULT_SETTINGS = {
     lastCloudSha: {},         // {云端路径: sha} 记忆
     lastLocalMTime: {},       // {云端路径: 上次同步时本地聊天文件mtime} 增量粗筛
     syncMap: {},              // {角色名: {云路径: 本地导入后的真实文件名}} 稳定身份映射，让跨端同步收敛不复制
-    uploadBundle: true,       // 拓展上传时是否同时备份本体(安全包); 关掉可省每次打包耗时与流量(默认开)
+    uploadBundle: undefined,  // (已停用) 备份本体功能已移除(0.9.0): 打包依赖从仓库再拉代码, 作者删库后无法生成, 与防删库目的不符; 云端旧安全包仍可被导入端读取兜底
     autoUpdate: true,         // 自动更新插件至最新(默认勾选; 每次启动检查, 有新版自动升级+刷新)
 };
 
@@ -4243,7 +4243,7 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_cfg_push" type="button" class="cs-btn">📤 上传选中</button>
                             <button id="${id}_cfg_pull" type="button" class="cs-btn">📥 导入选中</button>
                             <button id="${id}_cfg_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的配置项(本地视图删本地/云端视图删云端)">🗑 删除选中</button>
-                            <div style="display:flex!important;align-items:center;gap:4px;white-space:nowrap;width:auto;flex:none;font-size:.74em;margin:0 0 0 4px;cursor:pointer" title="勾选=上传拓展时同时把本体代码打包进云端(删库兜底); 取消=只上传配置与状态, 每次上传更快"><input type="checkbox" id="${id}_cfg_bundle" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e);pointer-events:auto" ${settings.uploadBundle !== false ? 'checked' : ''}><span>📦 备份本体</span></div>
+
                         </div>
                         <div class="cs-row" style="margin-top:2px;flex-wrap:wrap">
                             <button id="${id}_cfg_user_br" type="button" class="cs-btn" style="display:none" title="一键备份：用户名+全部人设+全部头像照片">💾 一键备份全部</button>
@@ -5253,7 +5253,7 @@ ext: {
             listLocal() { return __discoverExts(); },
             async push(items) {
                 const ok = [], fail = [];
-                const bundleJobs = [];
+
                 for (const full of items) {
                     const sname = String(full).split('/').pop();
                     const skey = __extSettingsKey(sname);
@@ -5264,8 +5264,7 @@ ext: {
                         }
                         ok.push(sname + (skey ? '' : '(无设置配置)'));
                     } catch (e) { fail.push(sname + ':' + (e.message || e)); }
-                    // 本体安全包: 受「📦 备份本体」勾选控制(settings.uploadBundle), 关闭时跳过打包只传配置; 失败不阻塞配置上传
-                    if (settings.uploadBundle !== false) bundleJobs.push(__buildExtBundle(full).then((b) => ({ sname, b })));
+
                 }
                 // manifest 合并恒写(不论上传成否)
                 let man = {};
@@ -5276,22 +5275,13 @@ ext: {
                     man[sname] = { url: meta.url || '', branch: meta.branch || '', commit: meta.commit || '', config: !!__extSettingsKey(sname), dn: (window.__extDisplayBy && window.__extDisplayBy[sname]) || sname, enabled: __extEnabled(full) };
                 }
                 await Gitee.putText(EXT_MANIFEST_PATH, JSON.stringify(man, null, 2), (await Gitee.getText(EXT_MANIFEST_PATH))?.sha, 'ext manifest');
-                // 安全包落盘
-                const bres = (await Promise.allSettled(bundleJobs)).map((x) => (x.status === 'fulfilled' ? x.value : { sname: '', b: { ok: false, reason: '异常' } }));
-                let bOk = 0, bFail = 0;
-                for (const it of bres) {
-                    if (it.b && it.b.ok) {
-                        try { await __extBundleSave(it.sname, it.b.bundle); bOk++; }
-                        catch { bFail++; }
-                    } else bFail++;
-                }
-                // url 缺失时附加原因(上传诊断: 让源头一眼看到为什么没记录到仓库地址)
+// url 缺失时附加原因(上传诊断: 让源头一眼看到为什么没记录到仓库地址)
                 const urlNotes = {};
                 for (const full of items) {
                     const meta = (window.__extMeta && window.__extMeta[full]) || {};
                     if (!meta.url) urlNotes[String(full).split('/').pop()] = meta.err || '本机未记录仓库URL';
                 }
-                return { ok: ok.length, fail: fail.length, failReasons: fail, bundles: { ok: bOk, fail: bFail, skipped: settings.uploadBundle === false }, urlNotes };
+                return { ok: ok.length, fail: fail.length, failReasons: fail, urlNotes };
             },
             async pull(items) {
                 const ok = [], fail = [], failReasons = [];
@@ -5695,9 +5685,7 @@ ext: {
         const brn = document.getElementById('cs_cfg_user_br'), rrn = document.getElementById('cs_cfg_user_rr');
         if (brn) brn.style.display = t === 'user' ? '' : 'none';
         if (rrn) rrn.style.display = t === 'user' ? '' : 'none';
-        // 「📦 备份本体」勾选仅拓展 tab 显示(其它 tab 隐藏); 注意显隐必须写具体值, 置''会把内联flex删掉导致回退block换行
-        const bb = document.getElementById('cs_cfg_bundle');
-        if (bb) { const lab = bb.closest('label') || bb.parentElement; if (lab) lab.style.display = t === 'ext' ? 'flex' : 'none'; }
+
     }
     window.__updateCfgViewBtns = __updateCfgViewBtns;
     document.querySelectorAll('#chat_sync_settings .cs-tab').forEach((b) => {
@@ -5777,7 +5765,7 @@ ext: {
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要上传的项'; return; }
         if (st2) st2.textContent = '上传中…';
         const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
-        if (st2) st2.textContent = (r && r.bundles) ? `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.bundles.skipped ? '（未备份本体）' : ` · 本体安全包 ${r.bundles.ok}${r.bundles.fail ? `/失败${r.bundles.fail}` : ''}`}${urlNotesTxt(r)}` : '';
+        if (st2) st2.textContent = (r && typeof r.ok === 'number') ? `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}` : '';
                 // 上传诊断: URL缺失原因(供源头设备定位为何新设备无法重装)
                 function urlNotesTxt(r2) {
                     try {
@@ -5797,12 +5785,6 @@ ext: {
         const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
         if (st2) st2.textContent = (r && window.__cfgTab === 'ext' && (r.fail || r.ok)) ? `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}` : '';
     });
-    // 📦 备份本体勾选: 状态存 settings.uploadBundle(默认开)
-    const chkBundle = $('cs_cfg_bundle');
-    if (chkBundle) {
-        chkBundle.checked = settings.uploadBundle !== false;
-        chkBundle.addEventListener('change', () => { settings.uploadBundle = chkBundle.checked; saveSettingsDebounced(); });
-    }
     // 启动自动更新勾选: 元素由 __refreshCurRepoLine 动态创建(晚于直接绑定) → 用 document 委托, 永不失绑
     document.addEventListener('change', (e) => {
         if (e.target && e.target.id === 'cs_auto_upd') {
