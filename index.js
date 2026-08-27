@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.8.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3970,16 +3970,18 @@ function __b64ToText(s) {
     return new TextDecoder().decode(bytes);
 }
 async function __csFetchRemoteVer() {
-    // 多源兜底(与余温同思路): 发布仓同时存在 Gitee 官方仓 + GitHub 镜像仓(公开), 一路不通自动换路, 每源 6s 超时
+    // 多源取最大版本: 权威 API 在前, raw/CDN 在后(可能有 CDN 缓存旧版);
+    // 「第一个成功即返回」会让缓存旧版被当作最新→误判"本地更高", 故收集所有可达源版本取 max
     const M = { repo: 'SakiPr1me/st-chat-sync-release', branch: 'main' };
     const sv = String(settings.server || '');
     const sources = [
-        `https://raw.githubusercontent.com/${M.repo}/${M.branch}/manifest.json`,   // GitHub raw(直链, 无限流)
-        `https://cdn.jsdelivr.net/gh/${M.repo}@${M.branch}/manifest.json`,         // jsDelivr CDN(免翻墙可选)
-        'https://gitee.com/satosaki/tavern-synchronization-plugin/raw/master/manifest.json', // Gitee raw
-        PLUGIN_REPO_MANIFEST_API + '?t=' + Date.now(),                            // Gitee API(可能限流)
-        `https://api.github.com/repos/${M.repo}/contents/manifest.json`,           // GitHub API(最后兜底)
+        PLUGIN_REPO_MANIFEST_API + '?t=' + Date.now(),                           // ① Gitee API(权威, 带 gitee token)
+        `https://api.github.com/repos/${M.repo}/contents/manifest.json?t=${Date.now()}`, // ② GitHub API(权威镜像, 带 gh token/匿名)
+        `https://raw.githubusercontent.com/${M.repo}/${M.branch}/manifest.json?t=${Date.now()}`, // ③ GitHub raw(CDN 可能缓存旧)
+        `https://cdn.jsdelivr.net/gh/${M.repo}@${M.branch}/manifest.json`,        // ④ jsDelivr CDN(缓存较久, 仅兜底)
+        'https://gitee.com/satosaki/tavern-synchronization-plugin/raw/master/manifest.json', // ⑤ Gitee raw
     ];
+    const found = [];
     let lastErr = null;
     for (const url of sources) {
         try {
@@ -3992,14 +3994,15 @@ async function __csFetchRemoteVer() {
             let v = '';
             try {
                 const j = JSON.parse(text);
-                // API 返回是 base64 包裹的 JSON; raw 是直接 JSON
                 v = (j && typeof j.content === 'string') ? JSON.parse(__b64ToText(j.content)).version : j.version;
             } catch { throw new Error('parse'); }
             v = String(v || '').trim();
-            if (v) return v;
+            if (v) found.push(v);
         } catch (e) { lastErr = e; }
     }
-    throw lastErr || new Error('所有更新源均失败');
+    if (!found.length) throw lastErr || new Error('所有更新源均失败');
+    // 取可达源里的最大版本(拉平 CDN 旧缓存)
+    return found.reduce((a, b) => (__csCompareVer(b, a) > 0 ? b : a));
 }
 window.__csRenderUpdateBtn = function (remoteVer) {
     const slot = document.getElementById('cs_upd_slot');
