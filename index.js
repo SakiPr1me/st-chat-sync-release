@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.8.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4975,7 +4975,16 @@ async function __discoverExts() {
     const j = await r.json();
     const arr = Array.isArray(j) ? j : [];
     // 只取第三分项(内置扩展不备份, 与官方 discover 的 type 口径一致: 内置=name无前缀)
-    const out = arr.filter((x) => String(x.name).startsWith('third-party/')).map((x) => String(x.name));
+    // ⚠️ 记录每项 type(local/global): version 必须按真实目录传 global——写死 global:true 会让 user 目录(
+    //    type=local)扩展永远拿不到 remoteUrl → push 存空 → 新设备无法重装(20个扩展全无URL的根因)
+    window.__extType = window.__extType || {};
+    const out = [];
+    for (const x of arr) {
+        if (String(x.name).startsWith('third-party/')) {
+            window.__extType[String(x.name)] = x.type === 'global' ? 'global' : 'local';
+            out.push(String(x.name));
+        }
+    }
     // 显示名: 每个扩展自带 manifest.json 的 display_name(官方加载器同一URL, TT/ST 服务端均挂载, 实测通)
     window.__extDisplayBy = window.__extDisplayBy || {};
     // 详情( url/branch/commit )并发取
@@ -4992,7 +5001,7 @@ async function __discoverExts() {
         if (!window.__extMeta[full]) {
             jobs.push(fetch('/api/extensions/version', {
                 method: 'POST', headers: getRequestHeaders(),
-                body: JSON.stringify({ extensionName: full, global: true }),
+                body: JSON.stringify({ extensionName: full, global: window.__extType[full] === 'global' }),
             }).then((r) => r.json()).then((v) => {
                 window.__extMeta[full] = { url: String(v.remoteUrl || ''), branch: String(v.currentBranchName || ''), commit: String(v.currentCommitHash || '') };
             }).catch(() => { window.__extMeta[full] = { url: '', branch: '', commit: '' }; }));
