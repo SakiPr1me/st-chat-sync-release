@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.8.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -38,11 +38,6 @@ const settings = (extension_settings[extensionName] = extension_settings[extensi
 for (const k of Object.keys(DEFAULT_SETTINGS)) {
     if (settings[k] === undefined) settings[k] = DEFAULT_SETTINGS[k];
 }
-// autoUpdate 双保险: localStorage 立即记录, 防任何"服务端保存未落盘就刷新"场景丢勾选(与余温不同, 平台无关, F5 必在)
-try {
-    const lsv = localStorage.getItem('cs_autoUpdate');
-    if (lsv !== null) settings.autoUpdate = lsv === '1';
-} catch { }
 // v2 迁移：旧版本自动同步默认是开的（autoSyncOnOpen/autoSyncOnClose 默认 true），
 // 且"关闭页面推送"已废弃。升级到 v2 时按新默认全关重置一次，避免旧值残留。
 // (v3: 已移除"自动同步总开关"，定时由 autoSyncLive 自控；autoSync 字段仅作历史兼容保留)
@@ -3942,7 +3937,7 @@ function __refreshCurRepoLine() {
     const el = document.getElementById('cs_cur_repo');
     if (!el) return;
     const curRepo = settings.owner && settings.repo ? `${settings.owner}/${settings.repo}` : '（未配置）';
-    el.innerHTML = `<b>🌐 当前云端仓库：</b>${escapeHtml(curRepo)}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
+    el.innerHTML = `<b>🌐 当前云端仓库：</b>${escapeHtml(curRepo)}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
     __fillCloudUsage();
     try {
         if (typeof window.__csCheckUpdate === 'function') window.__csCheckUpdate();
@@ -4099,6 +4094,7 @@ window.__csManualCheck = async function (btn) {
             <div class="inline-drawer-content" id="${id}_content" style="display:none">
 
                 <p id="${id}_cur_repo" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(255,255,255,0.03)"></p>
+                <div id="cs_auto_upd_wrap" style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin:0 0 6px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="${id}_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></div>
 
                 <div class="cs-card">
                     <details class="cs-fold" ${(!settings.token || !settings.repo) ? 'open' : ''}>
@@ -5746,16 +5742,14 @@ ext: {
         chkBundle.checked = settings.uploadBundle !== false;
         chkBundle.addEventListener('change', () => { settings.uploadBundle = chkBundle.checked; saveSettingsDebounced(); });
     }
-    // 启动自动更新勾选
+    // 启动自动更新勾选(照 st-kimi-reasoning-injector 同款: change 写 settings + 保存)
     const chkAuto = $('cs_auto_upd');
     if (chkAuto) {
         chkAuto.checked = !!settings.autoUpdate;
         chkAuto.addEventListener('change', () => {
             settings.autoUpdate = chkAuto.checked;
             saveSettingsDebounced();
-            // 立即落盘(防抖窗口内刷新) + localStorage 双保险
             try { if (typeof saveSettings === 'function') saveSettings().catch(() => { }); } catch { }
-            try { localStorage.setItem('cs_autoUpdate', chkAuto.checked ? '1' : '0'); } catch { }
         });
     }
     $('cs_cfg_del')?.addEventListener('click', async () => {
