@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.8'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.8.9'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4999,32 +4999,45 @@ async function __discoverExts() {
                 .catch(() => { }));
         }
         if (!window.__extMeta[full]) {
-            // 双路探测: 先按 type 查, 失败(404/500)自动反着再试一次(不同设备上 discover 的 type 判别不可靠,
-            // 实测源头设备 type=global 但 public 目录无该扩展→global:true 404)
+            // URL 获取三级: ①按type查version → ②反着再试 → ③读扩展目录 .git/config 的 remote url
+            // (TT fork: discover 把数据目录报为 global, 但 version 只查 public——后装扩展必定 404;
+            //  官方为扩展目录开了静态读取(users.js createExtensionsRouteHandler), .git/config 可直接拿到 remote url, 实测 TT 全局类扩展 200)
             const gs = window.__extType[full] === 'global' ? [true, false] : [false, true];
+            const fetchConfigUrl = async () => {
+                try {
+                    const r = await fetch(`/scripts/extensions/${full}/.git/config`, { cache: 'no-store' });
+                    if (!r.ok) return { url: '', err: 'HTTP ' + r.status + '(无.git/config)' };
+                    const cfg = await r.text();
+                    const m = String(cfg).match(/\[remote\s+"?origin"?\][\s\S]*?url\s*=\s*(\S+)/i);
+                    if (m) return { url: m[1].trim(), err: '' };
+                    return { url: '', err: '有.git但无origin remote' };
+                } catch (e) { return { url: '', err: String((e && e.message) || e).slice(0, 80) }; }
+            };
             jobs.push((async () => {
                 let firstErr = '';
+                const tryVersion = async (g) => {
+                    const r = await fetch('/api/extensions/version', {
+                        method: 'POST', headers: getRequestHeaders(),
+                        body: JSON.stringify({ extensionName: full, global: g }),
+                    });
+                    if (!r.ok) { firstErr = 'HTTP ' + r.status + ' ' + (await r.text().catch(() => '')).slice(0, 50); return null; }
+                    const v = await r.json();
+                    const url = String(v.remoteUrl || '');
+                    if (url) return { url, branch: String(v.currentBranchName || ''), commit: String(v.currentCommitHash || ''), err: '' };
+                    firstErr = '版本查询200但remoteUrl为空';
+                    return null;
+                };
                 for (const g of gs) {
-                    try {
-                        const r = await fetch('/api/extensions/version', {
-                            method: 'POST', headers: getRequestHeaders(),
-                            body: JSON.stringify({ extensionName: full, global: g }),
-                        });
-                        if (!r.ok) {
-                            const t = await r.text().catch(() => '');
-                            if (!firstErr) firstErr = 'HTTP ' + r.status + ' ' + String(t).slice(0, 60);
-                            continue;
-                        }
-                        const v = await r.json();
-                        const url = String(v.remoteUrl || '');
-                        if (url) {
-                            window.__extMeta[full] = { url, branch: String(v.currentBranchName || ''), commit: String(v.currentCommitHash || '') };
-                            return;
-                        }
-                        if (!firstErr) firstErr = '本机未记录仓库URL(版本查询200但remoteUrl为空)';
-                    } catch (e2) { if (!firstErr) firstErr = String((e2 && e2.message) || e2).slice(0, 90); }
+                    try { const got = await tryVersion(g); if (got) { window.__extMeta[full] = got; return; } }
+                    catch (e2) { if (!firstErr) firstErr = String((e2 && e2.message) || e2).slice(0, 90); }
                 }
-                window.__extMeta[full] = { url: '', branch: '', commit: '', err: firstErr || '未知原因' };
+                // version 全灭 → .git/config 兜底
+                const cf = await fetchConfigUrl();
+                if (cf.url) {
+                    window.__extMeta[full] = { url: cf.url, branch: '', commit: '', err: '' };
+                } else {
+                    window.__extMeta[full] = { url: '', branch: '', commit: '', err: (firstErr ? firstErr + ' 且 ' : '') + cf.err };
+                }
             })().catch(() => { }));
         }
         await Promise.all(jobs);
