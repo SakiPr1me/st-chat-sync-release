@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.8.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3937,7 +3937,7 @@ function __refreshCurRepoLine() {
     const el = document.getElementById('cs_cur_repo');
     if (!el) return;
     const curRepo = settings.owner && settings.repo ? `${settings.owner}/${settings.repo}` : '（未配置）';
-    el.innerHTML = `<b>🌐 当前云端仓库：</b>${escapeHtml(curRepo)}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
+    el.innerHTML = `<b>🌐 当前云端仓库：</b>${escapeHtml(curRepo)}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
     __fillCloudUsage();
     try {
         if (typeof window.__csCheckUpdate === 'function') window.__csCheckUpdate();
@@ -4094,7 +4094,6 @@ window.__csManualCheck = async function (btn) {
             <div class="inline-drawer-content" id="${id}_content" style="display:none">
 
                 <p id="${id}_cur_repo" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(255,255,255,0.03)"></p>
-                <div id="cs_auto_upd_wrap" style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin:0 0 6px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="${id}_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></div>
 
                 <div class="cs-card">
                     <details class="cs-fold" ${(!settings.token || !settings.repo) ? 'open' : ''}>
@@ -5742,16 +5741,14 @@ ext: {
         chkBundle.checked = settings.uploadBundle !== false;
         chkBundle.addEventListener('change', () => { settings.uploadBundle = chkBundle.checked; saveSettingsDebounced(); });
     }
-    // 启动自动更新勾选(照 st-kimi-reasoning-injector 同款: change 写 settings + 保存)
-    const chkAuto = $('cs_auto_upd');
-    if (chkAuto) {
-        chkAuto.checked = !!settings.autoUpdate;
-        chkAuto.addEventListener('change', () => {
-            settings.autoUpdate = chkAuto.checked;
+    // 启动自动更新勾选: 元素由 __refreshCurRepoLine 动态创建(晚于直接绑定) → 用 document 委托, 永不失绑
+    document.addEventListener('change', (e) => {
+        if (e.target && e.target.id === 'cs_auto_upd') {
+            settings.autoUpdate = e.target.checked;
             saveSettingsDebounced();
             try { if (typeof saveSettings === 'function') saveSettings().catch(() => { }); } catch { }
-        });
-    }
+        }
+    });
     $('cs_cfg_del')?.addEventListener('click', async () => {
         const st2 = $('cs_cfg2_status');
         const mode = window.__cfgMode || 'local';
