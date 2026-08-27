@@ -3,7 +3,7 @@
 // 云端：Gitee Contents API（浏览器直连，CORS 已实测放行）
 
 import { extension_settings, getContext } from '../../../extensions.js';
-import { eventSource, event_types, saveSettingsDebounced, saveCharacterDebounced, importCharacterChat, displayPastChats, openCharacterChat, getRequestHeaders, getCharacters, select_selected_character, setCharacterId, reloadCurrentChat, doNewChat, deleteCharacter, chat_metadata, saveMetadata, redisplayChat, scrollChatToBottom, deleteCharacterChatByName, settings as stSettings } from '../../../../script.js';
+import { eventSource, event_types, saveSettingsDebounced, saveSettings, saveCharacterDebounced, importCharacterChat, displayPastChats, openCharacterChat, getRequestHeaders, getCharacters, select_selected_character, setCharacterId, reloadCurrentChat, doNewChat, deleteCharacter, chat_metadata, saveMetadata, redisplayChat, scrollChatToBottom, deleteCharacterChatByName, settings as stSettings } from '../../../../script.js';
 import { Popup } from '../../../../scripts/popup.js';
 import { importGroupChat } from '../../../group-chats.js';
 import { loadWorldInfo, importWorldInfo, world_names, deleteWorldInfo } from '../../../world-info.js';
@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.8.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -38,6 +38,11 @@ const settings = (extension_settings[extensionName] = extension_settings[extensi
 for (const k of Object.keys(DEFAULT_SETTINGS)) {
     if (settings[k] === undefined) settings[k] = DEFAULT_SETTINGS[k];
 }
+// autoUpdate 双保险: localStorage 立即记录, 防任何"服务端保存未落盘就刷新"场景丢勾选(与余温不同, 平台无关, F5 必在)
+try {
+    const lsv = localStorage.getItem('cs_autoUpdate');
+    if (lsv !== null) settings.autoUpdate = lsv === '1';
+} catch { }
 // v2 迁移：旧版本自动同步默认是开的（autoSyncOnOpen/autoSyncOnClose 默认 true），
 // 且"关闭页面推送"已废弃。升级到 v2 时按新默认全关重置一次，避免旧值残留。
 // (v3: 已移除"自动同步总开关"，定时由 autoSyncLive 自控；autoSync 字段仅作历史兼容保留)
@@ -3970,17 +3975,36 @@ function __b64ToText(s) {
     return new TextDecoder().decode(bytes);
 }
 async function __csFetchRemoteVer() {
-    // 发布仓库固定在 Gitee: 只有 Gitee 平台的 token 对它有效(GitHub 令牌/ GitLab 令牌发给 Gitee 会 401);
-    // GitHub/GitLab 平台走匿名(发布仓库是公开的, 匿名限流时报错提示)
-    const headers = {};
+    // 多源兜底(与余温同思路): 发布仓同时存在 Gitee 官方仓 + GitHub 镜像仓(公开), 一路不通自动换路, 每源 6s 超时
+    const M = { repo: 'SakiPr1me/st-chat-sync-release', branch: 'main' };
     const sv = String(settings.server || '');
-    if ((sv === '' || sv.includes('gitee')) && settings.token) headers['Authorization'] = 'token ' + settings.token;
-    const r = await fetch(PLUGIN_REPO_MANIFEST_API + '?t=' + Date.now(), { cache: 'no-store', headers });
-    if (!r.ok) throw new Error('HTTP ' + r.status + (r.status === 403 ? '（发布仓库在 Gitee，GitHub/GitLab 平台走匿名被限流；切到 Gitee 平台检测或稍后再试）' : ''));
-    if (!r.ok) throw new Error('HTTP ' + r.status + (r.status === 403 && !settings.token ? '（Gitee 匿名限流，配置 token 后即可检测）' : ''));
-    const j = await r.json();
-    const inner = JSON.parse(__b64ToText(j.content));
-    return String(inner.version || '').trim();
+    const sources = [
+        `https://raw.githubusercontent.com/${M.repo}/${M.branch}/manifest.json`,   // GitHub raw(直链, 无限流)
+        `https://cdn.jsdelivr.net/gh/${M.repo}@${M.branch}/manifest.json`,         // jsDelivr CDN(免翻墙可选)
+        'https://gitee.com/satosaki/tavern-synchronization-plugin/raw/master/manifest.json', // Gitee raw
+        PLUGIN_REPO_MANIFEST_API + '?t=' + Date.now(),                            // Gitee API(可能限流)
+        `https://api.github.com/repos/${M.repo}/contents/manifest.json`,           // GitHub API(最后兜底)
+    ];
+    let lastErr = null;
+    for (const url of sources) {
+        try {
+            const headers = {};
+            if (url.includes('api.github.com')) { headers['Accept'] = 'application/vnd.github+json'; if (settings.token && sv.includes('github')) headers['Authorization'] = 'Bearer ' + settings.token; }
+            else if (url.includes('gitee.com/api')) { if (settings.token && (sv === '' || sv.includes('gitee'))) headers['Authorization'] = 'token ' + settings.token; }
+            const r = await fetch(url, { cache: 'no-store', headers, signal: AbortSignal.timeout(6000) });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const text = await r.text();
+            let v = '';
+            try {
+                const j = JSON.parse(text);
+                // API 返回是 base64 包裹的 JSON; raw 是直接 JSON
+                v = (j && typeof j.content === 'string') ? JSON.parse(__b64ToText(j.content)).version : j.version;
+            } catch { throw new Error('parse'); }
+            v = String(v || '').trim();
+            if (v) return v;
+        } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('所有更新源均失败');
 }
 window.__csRenderUpdateBtn = function (remoteVer) {
     const slot = document.getElementById('cs_upd_slot');
@@ -5729,8 +5753,9 @@ ext: {
         chkAuto.addEventListener('change', () => {
             settings.autoUpdate = chkAuto.checked;
             saveSettingsDebounced();
-            // 勾选是"换了就刷新才生效"的设置, 立即落盘防防抖窗口内刷新丢失
+            // 立即落盘(防抖窗口内刷新) + localStorage 双保险
             try { if (typeof saveSettings === 'function') saveSettings().catch(() => { }); } catch { }
+            try { localStorage.setItem('cs_autoUpdate', chkAuto.checked ? '1' : '0'); } catch { }
         });
     }
     $('cs_cfg_del')?.addEventListener('click', async () => {
