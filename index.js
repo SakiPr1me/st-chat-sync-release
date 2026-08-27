@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5406,14 +5406,17 @@ ext: {
                     // 行值格式: [类型]名字
                     const type = it.startsWith('[文件夹]') ? 'folder' : 'script';
                     const name = it.replace(/^\[(脚本|文件夹)\]/, '');
-                    const node = __thFindNode(name, type);
-                    if (!node) { fail.push(name + ': 本地无此脚本/文件夹'); continue; }
-                    const fname = __safeName(name) + '.json';
-                    const txt = JSON.stringify(node, null, 2);
-                    const prev = await Gitee.getText(`${TH_SCRIPTS_DIR}/${fname}`).catch(() => null);
-                    await Gitee.putText(`${TH_SCRIPTS_DIR}/${fname}`, txt, prev && prev.sha ? prev.sha : undefined, `th script ${fname}`);
-                    ok.push((type === 'folder' ? '📁' : '📜') + name);
+                    try {
+                        const node = __thFindNode(name, type);
+                        if (!node) { fail.push(name + ': 本地无此脚本/文件夹'); continue; }
+                        const fname = __safeName(name) + '.json';
+                        const txt = JSON.stringify(node, null, 2);
+                        const prev = await Gitee.getText(`${TH_SCRIPTS_DIR}/${fname}`).catch(() => null);
+                        await Gitee.putText(`${TH_SCRIPTS_DIR}/${fname}`, txt, prev && prev.sha ? prev.sha : undefined, `th script ${fname}`);
+                        ok.push((type === 'folder' ? '📁' : '📜') + name);
+                    } catch (e) { fail.push(name + ':' + ((e && e.message) || e)); }
                 }
+                if (fail.length) toastr.error('酒馆助手上传失败 ' + fail.length + ' 条：' + csShortList(fail.slice(0, 5)) + (fail.length > 5 ? '…' : ''));
                 return { ok: ok.length, fail: fail.length, failReasons: fail };
             },
             async pull(items) {
@@ -5759,23 +5762,29 @@ ext: {
         try { await drv.toggleStatus(n); } catch (e) { console.warn('[chat-sync] 开关切换失败', e); }
         try { window.__renderCfgList(window.__cfgMode); } catch (e2) { console.warn(e2); }
     });
+    // 上传诊断: URL缺失原因(供源头设备定位为何新设备无法重装)
+    function urlNotesTxt(r2) {
+        try {
+            const un = (r2 && r2.urlNotes) || {};
+            const ks = Object.keys(un);
+            if (!ks.length) return '';
+            const first = ks.slice(0, 3).map(k => k + ':' + un[k]).join('、');
+            return `｜⚠ 无仓库URL ${ks.length}个（${first}${ks.length > 3 ? '…' : ''}）`;
+        } catch { return ''; }
+    }
     $('cs_cfg_push')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
         const st2 = $('cs_cfg2_status');
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要上传的项'; return; }
         if (st2) st2.textContent = '上传中…';
-        const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
-        if (st2) st2.textContent = (r && typeof r.ok === 'number') ? `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}` : '';
-                // 上传诊断: URL缺失原因(供源头设备定位为何新设备无法重装)
-                function urlNotesTxt(r2) {
-                    try {
-                        const un = (r2 && r2.urlNotes) || {};
-                        const ks = Object.keys(un);
-                        if (!ks.length) return '';
-                        const first = ks.slice(0, 3).map(k => k + ':' + un[k]).join('、');
-                        return `｜⚠ 无仓库URL ${ks.length}个（${first}${ks.length > 3 ? '…' : ''}）`;
-                    } catch { return ''; }
-                }
+        try {
+            const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
+            if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 上传出错：没有返回结果'; st2.style.color = '#e66'; } return; }
+            if (st2) { st2.textContent = `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}`; st2.style.color = r.fail ? '#e66' : ''; }
+        } catch (e) {
+            if (st2) { st2.textContent = '❌ 上传异常：' + ((e && e.message) || e); st2.style.color = '#e66'; }
+            console.warn('[chat-sync] 上传异常', e);
+        }
     });
     $('cs_cfg_pull')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
