@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.8.7'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5002,9 +5002,16 @@ async function __discoverExts() {
             jobs.push(fetch('/api/extensions/version', {
                 method: 'POST', headers: getRequestHeaders(),
                 body: JSON.stringify({ extensionName: full, global: window.__extType[full] === 'global' }),
-            }).then((r) => r.json()).then((v) => {
+            }).then(async (r) => {
+                if (!r.ok) {
+                    // 记录失败原因, 供上传诊断(HTTP 404=目录查错/ HTTP 500多为"目录非git仓库"…)
+                    const t = await r.text().catch(() => '');
+                    throw new Error('HTTP ' + r.status + ' ' + String(t).slice(0, 60));
+                }
+                return r.json();
+            }).then((v) => {
                 window.__extMeta[full] = { url: String(v.remoteUrl || ''), branch: String(v.currentBranchName || ''), commit: String(v.currentCommitHash || '') };
-            }).catch(() => { window.__extMeta[full] = { url: '', branch: '', commit: '' }; }));
+            }).catch((e) => { window.__extMeta[full] = { url: '', branch: '', commit: '', err: String((e && e.message) || e).slice(0, 90) }; }));
         }
         await Promise.all(jobs);
     }));
@@ -5251,7 +5258,13 @@ ext: {
                         catch { bFail++; }
                     } else bFail++;
                 }
-                return { ok: ok.length, fail: fail.length, failReasons: fail, bundles: { ok: bOk, fail: bFail, skipped: settings.uploadBundle === false } };
+                // url 缺失时附加原因(上传诊断: 让源头一眼看到为什么没记录到仓库地址)
+                const urlNotes = {};
+                for (const full of items) {
+                    const meta = (window.__extMeta && window.__extMeta[full]) || {};
+                    if (!meta.url) urlNotes[String(full).split('/').pop()] = meta.err || '本机未记录仓库URL';
+                }
+                return { ok: ok.length, fail: fail.length, failReasons: fail, bundles: { ok: bOk, fail: bFail, skipped: settings.uploadBundle === false }, urlNotes };
             },
             async pull(items) {
                 const ok = [], fail = [], failReasons = [];
@@ -5737,7 +5750,17 @@ ext: {
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要上传的项'; return; }
         if (st2) st2.textContent = '上传中…';
         const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
-        if (st2) st2.textContent = (r && r.bundles) ? `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.bundles.skipped ? '（未备份本体）' : ` · 本体安全包 ${r.bundles.ok}${r.bundles.fail ? `/失败${r.bundles.fail}` : ''}`}` : '';
+        if (st2) st2.textContent = (r && r.bundles) ? `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.bundles.skipped ? '（未备份本体）' : ` · 本体安全包 ${r.bundles.ok}${r.bundles.fail ? `/失败${r.bundles.fail}` : ''}`}${urlNotesTxt(r)}` : '';
+                // 上传诊断: URL缺失原因(供源头设备定位为何新设备无法重装)
+                function urlNotesTxt(r2) {
+                    try {
+                        const un = (r2 && r2.urlNotes) || {};
+                        const ks = Object.keys(un);
+                        if (!ks.length) return '';
+                        const first = ks.slice(0, 3).map(k => k + ':' + un[k]).join('、');
+                        return `｜⚠ 无仓库URL ${ks.length}个（${first}${ks.length > 3 ? '…' : ''}）`;
+                    } catch { return ''; }
+                }
     });
     $('cs_cfg_pull')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
