@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.8.7'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.8.8'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4999,19 +4999,33 @@ async function __discoverExts() {
                 .catch(() => { }));
         }
         if (!window.__extMeta[full]) {
-            jobs.push(fetch('/api/extensions/version', {
-                method: 'POST', headers: getRequestHeaders(),
-                body: JSON.stringify({ extensionName: full, global: window.__extType[full] === 'global' }),
-            }).then(async (r) => {
-                if (!r.ok) {
-                    // 记录失败原因, 供上传诊断(HTTP 404=目录查错/ HTTP 500多为"目录非git仓库"…)
-                    const t = await r.text().catch(() => '');
-                    throw new Error('HTTP ' + r.status + ' ' + String(t).slice(0, 60));
+            // 双路探测: 先按 type 查, 失败(404/500)自动反着再试一次(不同设备上 discover 的 type 判别不可靠,
+            // 实测源头设备 type=global 但 public 目录无该扩展→global:true 404)
+            const gs = window.__extType[full] === 'global' ? [true, false] : [false, true];
+            jobs.push((async () => {
+                let firstErr = '';
+                for (const g of gs) {
+                    try {
+                        const r = await fetch('/api/extensions/version', {
+                            method: 'POST', headers: getRequestHeaders(),
+                            body: JSON.stringify({ extensionName: full, global: g }),
+                        });
+                        if (!r.ok) {
+                            const t = await r.text().catch(() => '');
+                            if (!firstErr) firstErr = 'HTTP ' + r.status + ' ' + String(t).slice(0, 60);
+                            continue;
+                        }
+                        const v = await r.json();
+                        const url = String(v.remoteUrl || '');
+                        if (url) {
+                            window.__extMeta[full] = { url, branch: String(v.currentBranchName || ''), commit: String(v.currentCommitHash || '') };
+                            return;
+                        }
+                        if (!firstErr) firstErr = '本机未记录仓库URL(版本查询200但remoteUrl为空)';
+                    } catch (e2) { if (!firstErr) firstErr = String((e2 && e2.message) || e2).slice(0, 90); }
                 }
-                return r.json();
-            }).then((v) => {
-                window.__extMeta[full] = { url: String(v.remoteUrl || ''), branch: String(v.currentBranchName || ''), commit: String(v.currentCommitHash || '') };
-            }).catch((e) => { window.__extMeta[full] = { url: '', branch: '', commit: '', err: String((e && e.message) || e).slice(0, 90) }; }));
+                window.__extMeta[full] = { url: '', branch: '', commit: '', err: firstErr || '未知原因' };
+            })().catch(() => { }));
         }
         await Promise.all(jobs);
     }));
