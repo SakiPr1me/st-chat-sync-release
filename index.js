@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1445,6 +1445,11 @@ function showBusy(page, total, msg) {
     __csBusyEl.textContent = (total && total > 0)
         ? `🔄 ${label}中：${page}/${total}，请稍后…`
         : `🔄 ${label}中，请稍后…`;
+    // 同步镜像到"列表下方状态行"(用户要求细化: 上传/导入的当前项与几/几直接显示在那里)
+    try {
+        const s2 = document.getElementById('cs_cfg2_status');
+        if (s2) { s2.textContent = __csBusyEl.textContent; s2.style.color = ''; }
+    } catch { }
 }
 function hideBusy() {
     if (__csBusyEl) { __csBusyEl.remove(); __csBusyEl = null; }
@@ -4656,21 +4661,25 @@ function wirePanelEvents() {
         }
     });
     $('cs_push_chat')?.addEventListener('click', async () => {
+        showBusy(0, 0, '上传当前聊天…');
         const st = $('cs_status'); if (st) st.textContent = '同步当前聊天中…';
         try { await pushCurrentChat(); if (st) st.textContent = '完成'; }
         catch (e) { toastr.error('同步失败：' + e.message); if (st) st.textContent = '同步失败'; }
     });
     $('cs_pull_chat')?.addEventListener('click', async () => {
+        showBusy(0, 0, '导入当前聊天…');
         const st = $('cs_status'); if (st) st.textContent = '拉取当前聊天中…';
         try { await pullCurrentChat(); if (st) st.textContent = '完成'; }
         catch (e) { toastr.error('拉取失败：' + e.message); if (st) st.textContent = '拉取失败'; }
     });
     $('cs_push_char')?.addEventListener('click', async () => {
+        showBusy(0, 0, '上传角色全部聊天…');
         const st = $('cs_status'); if (st) st.textContent = '同步中…';
         try { await pushCurrentCharacter(); if (st) st.textContent = '完成'; }
         catch (e) { toastr.error('同步失败：' + e.message); if (st) st.textContent = '同步失败'; }
     });
     $('cs_pull_char')?.addEventListener('click', async () => {
+        showBusy(0, 0, '导入角色全部聊天…');
         const st = $('cs_status'); if (st) st.textContent = '拉取中…';
         try { await pullCurrentCharacter(); if (st) st.textContent = '完成'; }
         catch (e) { toastr.error('拉取失败：' + e.message); if (st) st.textContent = '拉取失败'; }
