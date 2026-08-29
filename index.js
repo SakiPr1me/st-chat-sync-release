@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.18'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.19'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4312,8 +4312,9 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
-                            </span><input type="text" id="cs_search_roles" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_roles_list" title="按名字快速过滤（可与上方筛选叠加）">
+                            </span>
                             <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn" title="删除选中的文件">🗑 删除选中文件</button>
+                            <input type="text" id="cs_search_roles" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_roles_list" title="按名字快速过滤（可与上方筛选叠加）">
                             <span id="${id}_delete_target" class="cs-hint" style="margin-left:6px"></span>
                         </div>
                         <p id="${id}_delete_status" class="cs-hint" style="margin-top:4px"></p>
@@ -4344,8 +4345,9 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
-                            </span><input type="text" id="cs_search_wb" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_wb_list" title="按名字快速过滤（可与上方筛选叠加）">
+                            </span>
                             <button id="${id}_wb_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的全局世界书(本地视图删本地/云端视图删云端)">🗑 删除选中世界书</button>
+                            <input type="text" id="cs_search_wb" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_wb_list" title="按名字快速过滤（可与上方筛选叠加）">
                         </div>
                         <p id="${id}_wb_status" class="cs-hint" style="margin-top:4px"></p>
                     </div>
