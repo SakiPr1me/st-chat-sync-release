@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.10'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.11'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7054,6 +7054,10 @@ const CHAT_SYNC_CSS = `
 /* 正文独立滚动区: 导航物理固定在其上方, 不依赖 sticky */
 .cs-cln-fbody { flex:1; min-height:0; overflow:auto; padding:12px; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
 .cs-cln-fnum { font-size:.82em; font-weight:700; opacity:.9; white-space:nowrap; }
+/* 0.12.11: 面板内所有原生控件统一深色(浅色主题下 .text_pole/select/checkbox 原生就是白色, 一并压掉) */
+#chat_sync_settings .text_pole, #chat_sync_settings select, #chat_sync_settings input[type='text'], #chat_sync_settings input[type='password'], #chat_sync_settings textarea { background:rgba(30,30,36,0.90); color:#e8e8e8; border:1px solid rgba(255,255,255,0.22); border-radius:8px; padding:3px 8px; color-scheme:dark; }
+#chat_sync_settings select option { background:rgba(30,30,36,0.95); color:#e8e8e8; }
+#chat_sync_settings input[type='checkbox'] { accent-color:var(--SmartThemeQuoteColor,#f0a35e); }
 `;
 function injectSettingsCss() {
     if (document.getElementById('chat-sync-settings-style')) return;
