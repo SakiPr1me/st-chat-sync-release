@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4075,17 +4075,22 @@ window.__csCheckUpdate = async function (opts) {
 async function __csDoSelfUpdate(btn, remoteVer) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ 更新中…'; }
     try {
+        // 官方 UI 同款: extensionName 用完整名(third-party/前缀, 拼路径多一层目录——此前缺前缀致404); 双路 global
         let resp = await fetch('/api/extensions/update', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ extensionName: '/st-chat-sync', global: false }),
+            body: JSON.stringify({ extensionName: 'third-party/st-chat-sync', global: false }),
         });
         if (resp.status === 404) resp = await fetch('/api/extensions/update', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ extensionName: '/st-chat-sync', global: true }),
+            body: JSON.stringify({ extensionName: 'third-party/st-chat-sync', global: true }),
         });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status + ': ' + (await resp.text()).slice(0, 120));
+        if (!resp.ok) {
+            const t = (await resp.text()).slice(0, 100);
+            if (resp.status === 400 && t.includes('metadata')) throw new Error('本插件目录缺少 git 更新元数据(复制安装导致)——请在扩展管理删除后用 URL 重装一次, 之后自动更新恢复正常');
+            throw new Error('HTTP ' + resp.status + ': ' + t);
+        }
         const j = await resp.json().catch(() => ({}));
         if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
         if (btn) btn.textContent = '✅ 已更新';
