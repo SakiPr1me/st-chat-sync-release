@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.19'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.20'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7076,7 +7076,6 @@ const CHAT_SYNC_CSS = `
 /* 0.12.12: 整个面板板块不透明白: 面板/卡/全部文字固色深底浅字, 彻底不依赖主题半透明 */
 #chat_sync_settings, #cs_float_win, #cs_quick_float, .cs-cln-modal { color:var(--SmartThemeBodyColor, inherit); }
 #chat_sync_settings small, #cs_float_win small, #cs_quick_float small, .cs-cln-modal small { color:var(--SmartThemeBodyColor, inherit); opacity:.75; }
-#chat_sync_settings { border-radius:12px; padding:8px 10px; margin-top:6px; }
 
 .cs-role-item:hover { background:rgba(128,128,128,0.18); }
 /* 0.12.11: 面板内所有原生控件统一深色(浅色主题下 .text_pole/select/checkbox 原生就是白色, 一并压掉) */
