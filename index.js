@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.10'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4088,27 +4088,31 @@ async function __csDoSelfUpdate(btn, remoteVer) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ 更新中…'; }
     try {
         // 官方 UI 同款: extensionName 用完整名(third-party/前缀, 拼路径多一层目录——此前缺前缀致404); 双路 global
-        let resp = await fetch('/api/extensions/update', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ extensionName: 'st-chat-sync', global: false }),
-        });
-        if (resp.status === 404) resp = await fetch('/api/extensions/update', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ extensionName: 'st-chat-sync', global: true }),
-        });
-        if (!resp.ok) {
-            const t = (await resp.text()).slice(0, 100);
-            if (resp.status === 400 && t.includes('metadata')) throw new Error('本插件目录缺少 git 更新元数据(复制安装导致)——请在扩展管理删除后用 URL 重装一次, 之后自动更新恢复正常');
-            if (resp.status === 500) throw new Error('酒馆服务端 git 操作失败(可能是网络不通或本地文件被占用)——请检查网络后重试, 或到扩展管理手动更新');
-            throw new Error('HTTP ' + resp.status + ': ' + t);
+        const combos = [
+            { n: 'third-party/st-chat-sync', g: false },
+            { n: 'st-chat-sync', g: false },
+            { n: 'third-party/st-chat-sync', g: true },
+            { n: 'st-chat-sync', g: true },
+        ];
+        let lastErr = '';
+        for (const c of combos) {
+            try {
+                const resp = await fetch('/api/extensions/update', {
+                    method: 'POST', headers: getRequestHeaders(),
+                    body: JSON.stringify({ extensionName: c.n, global: c.g }),
+                });
+                if (resp.status === 404) { lastErr = '404'; continue; }
+                if (!resp.ok) { lastErr = 'HTTP ' + resp.status; continue; }
+                const j = await resp.json().catch(() => ({}));
+                if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
+                if (btn) btn.textContent = '✅ 已更新';
+                toastr.success('✅ 插件已更新到 v' + remoteVer + '，2 秒后自动刷新', null, { timeOut: 4000 });
+                setTimeout(() => location.reload(), 2200);
+                return;
+            } catch (e2) { lastErr = String(e2).slice(0, 80); }
         }
-        const j = await resp.json().catch(() => ({}));
-        if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
-        if (btn) btn.textContent = '✅ 已更新';
-        toastr.success('✅ 插件已更新到 v' + remoteVer + '，2 秒后自动刷新', null, { timeOut: 4000 });
-        setTimeout(() => location.reload(), 2200);
+        if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新' + (remoteVer && remoteVer !== '最新版' ? '至 v' + remoteVer : ''); }
+        toastr.error('自更新失败：' + lastErr + '<br>请到扩展管理删除后用 URL 重装一次', null, { escapeHtml: false, timeOut: 8000 });
     } catch (e) {
         if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新' + (remoteVer && remoteVer !== '最新版' ? '至 v' + remoteVer : ''); }
         toastr.error('自更新失败：' + e.message + '<br>可到「扩展管理」手动点更新', null, { escapeHtml: false, timeOut: 6000 });
@@ -4135,7 +4139,7 @@ window.__csManualCheck = async function (btn) {
     try {
         const remoteVer = await __csFetchRemoteVer();
         const cmp = __csCompareVer(remoteVer, PLUGIN_VERSION);
-        if (cmp > 0) { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        if (cmp > 0) { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; } const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
         else if (cmp === 0) { txt = '✅ 已是最新'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
         else { txt = '⚠ 本地更高'; cls = 'higher'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
         title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）';
