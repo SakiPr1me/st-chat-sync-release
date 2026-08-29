@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.9'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.10'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6332,7 +6332,7 @@ ext: {
         m.innerHTML = `<div style="position:relative;width:min(640px,92vw);max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);display:flex;flex-direction:column;background:var(--SmartThemeBlurTintColor,#1b1b1b);border:1px solid var(--SmartThemeBorderColor,#333);border-radius:12px;padding:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.5)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--SmartThemeBorderColor,#333)">
                 <b style="font-size:.95em">${escapeHtml(r.name || file)} <small style="opacity:.6;font-weight:400">（人设预览）</small></b>
-                <button id="__qa_pclose" style="padding:3px 14px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#555);background:rgba(255,255,255,0.06);color:var(--SmartThemeBodyColor,#eee);cursor:pointer;font-size:.9em">✕ 关闭</button>
+                <button id="__qa_pclose" style="padding:3px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.25);background:rgba(44,44,52,0.85);color:#f0f0f0;cursor:pointer;font-size:.9em">✕ 关闭</button>
             </div>
             <div id="__qa_pbody" style="flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;white-space:pre-wrap;word-break:break-word;font-size:.88em;line-height:1.7;color:var(--SmartThemeBodyColor,#e1e1e1)">${__fmtPrevText(desc.slice(0, 8000)) || '（该人设暂无描述内容）'}</div>
             <button class="cs-top-fab" id="__qa_top" type="button">↑ 回顶部</button>
@@ -6945,7 +6945,7 @@ function ensurePanel() {
 const CHAT_SYNC_CSS = `
 #chat_sync_settings .cs-card { border:1px solid var(--SmartThemeBorderColor); border-left:3px solid var(--SmartThemeQuoteColor); border-radius:12px; overflow:hidden; background:rgba(128,128,128,0.10); margin-top:10px; }
 #chat_sync_settings .cs-card.cs-last { margin-bottom:28px; }
-#chat_sync_settings .cs-fold > summary { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:var(--SmartThemeBodyColor,inherit); background:rgba(128,128,128,0.14); border-bottom:1px solid var(--SmartThemeBorderColor); list-style:none; outline:none; }
+#chat_sync_settings .cs-fold > summary { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:#ececec; background:rgba(44,44,52,0.85); border-bottom:1px solid rgba(255,255,255,0.18); list-style:none; outline:none; }
 #chat_sync_settings .cs-fold > summary::-webkit-details-marker { display:none; }
 #chat_sync_settings .cs-fold > summary::after { content:'▸'; transition:transform .18s ease; opacity:.7; font-size:13px; margin-left:auto; line-height:1; }
 #chat_sync_settings .cs-fold[open] > summary::after { transform:rotate(90deg); }
@@ -6961,7 +6961,7 @@ const CHAT_SYNC_CSS = `
 #chat_sync_settings .cs-role-item input { transform:scale(.85); flex:none; }
 #chat_sync_settings .cs-group-title { font-size:.78em; font-weight:600; color:var(--SmartThemeBodyColor,var(--grey_color)); margin:6px 0 3px; }
 #chat_sync_settings .cs-row { display:flex; gap:8px; align-items:center; }
-#chat_sync_settings .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); background:rgba(128,128,128,0.18); color:var(--SmartThemeBodyColor,inherit); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
+#chat_sync_settings .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.22); background:rgba(44,44,52,0.85); color:#f0f0f0; cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 #chat_sync_settings .cs-btn:hover { filter:brightness(1.15); }
 #chat_sync_settings .cs-btn.cs-primary { border-color:var(--SmartThemeQuoteColor); color:var(--SmartThemeQuoteColor); }
 #chat_sync_settings .cs-current { font-size:.9em; color:var(--SmartThemeBodyColor,inherit); }
@@ -7045,7 +7045,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-modal .cs-cln-mrow:hover { background:rgba(128,128,128,0.14); }
 .cs-cln-modal .cs-cln-mrow .cs-cln-fname { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.85em; }
 /* 弹窗挂在 body 下，吃不到 #chat_sync_settings 作用域 → 按钮/输入样式单独给（否则白底灰字原生样式） */
-.cs-cln-modal .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor,#555); background:rgba(128,128,128,0.18); color:var(--SmartThemeBodyColor,#eee); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
+.cs-cln-modal .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.22); background:rgba(44,44,52,0.85); color:#f0f0f0; cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 .cs-cln-modal .cs-btn:hover:not(:disabled) { filter:brightness(1.25); }
 .cs-cln-modal .cs-btn:disabled { opacity:.4; cursor:not-allowed; }
 .cs-cln-modal .cs-btn.cs-danger-btn { border-color:#a33; color:#ff8787; background:rgba(170,51,51,.2); }
@@ -7330,7 +7330,7 @@ function __csEnsureFloatWin() {
     w.innerHTML = `
         <div class="csf-float-head" style="display:flex;align-items:center;gap:6px;cursor:grab;user-select:none">
             <span style="opacity:.6;cursor:grab">⠿</span><b style="font-size:.9em" id="cs_float_win_title">设置</b>
-            <button id="cs_float_win_close" type="button" style="margin-left:auto;padding:0 8px;font-size:.85em;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;background:rgba(128,128,128,0.20);color:var(--SmartThemeBodyColor,#eee);cursor:pointer">✕</button>
+            <button id="cs_float_win_close" type="button" style="margin-left:auto;padding:0 8px;font-size:.85em;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;background:rgba(44,44,52,0.85);color:#f0f0f0;border-color:rgba(255,255,255,0.25);cursor:pointer">✕</button>
         </div>
         <div id="cs_float_win_body" style="margin-top:6px"></div>`;
     document.body.appendChild(w);
