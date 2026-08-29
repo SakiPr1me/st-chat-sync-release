@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -41,7 +41,6 @@ const DEFAULT_SETTINGS = {
     uploadBundle: undefined,  // (已停用) 备份本体功能已移除(0.9.0): 打包依赖从仓库再拉代码, 作者删库后无法生成, 与防删库目的不符; 云端旧安全包仍可被导入端读取兜底
     connSlots: [],           // 连接槽位[{platform,repo,token,lastConnectAt}]: 保存配置自动去重入库, 下拉一秒切换, 可删
     autoUpdate: true,         // 自动更新插件至最新(默认勾选; 每次启动检查, 有新版自动升级+刷新)
-    apiSyncSecrets: true,     // Api分项: 上传时连API密钥一起导出(仍受服务端allowKeysExposure限制; 云端为私有仓库)
 };
 
 // 统一从 settings 读；未初始化就建
@@ -4371,8 +4370,7 @@ window.__csManualCheck = async function (btn) {
                         <div class="cs-row" style="margin-top:2px;flex-wrap:wrap;align-items:center">
                             <button id="${id}_cfg_user_br" type="button" class="cs-btn" style="display:none" title="一键备份：用户名+全部人设+全部头像照片">💾 一键备份全部</button>
                             <button id="${id}_cfg_user_rr" type="button" class="cs-btn" style="display:none" title="一键恢复：从云端取回全部用户资料与头像照片">📥 一键恢复全部</button>
-                            <span id="${id}_cfg_api_secret_row" style="display:none;align-items:center;gap:4px;font-size:.78em;opacity:.9"><input type="checkbox" id="cs_api_secret" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.apiSyncSecrets === false ? '' : 'checked'}><label for="cs_api_secret" style="cursor:pointer;white-space:nowrap" title="上传时把配置绑定的API密钥值一并导出(云端为你的私有仓库)。服务端需开 allowKeysExposure 才能读出密钥值; 不满足时只同步密钥引用, 导入端需手动选一次key">连API密钥一起同步</label><small id="${id}_cfg_api_secret_hint" style="opacity:.75"></small></span>
-                        </div>
+                                                    </div>
                         <p id="${id}_cfg2_status" class="cs-hint" style="margin-top:4px"></p>
                     </div>
                     </details>
@@ -5460,7 +5458,7 @@ async function __extSetEnabled(full, on) {
 // ═══ 分项⑦ Api连接配置（ConnectionManager profiles, 2026-08-29 v0.12.0） ═══
 // 数据源: extension_settings.connectionManager.profiles(纯客户端活对象, saveSettingsDebounced 持久化) —— 非文件型分项
 // 官方应用机制: applyConnectionProfile 逐字段执行斜杠命令, 缺失字段自动 continue → 云端缺 Proxy Preset 等引用不报错
-// 密钥: profile['secret-id'] 只存引用; 导出读值需服务端 allowKeysExposure(canViewSecrets 探测, state 明文化);
+// 密钥(0.12.1 全自动): profile['secret-id'] 只存引用; 能读明文(服务端允许时)就随行导出, 读不到就静默只带引用, 不给用户任何选择/提示;
 //       导入用官方 writeSecret(key,value,原label) 写入→新id回填profile; 即使旧id失配, 客户端 secret-id 命令还有 label=== 兜底匹配
 const API_CLOUD_DIR = 'config-sync/api-profiles';
 const __apiCloudJsonCache = {}; // {safeKey: {ts, j}} 60s 内容缓存(push/pull/del 后逐 key 失效)
@@ -5485,12 +5483,16 @@ function _apiProfileSummary(p) {
     return { name: (p && p.name) || '', api: (p && p.api) || '', model: (p && p.model) || '', url: (p && p['api-url']) || '', hasSecret: !!(p && p['secret-id']) };
 }
 function _apiNewId() { try { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID(); } catch { } return 'cs-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
-// 读 profile 绑定密钥的明文(allowKeysExposure 时 state.value 即明文) → {key,value,label} | null
-async function _apiSecretOf(profile, allowSecret) {
-    if (!profile || !profile['secret-id'] || allowSecret !== true) return null;
-    let can = null;
-    try { can = await __secretCanView(); } catch { }
-    if (can !== true) return null;
+// 读 profile 绑定密钥的明文(0.12.1 全自动: 静默探测服务端权限, 能读就带走读不到只带引用, 不弹任何提示) → {key,value,label} | null
+let __apiSecretCanCache = null; // {ts, can} 60s: 一次批量上传只探测一次
+async function _apiSecretOf(profile) {
+    if (!profile || !profile['secret-id']) return null;
+    if (!__apiSecretCanCache || Date.now() - __apiSecretCanCache.ts > 60000) {
+        let can = null;
+        try { can = await __secretCanView(); } catch { }
+        __apiSecretCanCache = { ts: Date.now(), can };
+    }
+    if (__apiSecretCanCache.can !== true) return null;
     try { await __secretReadState(); } catch { }
     const id = String(profile['secret-id']);
     for (const key of Object.keys(__secretState || {})) {
@@ -5529,8 +5531,6 @@ async function pushSelectedApiProfiles(names) {
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
     try {
         const ok = [], skipped = [], fail = []; const failReasons = [];
-        let secretIncluded = 0, secretSkipped = 0;
-        const wantSecret = settings.apiSyncSecrets !== false;
         showBusy(0, names.length, '上传Api配置');
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
@@ -5539,9 +5539,7 @@ async function pushSelectedApiProfiles(names) {
                 const p = _apiProfileByName(name);
                 if (!p) { fail.push(name); failReasons.push({ name, reason: '本地无该配置' }); continue; }
                 const path = `${API_CLOUD_DIR}/${__safeName(name)}.json`;
-                const secret = await _apiSecretOf(p, wantSecret);
-                if (p['secret-id'] && wantSecret && !secret) secretSkipped++;
-                if (secret) secretIncluded++;
+                const secret = await _apiSecretOf(p);
                 const text = JSON.stringify({ kind: 'st-connection-profile', v: 1, savedAt: new Date().toISOString(), profile: p, secret });
                 const cloud = await Gitee.getText(path);
                 if (cloud) {
@@ -5562,8 +5560,7 @@ async function pushSelectedApiProfiles(names) {
         }
         hideBusy();
         saveSettingsDebounced();
-        if (secretSkipped) toastr.info(`⚠ ${secretSkipped} 个配置的密钥未随行（服务端未开 allowKeysExposure，云端只存了密钥引用）`);
-        toastr.info(`上传Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}${secretIncluded ? `｜🔑 密钥已随行 ${secretIncluded} 个` : ''}`);
+        toastr.info(`上传Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}`);
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -5600,8 +5597,6 @@ async function importSelectedApiProfiles(names) {
                     if (!newId) { try { newId = await __secretWrite(parsed.secret.key, parsed.secret.value, parsed.secret.label || name); } catch { } }
                     if (newId) profile['secret-id'] = newId;
                     else secretNote = '密钥写入失败, 导入后需手动选一次key';
-                } else if (profile['secret-id']) {
-                    secretNote = '云端未含密钥值(上传端未开 allowKeysExposure), 导入后需手动选一次key';
                 }
                 if (!extension_settings.connectionManager || typeof extension_settings.connectionManager !== 'object') extension_settings.connectionManager = {};
                 if (!Array.isArray(extension_settings.connectionManager.profiles)) extension_settings.connectionManager.profiles = [];
@@ -6231,15 +6226,7 @@ ext: {
         if (ua) ua.style.display = t === 'ext' ? '' : 'none';
         if (brn) brn.style.display = t === 'user' ? '' : 'none';
         if (rrn) rrn.style.display = t === 'user' ? '' : 'none';
-        const asr = document.getElementById('cs_cfg_api_secret_row');
-        if (asr) asr.style.display = t === 'api' ? 'inline-flex' : 'none';
-        if (t === 'api') {
-            const hb = document.getElementById('cs_cfg_api_secret_hint');
-            if (hb) {
-                hb.textContent = '密钥权限探测中…';
-                (async () => { let c = null; try { c = await __secretCanView(); } catch { } hb.textContent = c === true ? '✓ 密钥可读写' : '⚠ 服务端未开 allowKeysExposure——密钥不随行, 导入端需手动选一次key'; })();
-            }
-        }
+
 
     }
     window.__updateCfgViewBtns = __updateCfgViewBtns;
@@ -6480,10 +6467,6 @@ ext: {
             settings.autoUpdate = e.target.checked;
             saveSettingsDebounced();
             try { if (typeof saveSettings === 'function') saveSettings().catch(() => { }); } catch { }
-        }
-        if (e.target && e.target.id === 'cs_api_secret') {
-            settings.apiSyncSecrets = !!e.target.checked;
-            saveSettingsDebounced();
         }
     });
     $('cs_cfg_updall')?.addEventListener('click', async () => {
