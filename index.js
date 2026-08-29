@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3412,6 +3412,7 @@ async function __fillDiffBadges() {
             if (wb) { for (const n of [...wb.childNodes]) if (n.nodeType === 3) n.textContent = ''; }
         } catch { }
     });
+    __applyCfgFilter(); // 差异徽章填充完重放筛选(本地新/云端新)
 }
 function messageSignature(m) {
     if (!m || typeof m !== 'object') return '';
@@ -4253,7 +4254,14 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_cfg_push" type="button" class="cs-btn">📤 上传选中</button>
                             <button id="${id}_cfg_pull" type="button" class="cs-btn">📥 导入选中</button>
                             <button id="${id}_cfg_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的配置项(本地视图删本地/云端视图删云端)">🗑 删除选中</button>
-
+                            <span id="${id}_cfg_filter" style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
+                                <button type="button" class="cs-btn cs-flt" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
+                                <button type="button" class="cs-btn cs-flt" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
+                                <button type="button" class="cs-btn cs-flt" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
+                                <button type="button" class="cs-btn cs-flt" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
+                                <button type="button" class="cs-btn cs-flt" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
+                                <button type="button" class="cs-btn cs-flt" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
+                            </span>
                         </div>
                         <div class="cs-row" style="margin-top:2px;flex-wrap:wrap">
                             <button id="${id}_cfg_user_br" type="button" class="cs-btn" style="display:none" title="一键备份：用户名+全部人设+全部头像照片">💾 一键备份全部</button>
@@ -5682,6 +5690,7 @@ ext: {
         list.innerHTML = names.length
             ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
+        __applyCfgFilter(); // 应用当前筛选(徽章已就位)
         __fillDiffBadges(); // 异步补差异徽章(存在性先行, 内容位渐进显示, 不阻塞列表)
     };
     // 分类切换
@@ -5711,7 +5720,7 @@ ext: {
     window.__csWireNow = () => { const r2 = $('chat_sync_settings'); wirePanelEvents(); if (r2) r2.dataset.wired = r2.dataset.wired || '1'; };
     $('cs_cfg_local')?.addEventListener('click', () => window.__renderCfgList('local'));
     $('cs_cfg_cloud')?.addEventListener('click', () => window.__renderCfgList('cloud'));
-    $('cs_cfg_selall')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_cfg_sel"]').forEach((c) => { c.checked = true; }));
+    $('cs_cfg_selall')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_cfg_sel"]').forEach((c) => { if (c.closest('label') && c.closest('label').style.display === 'none') return; c.checked = true; })); // 筛选隐藏的不勾
     $('cs_cfg_clr')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_cfg_sel"]').forEach((c) => { c.checked = false; }));
     // User tab: 点行(非勾选框) → 人设描述预览弹窗
     $('cs_cfg_list')?.addEventListener('click', async (e) => {
@@ -5774,7 +5783,25 @@ ext: {
         try { await drv.toggleStatus(n); } catch (e) { console.warn('[chat-sync] 开关切换失败', e); }
         try { window.__renderCfgList(window.__cfgMode); } catch (e2) { console.warn(e2); }
     });
-    // 上传诊断: URL缺失原因(供源头设备定位为何新设备无法重装)
+    // 筛选: 按行内徽章文本过滤(与显示一致, 不重算); 差异徽章异步填充后需重放
+    window.__cfgFilter = '全部';
+    function __applyCfgFilter() {
+        try {
+            const kind = window.__cfgFilter || '全部';
+            const rows = [...document.querySelectorAll('#cs_cfg_list label.cs-role-item')];
+            for (const r of rows) {
+                if (kind === '全部') { r.style.display = ''; continue; }
+                const wEl = r.querySelector('.cs-cln-where');
+                const dEl = r.querySelector('.cs-where-diff');
+                const w = wEl ? wEl.childNodes[0] && wEl.textContent.trim().split('·')[0] : '';
+                const d = dEl ? dEl.textContent.trim() : '';
+                const hit = (kind === '双端' && w === '双端') || (kind === '仅本地' && w === '仅本地') || (kind === '仅云端' && w === '仅云端') || (kind === '本地新' && d === '本地新') || (kind === '云端新' && d === '云端新');
+                r.style.display = hit ? '' : 'none';
+            }
+        } catch { }
+    }
+    window.__applyCfgFilter = __applyCfgFilter;
+// 上传诊断: URL缺失原因(供源头设备定位为何新设备无法重装)
     function urlNotesTxt(r2) {
         try {
             const un = (r2 && r2.urlNotes) || {};
@@ -5788,7 +5815,10 @@ ext: {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
         const st2 = $('cs_cfg2_status');
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要上传的项'; return; }
-        if (window.__cfgMode !== 'local') { if (st2) { st2.textContent = '当前是云端视图——「上传选中」上传的是本机内容，请切到「本地」视图再点'; st2.style.color = '#e66'; } return; }
+        if (window.__cfgMode !== 'local') {
+            if (st2) { st2.textContent = '当前是云端视图——「上传选中」上传的是本机内容，请切到「本地」视图再点'; st2.style.color = '#e66'; setTimeout(() => { if (st2.textContent.startsWith('当前是云端视图')) { st2.textContent = ''; st2.style.color = ''; } }, 4000); }
+            return;
+        }
         if (st2) st2.style.color = '';
         if (st2) st2.textContent = '上传中…';
         try {
@@ -5804,11 +5834,22 @@ ext: {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
         const st2 = $('cs_cfg2_status');
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要导入的项'; return; }
-        if (window.__cfgMode !== 'cloud') { if (st2) { st2.textContent = '当前是本地视图——「导入选中」导入的是云端内容，请切到「云端」视图再点'; st2.style.color = '#e66'; } return; }
+        if (window.__cfgMode !== 'cloud') {
+            if (st2) { st2.textContent = '当前是本地视图——「导入选中」导入的是云端内容，请切到「云端」视图再点'; st2.style.color = '#e66'; setTimeout(() => { if (st2.textContent.startsWith('当前是本地视图')) { st2.textContent = ''; st2.style.color = ''; } }, 4000); }
+            return;
+        }
         if (st2) st2.style.color = '';
         if (st2) st2.textContent = '导入中…';
         const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
         if (st2) st2.textContent = (r && window.__cfgTab === 'ext' && (r.fail || r.ok)) ? `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}` : '';
+    });
+    // 筛选 chips 点击(document委托, 面板重渲染不失效)
+    document.addEventListener('click', (ev) => {
+        const b = ev.target && ev.target.closest ? ev.target.closest('.cs-flt') : null;
+        if (!b) return;
+        window.__cfgFilter = b.dataset.flt || '全部';
+        document.querySelectorAll('.cs-flt').forEach((x) => { x.style.opacity = (x.dataset.flt === window.__cfgFilter) ? '1' : '.55'; x.style.fontWeight = (x.dataset.flt === window.__cfgFilter) ? '700' : '400'; });
+        __applyCfgFilter();
     });
     // 启动自动更新勾选: 元素由 __refreshCurRepoLine 动态创建(晚于直接绑定) → 用 document 委托, 永不失绑
     document.addEventListener('change', (e) => {
