@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5637,6 +5637,7 @@ async function importSelectedApiProfiles(names) {
             } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
         }
         saveSettingsDebounced(); // 官方保存路径: 页面活设置 + 正确版本号(ST/TT 通用)
+        window.__apiRefreshOfficialList(); // 0.12.4: 官方连接配置下拉即时可见(不等刷新)
         hideBusy();
         toastr.info(`导入Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}`);
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
@@ -5674,11 +5675,35 @@ async function deleteSelectedApiProfiles(names, mode) {
                 }
                 if (!verified) { fail.push(name); failReasons.push({ name, reason: '删除未生效（落盘验证失败，请重试或到酒馆连接配置界面删除）' }); continue; }
             }
+            window.__apiRefreshOfficialList(); // 0.12.4: 官方下拉同步(本地删除后即时少一条)
             ok.push(name);
         } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
     }
     return { ok: ok.length, fail: fail.length, failReasons };
 }
+// 0.12.4: 官方 connection-manager 的 <select id="connection_profiles"> 只在它自己动作时重绘(不监听外部事件)——
+// 我们直接改活数组它不知道, 导致"导入成功后官方列表要刷新才见"。这里从活数组原位重建下拉框(纯DOM, 各版本安全)
+window.__apiRefreshOfficialList = function () {
+    if (!document || typeof document.getElementById !== 'function') return; // 沙箱/无DOM环境安全(null/undefined时静默跳过)
+    const sel = document.getElementById('connection_profiles');
+    if (!sel) return;
+    const cur = sel.value;
+    const noneLabel = sel.options && sel.options[0] ? sel.options[0].textContent : 'select none';
+    const arr = _apiProfilesArr();
+    sel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = noneLabel;
+    none.selected = !cur;
+    sel.appendChild(none);
+    [...arr].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))).forEach((pr) => {
+        const o = document.createElement('option');
+        o.value = pr.id;
+        o.textContent = pr.name;
+        o.selected = cur === pr.id;
+        sel.appendChild(o);
+    });
+};
 async function _apiDiffMap() {
     const out = new Map();
     const entries = await __cachedListEntries(API_CLOUD_DIR).catch(() => []);
