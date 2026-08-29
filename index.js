@@ -4194,7 +4194,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-user cs-ico" aria-hidden="true"></i>当前角色同步</summary>
+                    <summary><i class="fa-solid fa-user cs-ico" aria-hidden="true"></i>角色卡+绑定世界书+聊天同步</summary>
                     <div class="cs-body">
                         <div id="${id}_char_display" class="cs-current">当前角色：<b>${escapeHtml(charName || '（未打开单人角色）')}</b>${worldName ? `<br>绑定世界书：<b>${escapeHtml(worldName)}</b>` : ''}</div>
                         <p class="cs-hint" style="margin:6px 0 2px">当前聊天（增量上传 / 导入）</p>
@@ -4213,7 +4213,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-cloud-arrow-up cs-ico" aria-hidden="true"></i>角色卡+绑定世界书同步</summary>
+                    <summary><i class="fa-solid fa-cloud-arrow-up cs-ico" aria-hidden="true"></i>角色卡+绑定世界书+聊天同步</summary>
                     <div class="cs-body">
                         <p class="cs-hint" style="margin-bottom:4px">把本地角色整包/聊天上传到云端，或从云端导入/删除。</p>
                         <div class="cs-row" style="margin-top:6px">
@@ -4251,7 +4251,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-book cs-ico" aria-hidden="true"></i>指定角色卡+绑定世界书+聊天同步</summary>
+                    <summary><i class="fa-solid fa-book cs-ico" aria-hidden="true"></i>角色卡+绑定世界书+聊天同步</summary>
                     <div class="cs-body">
                         <div class="cs-row" style="align-items:center;margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_wb_local" type="button" class="cs-btn cs-btn-local"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 本地世界书</button>
