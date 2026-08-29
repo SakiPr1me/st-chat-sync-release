@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2702,7 +2702,7 @@ function __evictDirCacheItems(dir, entries, tab) {
     if (!hit || !Array.isArray(hit.arr)) return;
     const purged = new Set();
     for (const it of entries) {
-        const pure = String(it).includes('|') ? String(it).split('|').pop() : String(it);
+        const pure = __stripApiId(it);
         if (tab === 'user') { purged.add(pure); purged.add(pure + '.meta.json'); }
         else purged.add(pure + '.json');
     }
@@ -3379,7 +3379,17 @@ async function __diffMapOf(dir, localTextOf, remapKey = null) {
     }
     return out;
 }
-function __valueOf(cbValue) { const i = String(cbValue).indexOf('|'); return i > 0 ? String(cbValue).slice(i + 1) : String(cbValue); }
+// 仅当首段是已知 apiId(openai等)时才剥离, 预设名自身含'|'不会被误剥
+function __stripApiId(v) {
+    const s = String(v);
+    const i = s.indexOf('|');
+    if (i > 0) {
+        const head = s.slice(0, i);
+        if (typeof CONN_PRESET_GROUPS !== 'undefined' && CONN_PRESET_GROUPS.some((g) => g.apiId === head)) return s.slice(i + 1);
+    }
+    return s;
+}
+function __valueOf(cbValue) { return __stripApiId(cbValue); }
 async function __fillDiffBadges() {
     const drv = window.__cfgDrivers && window.__cfgDrivers[window.__cfgTab];
     if (!drv || typeof drv.diffMap !== 'function') return;
@@ -5591,7 +5601,7 @@ ext: {
         },
 
     };
-    function parseCfgItem(v) { const i = v.indexOf('|'); return i > 0 ? { apiId: v.slice(0, i), name: v.slice(i + 1) } : { apiId: 'openai', name: v }; }
+    function parseCfgItem(v) { const s = String(v); const i = s.indexOf('|'); if (i > 0 && CONN_PRESET_GROUPS.some((g) => g.apiId === s.slice(0, i))) return { apiId: s.slice(0, i), name: s.slice(i + 1) }; return { apiId: 'openai', name: s }; }
     window.__cfgRenderGen = 0;
     window.__renderCfgList = async function (mode) {
         mode = mode || window.__cfgMode;
@@ -5609,7 +5619,7 @@ ext: {
         const whereSets = { localSet: new Set(), cloudSet: new Set() };
         try {
             if (tab !== 'user') {
-                const _nm = (v) => String(v).replace(/^third-party\//, '').split('|').pop();
+                const _nm = (v) => __stripApiId(String(v).replace(/^third-party\//, ''));
                 let lc = null, cc = null;
                 try { lc = await drv.listLocal(); } catch { }
                 try { cc = await drv.listCloud(); } catch { }
@@ -5627,7 +5637,7 @@ ext: {
         // 存在性徽章: 本地视图=双端/仅本地; 云端视图=(用户方案)【仅预设 conn】不显示 双端/仅云端 字样、双端项显示框内差异;
         //   主题/正则的云端视图照常显示 双端/仅云端 徽章(差异在框内), 与本地视图一致。
         // 统一名规范化(集合与行值都走同一规则, 否则第三分项带 third-party/ 前缀永不匹配)
-        const _nm2 = (v) => String(v).replace(/^third-party\//, '').split('|').pop();
+        const _nm2 = (v) => __stripApiId(String(v).replace(/^third-party\//, ''));
         const __whereOf = (n) => {
             if (tab === 'user') return '';
             const nn = _nm2(n);
@@ -5668,7 +5678,7 @@ ext: {
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
         if (tgt) tgt.textContent = mode === 'cloud' ? '当前为云端视图，将导入云端选中' : '当前为本地视图，将上传本地选中';
         list.innerHTML = names.length
-            ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' && n.includes('|') ? n.split('|').pop() : n))}</span>`}</label>`).join('')
+            ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
         __fillDiffBadges(); // 异步补差异徽章(存在性先行, 内容位渐进显示, 不阻塞列表)
     };
@@ -5776,6 +5786,8 @@ ext: {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
         const st2 = $('cs_cfg2_status');
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要上传的项'; return; }
+        if (window.__cfgMode !== 'local') { if (st2) { st2.textContent = '当前是云端视图——「上传选中」上传的是本机内容，请切到「本地」视图再点'; st2.style.color = '#e66'; } return; }
+        if (st2) st2.style.color = '';
         if (st2) st2.textContent = '上传中…';
         try {
             const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
@@ -5790,6 +5802,8 @@ ext: {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
         const st2 = $('cs_cfg2_status');
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要导入的项'; return; }
+        if (window.__cfgMode !== 'cloud') { if (st2) { st2.textContent = '当前是本地视图——「导入选中」导入的是云端内容，请切到「云端」视图再点'; st2.style.color = '#e66'; } return; }
+        if (st2) st2.style.color = '';
         if (st2) st2.textContent = '导入中…';
         const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
         if (st2) st2.textContent = (r && window.__cfgTab === 'ext' && (r.fail || r.ok)) ? `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}` : '';
@@ -5808,7 +5822,7 @@ ext: {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { if (st2) st2.textContent = '请先在上方勾选要删除的项'; return; }
         let ok;
-        const disp = (v) => escapeHtml(v.includes('|') ? v.split('|').pop() : v); // 显示剥掉内部 apiId| 前缀
+        const disp = (v) => escapeHtml(__stripApiId(v)); // 显示剥掉 apiId| 前缀(仅已知apiId)
         if (mode === 'cloud') ok = await csConfirm('⚠ 永久删除云端配置项', `将永久删除云端配置项：<b>${sel.map(disp).join('、')}</b>。<br>删除后无法直接找回，确定删除「${sel.length}」个吗？`);
         else ok = await csConfirm('⚠ 删除本地配置项', `将删除本地配置项：<b>${sel.map(disp).join('、')}</b>。<br>确定删除「${sel.length}」个吗？`);
         if (!ok) { if (st2) st2.textContent = '已取消'; return; }
@@ -5823,7 +5837,7 @@ ext: {
             if (mode === 'cloud' && dir) {
                 __evictDirCacheItems(dir, sel, t2);
                 for (const it of sel) {
-                    const pure = String(it).includes('|') ? String(it).split('|').pop() : String(it);
+                    const pure = __stripApiId(it);
                     delete __diffCache[`${dir}/${t2 === 'user' ? pure + '.meta.json' : pure + '.json'}`];
                 }
             } else {
