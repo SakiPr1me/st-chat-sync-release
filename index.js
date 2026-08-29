@@ -4251,7 +4251,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-book cs-ico" aria-hidden="true"></i>角色卡+绑定世界书+聊天同步</summary>
+                    <summary><i class="fa-solid fa-book cs-ico" aria-hidden="true"></i>独立全局世界书同步</summary>
                     <div class="cs-body">
                         <div class="cs-row" style="align-items:center;margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_wb_local" type="button" class="cs-btn cs-btn-local"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 本地世界书</button>
