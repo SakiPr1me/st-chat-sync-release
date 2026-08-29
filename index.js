@@ -21,7 +21,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.11.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.11.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -131,7 +131,7 @@ const Gitee = {
         }
         if (!r) {
             if (lastErr && lastErr.name === 'AbortError')
-                throw new Error('云端请求超时(' + Math.round(timeout / 1000) + 's)——网络慢/仓库文件多，稍后再点；反复超时请点「连接测试」自查');
+                throw new Error('云端请求超时(' + Math.round(timeout / 1000) + 's)——网络慢/仓库文件多，稍后再点；反复超时请点「连接」自查');
             throw new Error('网络请求失败：' + ((lastErr && lastErr.message) || lastErr));
         }
         // 404 容忍范围: GET(读不存在→上层返回null/[])与 DELETE(已删=幂等成功); PUT/POST 404(sha冲突/文件被移走)必须抛——
@@ -209,7 +209,7 @@ const Gitee = {
         if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
         return j;
     },
-    // GitLab 专用: 默认分支探测(连接测试成功时也可写入) + 一次 commit(action 数组)
+    // GitLab 专用: 默认分支探测(「连接」成功时也可写入) + 一次 commit(action 数组)
     async glEnsureBranch() {
         if (settings.gitlabBranch) return settings.gitlabBranch;
         try {
@@ -315,7 +315,7 @@ const Gitee = {
         if (!r.ok) return [];
         return (await r.json()).history || [];
     },
-    // 连接测试
+    // 连接测试(按钮文案「连接」)
     async test() {
         const r = await fetch(`${this.base}${this.isGitlab() ? '/user?private_token=' : '/user?access_token='}${encodeURIComponent(settings.token)}`, { headers: this.auth() });
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -3973,7 +3973,7 @@ async function __fillCloudUsage() {
         el.textContent = '📦 云端占用读取失败：' + ((e && e.message) || e);
     }
 }
-// 刷新「当前云端仓库/插件版本」行(保存配置、连接测试成功后即时更新, 不必重开面板)
+// 刷新「当前云端仓库/插件版本」行(保存配置、「连接」成功后即时更新, 不必重开面板)
 function __refreshCurRepoLine() {
     const el = document.getElementById('cs_cur_repo');
     if (!el) return;
@@ -3981,7 +3981,7 @@ function __refreshCurRepoLine() {
     const platName = String(settings.server || '').includes('github') ? 'GitHub' : (String(settings.server || '').includes('gitlab.com') ? 'GitLab' : 'Gitee');
     let lastConn = '—';
     try { if (settings.lastConnectAt) { const d = new Date(settings.lastConnectAt); lastConn = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } } catch { }
-    el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
+    el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接」看各目录数量</small>`;
     const slot2 = document.getElementById('cs_slot2');
     if (slot2) {
         const arr = Array.isArray(settings.connSlots) ? settings.connSlots : [];
@@ -4209,7 +4209,7 @@ window.__csManualCheck = async function (btn) {
                         <label class="cs-label" for="${id}_token">私人令牌 token（Gitee→头像→设置→私人令牌，全选，永久；GitHub→Settings→Developer settings→Personal access tokens(classic)→no Expiration+勾选repo；GitLab→https://gitlab.com/-/user_settings/personal_access_tokens→Generate token→Expiration改到一年后→权限全选→Generate token→复制→Done）</label>
                         <input id="${id}_token" type="password" class="text_pole" style="width:100%;box-sizing:border-box" placeholder="粘贴你的私人令牌" value="${escapeHtml(settings.token)}">
                         <div class="cs-row" style="margin-top:8px">
-                            <button id="${id}_test" type="button" class="cs-btn">连接测试</button>
+                            <button id="${id}_test" type="button" class="cs-btn">连接</button>
                             <button id="${id}_save" type="button" class="cs-btn cs-primary">保存配置</button>
                         </div>
                         <p id="${id}_testresult" class="cs-hint"></p>
@@ -4428,7 +4428,7 @@ function wirePanelEvents() {
             catch (e) {
                 const why = (e && e.message) || e;
                 if (src) src.textContent = '（读取云端失败）';
-                list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接测试」自查（网络/仓库/token），修好后再点「云端角色」</p>`;
+                list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接」自查（网络/仓库/token），修好后再点「云端角色」</p>`;
                 return;
             }
             if (src) src.textContent = '当前为云端视图，将删除云端';
@@ -5929,7 +5929,7 @@ ext: {
         catch (e) {
             const why = (e && e.message) || e;
             if (st2) { st2.textContent = '读取失败：' + why; st2.style.color = '#e66'; }
-            list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接测试」自查（网络/仓库/token）</p>`;
+            list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接」自查（网络/仓库/token）</p>`;
             hideBusy(); return;
         }
         hideBusy();
@@ -6340,7 +6340,7 @@ ext: {
             catch (e) {
                 const why = (e && e.message) || e;
                 if (tgt) tgt.textContent = '（读取云端失败）';
-                list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接测试」自查（网络/仓库/token）</p>`;
+                list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接」自查（网络/仓库/token）</p>`;
                 return;
             }
             if (tgt) tgt.textContent = '当前为云端视图，将导入云端选中'; 
@@ -6903,7 +6903,7 @@ async function autoConnectIfConfigured() {
         __refreshCurRepoLine();
         const st = document.getElementById('cs_testresult');
         if (st) st.textContent = `✅ 已自动连接：${u.login || u.username}`;
-    } catch { /* 静默：不打扰，用户可点连接测试 */ }
+    } catch { /* 静默：不打扰，用户可点「连接」 */ }
 }
 
 // 面板自愈: TT 手机端切界面会销毁重建 #extensions_settings 的 DOM(按钮事件全丢)——
