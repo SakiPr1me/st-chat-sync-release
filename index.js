@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4237,6 +4237,8 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
                             </span>
                             <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn" title="删除选中的文件">🗑 删除选中文件</button>
                             <span id="${id}_delete_target" class="cs-hint" style="margin-left:6px"></span>
@@ -4249,7 +4251,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-book cs-ico" aria-hidden="true"></i>独立全局世界书同步</summary>
+                    <summary><i class="fa-solid fa-book cs-ico" aria-hidden="true"></i>指定角色卡+绑定世界书+聊天同步</summary>
                     <div class="cs-body">
                         <div class="cs-row" style="align-items:center;margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_wb_local" type="button" class="cs-btn cs-btn-local"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 本地世界书</button>
@@ -4267,6 +4269,8 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
                             </span>
                             <button id="${id}_wb_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的全局世界书(本地视图删本地/云端视图删云端)">🗑 删除选中世界书</button>
                         </div>
@@ -5810,8 +5814,10 @@ ext: {
         window.__cfgMode = mode;
         const list = $('cs_cfg_list'); const tgt = $('cs_cfg_target'); const st2 = $('cs_cfg2_status');
         if (!list) return;
-        // 切分项/视图时清掉上一分项残留的结果提示(保留进行中的'…'态)
-        if (st2 && st2.textContent && !st2.textContent.includes('…')) { st2.textContent = ''; st2.style.color = ''; }
+        // 切分项时提示"正在切换至XX分页"(渲染完成后被列表内容覆盖)
+        const TAB_NAMES = { conn: '预设', theme: '主题', regex: '全局正则', user: 'User人设', ext: '拓展', thp: '酒馆助手' };
+        if (st2) { st2.textContent = '正在切换至「' + (TAB_NAMES[window.__cfgTab] || window.__cfgTab) + '」分页…'; st2.style.color = ''; }
+        const __csTabSwitchedAt = Date.now();
         const tab = window.__cfgTab;
         const drv = window.__cfgDrivers[tab];
         __updateCfgViewBtns();
@@ -5894,6 +5900,7 @@ ext: {
             hideBusy(); return;
         }
         hideBusy();
+        if (st2 && st2.textContent.startsWith('正在切换至')) { st2.textContent = ''; }
         if (st2) st2.style.color = '';
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
         if (tgt) tgt.textContent = mode === 'cloud' ? '当前为云端视图，将导入云端选中' : '当前为本地视图，将上传本地选中';
