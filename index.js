@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.12'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.13'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7055,14 +7055,15 @@ const CHAT_SYNC_CSS = `
 .cs-cln-fbody { flex:1; min-height:0; overflow:auto; padding:12px; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
 .cs-cln-fnum { font-size:.82em; font-weight:700; opacity:.9; white-space:nowrap; }
 /* 0.12.12: 整个面板板块不透明白: 面板/卡/全部文字固色深底浅字, 彻底不依赖主题半透明 */
-#chat_sync_settings { color:#e8e8e8; }
+#chat_sync_settings { color:#e8e8e8; background:rgba(24,24,30,0.97); border-radius:12px; padding:8px 10px; margin-top:6px; }
 #chat_sync_settings .cs-card { background:rgba(42,42,50,0.94); }
 #chat_sync_settings .cs-label, #chat_sync_settings .cs-hint, #chat_sync_settings .cs-group-title, #chat_sync_settings .cs-current { color:#d4d4d4; opacity:1; }
 #chat_sync_settings .cs-role-item span { color:#e6e6e6; }
 #chat_sync_settings .cs-role-item:hover { background:rgba(128,128,128,0.18); }
 /* 0.12.11: 面板内所有原生控件统一深色(浅色主题下 .text_pole/select/checkbox 原生就是白色, 一并压掉) */
 #chat_sync_settings .text_pole, #chat_sync_settings select, #chat_sync_settings input[type='text'], #chat_sync_settings input[type='password'], #chat_sync_settings textarea { background:rgba(30,30,36,0.90); color:#e8e8e8; border:1px solid rgba(255,255,255,0.22); border-radius:8px; padding:3px 8px; color-scheme:dark; }
-#chat_sync_settings select option { background:rgba(30,30,36,0.95); color:#e8e8e8; }
+#chat_sync_settings select { color-scheme:dark; }
+#chat_sync_settings select option { background:#1e1e24 !important; color:#e8e8e8 !important; }
 #chat_sync_settings input[type='checkbox'] { accent-color:var(--SmartThemeQuoteColor,#f0a35e); }
 `;
 function injectSettingsCss() {
