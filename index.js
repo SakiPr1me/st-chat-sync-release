@@ -3,12 +3,13 @@
 // 云端：Gitee Contents API（浏览器直连，CORS 已实测放行）
 
 import { extension_settings, getContext } from '../../../extensions.js';
-import { eventSource, event_types, saveSettingsDebounced, saveSettings, saveCharacterDebounced, displayPastChats, openCharacterChat, getRequestHeaders, getCharacters, select_selected_character, setCharacterId, reloadCurrentChat, doNewChat, deleteCharacter, chat_metadata, saveMetadata, scrollChatToBottom, deleteCharacterChatByName, settings as stSettings } from '../../../../script.js';
+import { eventSource, event_types, saveSettingsDebounced, saveSettings, saveCharacterDebounced, displayPastChats, openCharacterChat, getRequestHeaders, getCharacters, select_selected_character, setCharacterId, reloadCurrentChat, doNewChat, deleteCharacter, chat_metadata, saveMetadata, scrollChatToBottom, settings as stSettings } from '../../../../script.js';
 // 0.12.23 旧版酒馆兼容(1.13/1.14看不到插件的真凶): importCharacterChat/redisplayChat 在1.14未导出/不存在——
 // 顶层命名导入会让模块链接失败、整个插件静默消失。改命名空间导入+运行时探测降级：旧版能加载，功能优雅降级
 import * as __stCompat from '../../../../script.js';
 const importCharacterChat = (typeof __stCompat.importCharacterChat === 'function') ? __stCompat.importCharacterChat : (async () => { console.warn('[chat-sync] 当前酒馆版本未导出 importCharacterChat，聊天导入不可用（需 ≥1.15）'); return {}; });
 const redisplayChat = (typeof __stCompat.redisplayChat === 'function') ? __stCompat.redisplayChat : (() => { console.warn('[chat-sync] 当前酒馆版本未导出 redisplayChat，重绘降级（需 ≥1.15）'); });
+const deleteCharacterChatByName = (typeof __stCompat.deleteCharacterChatByName === 'function') ? __stCompat.deleteCharacterChatByName : (async () => { console.warn('[chat-sync] 当前酒馆版本未导出 deleteCharacterChatByName，删除聊天降级（需 ≥1.14）'); });
 import { Popup } from '../../../../scripts/popup.js';
 import { importGroupChat } from '../../../group-chats.js';
 import { loadWorldInfo, importWorldInfo, world_names, deleteWorldInfo } from '../../../world-info.js';
@@ -33,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.23'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.24'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
