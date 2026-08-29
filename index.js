@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4181,9 +4181,10 @@ window.__csManualCheck = async function (btn) {
         const state = __csTriageVer(PLUGIN_VERSION, remoteVer, __csRemoteAuthoritative);
         if (state === 'newer') { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; } const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
         else if (state === 'latest') { txt = '✅ 已是最新'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
-        else if (state === 'stale') { txt = '🔄 疑似最新（更新源均未确认，可再点强制更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
-        else { txt = '✅ 已是最新（CDN 缓存延迟中）'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
-        title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + (state === 'stale' ? '\n⚠ 本次检测全部源均为 CDN 回声，无法确认是否真的最新——再点一次按钮＝直接执行官方更新（无需令牌/检测）' : '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）');
+        else if (state === 'stale') { txt = '🔄 疑似最新（无权威源确认，可再点强制更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        else if (__csRemoteAuthoritative) { txt = '🫧 本机高于远端（开发版/未推送？可再点更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        else { txt = '⚠ 更新源降级（仅CDN旧回声 v' + remoteVer + '，可再点强制更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + ((state === 'stale' || (state === 'local-higher' && !__csRemoteAuthoritative)) ? '\n⚠ 权威源(Gitee/GitHub API)本次均失败，仅 CDN 回声——可能滞后。再点一次＝直接执行官方更新（无需令牌/检测）' : '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）');
     } catch (e) {
         txt = '❌ 检测失败';
         title2 = String(e).slice(0, 80) + '\n（再点一次按钮＝直接执行官方更新，无需令牌/检测）';
@@ -7238,6 +7239,23 @@ jQuery(() => {
     __refreshCurRepoLine();
     // 检测远程新版本(面板稳定后); 勾选了「自动更新」则启动即自动升级
     setTimeout(() => { try { if (settings.autoUpdate) { window.__csCheckUpdate && window.__csCheckUpdate({ auto: true }); } else { window.__csCheckUpdate && window.__csCheckUpdate(); } } catch { } }, 500);
+    // 0.12.5 自愈刷新: 磁盘上的插件版本 > 本页正在运行的旧代码 → 说明此前一次更新的自动刷新没完成(手机WebView/协调函数失效/脚本缓存)
+    // → 本次加载直接自刷新拉齐。sessionStorage 防抖: 磁盘版本与运行版本持续不一致(半写/开发版)时不反复刷
+    setTimeout(() => {
+        try {
+            const manUrl = new URL('manifest.json', import.meta.url);
+            fetch(manUrl.href + (manUrl.href.includes('?') ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' })
+                .then(r => (r.ok ? r.json() : null))
+                .then(j => {
+                    if (!j || !j.version) return;
+                    if (__csCompareVer(j.version, PLUGIN_VERSION) > 0 && sessionStorage.getItem('cs_selfheal_' + j.version) !== '1') {
+                        sessionStorage.setItem('cs_selfheal_' + j.version, '1');
+                        toastr.info('🔄 检测到磁盘已升级到 v' + j.version + '，自动刷新加载新版本…', null, { timeOut: 3000 });
+                        setTimeout(() => { if (!window.__csReloadGuard) { window.__csReloadGuard = 1; location.reload(); } }, 800);
+                    }
+                }).catch(() => { });
+        } catch { }
+    }, 1500);
     // 已配置则自动静默连接
     autoConnectIfConfigured();
     // 若已开启双端实时，页面加载后启动轮询（兜底 SETTINGS_UPDATED）
