@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.15'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.16'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6976,7 +6976,7 @@ const CHAT_SYNC_CSS = `
 .cs-btn.cs-btn-local { color:#6fce6f; border-color:rgba(111,206,111,.55); }
 .cs-btn.cs-btn-cloud { color:#6fb7f0; border-color:rgba(111,183,240,.55); }
 .cs-cln-row .cs-cln-size { color:#e8a44c; font-size:.95em; font-weight:700; }
-.cs-cln-row .cs-cln-date { color:var(--SmartThemeBodyColor,var(--grey_color)); opacity:.65; }
+.cs-cln-row .cs-cln-date { color:#b8b8b8; opacity:.85; } /* 0.12.16 固色防浅色主题黑字 */
 .cs-cln-modal { display:flex; width:min(940px,94vw); height:min(640px, calc(100vh - 24px)); height:min(640px, calc(100dvh - 24px)); background:var(--SmartThemeBlurTintColor,#1b1b1b); border:1px solid var(--SmartThemeBorderColor,#333); border-radius:12px; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,.5); }
 @media (max-width: 700px) { .cs-cln-modal { flex-direction:column; height:calc(100vh - 24px); height:calc(100dvh - 24px); } .cs-cln-left { flex:none; max-height:48%; } .cs-cln-right { flex:1; border-left:none; border-top:1px solid var(--SmartThemeBorderColor,#333); } }
 .cs-cln-left { flex:1.5; display:flex; flex-direction:column; overflow:hidden; padding:0; position:relative; }
@@ -6984,7 +6984,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-ptitle { margin-bottom:8px; font-size:.85em; line-height:1.6; }
 .cs-role-avatar { width:30px; height:30px; border-radius:50%; object-fit:cover; flex:none; background:rgba(128,128,128,0.16); border:1px solid var(--SmartThemeBorderColor,#333); }
 .cs-role-avatar.cs-av-ph { display:inline-flex; align-items:center; justify-content:center; font-size:.9em; opacity:.55; }
-.cs-cln-ptext { white-space:pre-wrap; word-break:break-word; font-size:.85em; line-height:1.7; color:var(--SmartThemeBodyColor,#e1e1e1); }
+.cs-cln-ptext { white-space:pre-wrap; word-break:break-word; font-size:.85em; line-height:1.7; color:#e1e1e1; }
 /* 预览正文格式着色: 与聊天页同款主题变量(斜体/引用/下划线) */
 .cs-cln-ptext em.cs-prev-em { color: var(--SmartThemeEmColor, #7f9cf5); font-style: italic; }
 .cs-cln-ptext .cs-prev-q { color: var(--SmartThemeQuoteColor, #f0a35e); }
@@ -7058,7 +7058,9 @@ const CHAT_SYNC_CSS = `
 .cs-cln-fbody { flex:1; min-height:0; overflow:auto; padding:12px; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
 .cs-cln-fnum { font-size:.82em; font-weight:700; opacity:.9; white-space:nowrap; }
 /* 0.12.12: 整个面板板块不透明白: 面板/卡/全部文字固色深底浅字, 彻底不依赖主题半透明 */
-{ color:#e8e8e8; background:rgba(24,24,30,0.97); border-radius:12px; padding:8px 10px; margin-top:6px; }
+#chat_sync_settings, #cs_float_win, #cs_quick_float, .cs-cln-modal { color:#e8e8e8; }
+#chat_sync_settings small, #cs_float_win small, #cs_quick_float small, .cs-cln-modal small { color:#d0d0d0; }
+#chat_sync_settings { background:rgba(24,24,30,0.97); border-radius:12px; padding:8px 10px; margin-top:6px; }
 .cs-card { background:rgba(42,42,50,0.94); }
 .cs-label, .cs-hint, .cs-group-title, .cs-current { color:#d4d4d4; opacity:1; }
 .cs-role-item span { color:#e6e6e6; }
