@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.24'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.25'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6390,7 +6390,7 @@ ext: {
         try {
             const host = document.getElementById(targetId);
             if (!host) return;
-            const rows = [...host.querySelectorAll('label.cs-role-item')];
+            const rows = [...host.querySelectorAll('.cs-role-item')]; // 0.12.25: 含清理器用div.cs-role-item cs-cln-row(此前只认label, 清理器搜索失效)
             const kw = String(window['__rowKw_' + targetId] || '').toLowerCase(); // 0.12.18 搜索: 行文本包含关键词才可见
             for (const r of rows) {
                 let kwHit = true;
