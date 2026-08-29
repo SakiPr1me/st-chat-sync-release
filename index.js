@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5608,6 +5608,8 @@ ext: {
         window.__cfgMode = mode;
         const list = $('cs_cfg_list'); const tgt = $('cs_cfg_target'); const st2 = $('cs_cfg2_status');
         if (!list) return;
+        // 切分项/视图时清掉上一分项残留的结果提示(保留进行中的'…'态)
+        if (st2 && st2.textContent && !st2.textContent.includes('…')) { st2.textContent = ''; st2.style.color = ''; }
         const tab = window.__cfgTab;
         const drv = window.__cfgDrivers[tab];
         __updateCfgViewBtns();
