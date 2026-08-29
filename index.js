@@ -8,6 +8,8 @@ import { Popup } from '../../../../scripts/popup.js';
 import { importGroupChat } from '../../../group-chats.js';
 import { loadWorldInfo, importWorldInfo, world_names, deleteWorldInfo } from '../../../world-info.js';
 import { power_user } from '../../../power-user.js'; // 主题删除走官方按钮时需要(官方 deleteTheme 删的是 power_user.theme)
+// Api分项密钥随行(0.12.0): canViewSecrets探测allowKeysExposure / writeSecret写入(返回新id,内部已刷新state) / readSecretState刷新 / secret_state活绑定(含掩码或明文)
+import { canViewSecrets as __secretCanView, writeSecret as __secretWrite, readSecretState as __secretReadState, secret_state as __secretState } from '../../../secrets.js';
 
 // 加载探针：供 headless 验证/调试确认插件确实执行
 window.__stChatSyncLoaded = true;
@@ -21,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.11.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -39,6 +41,7 @@ const DEFAULT_SETTINGS = {
     uploadBundle: undefined,  // (已停用) 备份本体功能已移除(0.9.0): 打包依赖从仓库再拉代码, 作者删库后无法生成, 与防删库目的不符; 云端旧安全包仍可被导入端读取兜底
     connSlots: [],           // 连接槽位[{platform,repo,token,lastConnectAt}]: 保存配置自动去重入库, 下拉一秒切换, 可删
     autoUpdate: true,         // 自动更新插件至最新(默认勾选; 每次启动检查, 有新版自动升级+刷新)
+    apiSyncSecrets: true,     // Api分项: 上传时连API密钥一起导出(仍受服务端allowKeysExposure限制; 云端为私有仓库)
 };
 
 // 统一从 settings 读；未初始化就建
@@ -2726,6 +2729,7 @@ function __evictDirCacheItems(dir, entries, tab) {
     for (const it of entries) {
         const pure = __stripApiId(it);
         if (tab === 'user') { purged.add(pure); purged.add(pure + '.meta.json'); }
+        else if (tab === 'api') purged.add(__safeName(pure) + '.json');
         else purged.add(pure + '.json');
     }
     hit.arr = hit.arr.filter((e) => !purged.has(e.name));
@@ -4340,6 +4344,7 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_cfg_tab_user" type="button" class="cs-btn cs-tab" data-cfgtab="user">User</button>
                             <button id="${id}_cfg_tab_ext" type="button" class="cs-btn cs-tab" data-cfgtab="ext">拓展</button>
                             <button id="${id}_cfg_tab_thp" type="button" class="cs-btn cs-tab" data-cfgtab="thp">酒馆助手</button>
+                            <button id="${id}_cfg_tab_api" type="button" class="cs-btn cs-tab" data-cfgtab="api" title="API连接配置(新建API配置保存的那份: 端点/模型/密钥引用等)">Api</button>
                         </div>
                         <div class="cs-row" style="align-items:center;margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_cfg_local" type="button" class="cs-btn cs-btn-local"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 本地配置</button>
@@ -4363,9 +4368,10 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
                             </span>
                         </div>
-                        <div class="cs-row" style="margin-top:2px;flex-wrap:wrap">
+                        <div class="cs-row" style="margin-top:2px;flex-wrap:wrap;align-items:center">
                             <button id="${id}_cfg_user_br" type="button" class="cs-btn" style="display:none" title="一键备份：用户名+全部人设+全部头像照片">💾 一键备份全部</button>
                             <button id="${id}_cfg_user_rr" type="button" class="cs-btn" style="display:none" title="一键恢复：从云端取回全部用户资料与头像照片">📥 一键恢复全部</button>
+                            <span id="${id}_cfg_api_secret_row" style="display:none;align-items:center;gap:4px;font-size:.78em;opacity:.9"><input type="checkbox" id="cs_api_secret" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.apiSyncSecrets === false ? '' : 'checked'}><label for="cs_api_secret" style="cursor:pointer;white-space:nowrap" title="上传时把配置绑定的API密钥值一并导出(云端为你的私有仓库)。服务端需开 allowKeysExposure 才能读出密钥值; 不满足时只同步密钥引用, 导入端需手动选一次key">连API密钥一起同步</label><small id="${id}_cfg_api_secret_hint" style="opacity:.75"></small></span>
                         </div>
                         <p id="${id}_cfg2_status" class="cs-hint" style="margin-top:4px"></p>
                     </div>
@@ -5450,6 +5456,244 @@ async function __extSetEnabled(full, on) {
     else if (!de.includes(full) && !de.includes(pure)) de.push(full);
     saveSettingsDebounced();
 }
+
+// ═══ 分项⑦ Api连接配置（ConnectionManager profiles, 2026-08-29 v0.12.0） ═══
+// 数据源: extension_settings.connectionManager.profiles(纯客户端活对象, saveSettingsDebounced 持久化) —— 非文件型分项
+// 官方应用机制: applyConnectionProfile 逐字段执行斜杠命令, 缺失字段自动 continue → 云端缺 Proxy Preset 等引用不报错
+// 密钥: profile['secret-id'] 只存引用; 导出读值需服务端 allowKeysExposure(canViewSecrets 探测, state 明文化);
+//       导入用官方 writeSecret(key,value,原label) 写入→新id回填profile; 即使旧id失配, 客户端 secret-id 命令还有 label=== 兜底匹配
+const API_CLOUD_DIR = 'config-sync/api-profiles';
+const __apiCloudJsonCache = {}; // {safeKey: {ts, j}} 60s 内容缓存(push/pull/del 后逐 key 失效)
+function _apiCloudEvict(key) { if (key) delete __apiCloudJsonCache[key]; else { for (const k of Object.keys(__apiCloudJsonCache)) delete __apiCloudJsonCache[k]; } }
+async function _apiCloudJson(key, force = false) {
+    const hit = __apiCloudJsonCache[key];
+    if (!force && hit && Date.now() - hit.ts < 60000) return hit.j;
+    const c = await Gitee.getText(`${API_CLOUD_DIR}/${key}.json`);
+    const j = c && c.content ? JSON.parse(c.content) : null;
+    __apiCloudJsonCache[key] = { ts: Date.now(), j };
+    return j;
+}
+function _apiProfilesArr() {
+    const cm = extension_settings.connectionManager; // 页面全局活对象(同 extension_settings.regex 用法)
+    return cm && Array.isArray(cm.profiles) ? cm.profiles : [];
+}
+function _apiProfileByName(name) {
+    const arr = _apiProfilesArr();
+    return arr.find((p) => p && p.name === name) || arr.find((p) => p && __safeName(p.name || '') === __safeName(name)) || null;
+}
+function _apiProfileSummary(p) {
+    return { name: (p && p.name) || '', api: (p && p.api) || '', model: (p && p.model) || '', url: (p && p['api-url']) || '', hasSecret: !!(p && p['secret-id']) };
+}
+function _apiNewId() { try { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID(); } catch { } return 'cs-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+// 读 profile 绑定密钥的明文(allowKeysExposure 时 state.value 即明文) → {key,value,label} | null
+async function _apiSecretOf(profile, allowSecret) {
+    if (!profile || !profile['secret-id'] || allowSecret !== true) return null;
+    let can = null;
+    try { can = await __secretCanView(); } catch { }
+    if (can !== true) return null;
+    try { await __secretReadState(); } catch { }
+    const id = String(profile['secret-id']);
+    for (const key of Object.keys(__secretState || {})) {
+        const arr = __secretState[key];
+        if (!Array.isArray(arr)) continue;
+        const hit = arr.find((x) => x && String(x.id) === id) || arr.find((x) => x && x.label === id);
+        if (hit && typeof hit.value === 'string' && hit.value) return { key, value: hit.value, label: hit.label || '' };
+    }
+    return null;
+}
+// 行内存在性徽章(rowHtml 分项不共享默认模板, 自取 window.__cfgWhereSets —— __renderCfgList 每次渲染前已就位)
+function _apiWhereHtml(n, mode) {
+    const ws = window.__cfgWhereSets || {};
+    if (ws.tab !== 'api') return '';
+    const nn = String(n).toLowerCase();
+    const BOTH = '<b class="cs-cln-where cs-cln-where-both">双端<span class="cs-where-diff" data-where-diff=""></span></b>';
+    if (mode === 'cloud') return ws.localSet.has(nn) ? BOTH : '<b class="cs-cln-where cs-cln-where-cloud">仅云端</b>';
+    return ws.cloudSet.has(nn) ? BOTH : '<b class="cs-cln-where cs-cln-where-local">仅本地</b>';
+}
+// 富行: 存在性徽章 + 🔑 + API类型 + 名字 + 模型/端点摘要
+function _apiRowHtml(n, mode) {
+    const key = __safeName(n);
+    let sum = null;
+    if (mode === 'cloud') sum = (window.__apiCloudCache || {})[key] || (window.__apiCloudCache || {})[n] || null;
+    else { const p = _apiProfileByName(n); sum = p ? _apiProfileSummary(p) : null; }
+    const keyTag = sum && sum.hasSecret ? '<b class="cs-cln-en" style="cursor:default;opacity:.85" title="配置绑定了API密钥">🔑</b>' : '';
+    const apiTag = sum && sum.api ? `<b class="cs-cln-en" style="cursor:default;opacity:.8" title="API 类型">${escapeHtml(sum.api)}</b>` : '';
+    const sec = [];
+    if (sum && sum.model) sec.push('模型: ' + sum.model);
+    if (sum && sum.url) sec.push('端点: ' + sum.url);
+    return `${_apiWhereHtml(n, mode)}${keyTag}${apiTag}<span style="flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(n)}">${escapeHtml(n)}</span>`
+        + `<span style="flex:1 1 30%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.75em;opacity:.72">${escapeHtml(sec.join('｜')) || (mode === 'cloud' ? '（云端未存摘要）' : '（无模型/端点信息）')}</span>`;
+}
+async function pushSelectedApiProfiles(names) {
+    if (!Array.isArray(names) || !names.length) { toastr.warning('未选择要上传的Api配置'); return null; }
+    if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
+    try {
+        const ok = [], skipped = [], fail = []; const failReasons = [];
+        let secretIncluded = 0, secretSkipped = 0;
+        const wantSecret = settings.apiSyncSecrets !== false;
+        showBusy(0, names.length, '上传Api配置');
+        for (let i = 0; i < names.length; i++) {
+            const name = names[i];
+            showBusy(i + 1, names.length, `上传Api配置 ${name}`);
+            try {
+                const p = _apiProfileByName(name);
+                if (!p) { fail.push(name); failReasons.push({ name, reason: '本地无该配置' }); continue; }
+                const path = `${API_CLOUD_DIR}/${__safeName(name)}.json`;
+                const secret = await _apiSecretOf(p, wantSecret);
+                if (p['secret-id'] && wantSecret && !secret) secretSkipped++;
+                if (secret) secretIncluded++;
+                const text = JSON.stringify({ kind: 'st-connection-profile', v: 1, savedAt: new Date().toISOString(), profile: p, secret });
+                const cloud = await Gitee.getText(path);
+                if (cloud) {
+                    let sameProfile = false, cloudHasSecret = false;
+                    try { const cj = JSON.parse(cloud.content); cloudHasSecret = !!(cj && cj.secret && cj.secret.value); sameProfile = !!(cj && cj.profile && jsonStableString(cj.profile) === jsonStableString(p)); } catch { }
+                    if (sameProfile && (cloudHasSecret || !secret)) { skipped.push(name); settings.lastCloudSha[path] = cloud.sha; continue; } // profile一致且密钥不缺 → 跳过
+                    // profile一致但云端缺密钥、本次读得到 → 补传(清洗式重传); 或首传/内容有差 → 正常覆盖
+                    const rememberSha = settings.lastCloudSha ? settings.lastCloudSha[path] : undefined;
+                    if (!sameProfile && rememberSha && rememberSha !== cloud.sha) { fail.push(name); failReasons.push({ name, reason: '云端已被另一端修改，已跳过覆盖（可先导入选中）' }); continue; }
+                    settings.lastCloudSha[path] = (await Gitee.putText(path, text, cloud.sha, `sync api profile ${name}`)) || settings.lastCloudSha[path];
+                } else {
+                    settings.lastCloudSha[path] = (await Gitee.putText(path, text, undefined, `sync api profile ${name}`)) || settings.lastCloudSha[path];
+                }
+                _apiCloudEvict(__safeName(name));
+                delete __dirEntryCache[API_CLOUD_DIR]; // 目录缓存失效: 云端视图立刻能看到新文件
+                ok.push(name);
+            } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
+        }
+        hideBusy();
+        saveSettingsDebounced();
+        if (secretSkipped) toastr.info(`⚠ ${secretSkipped} 个配置的密钥未随行（服务端未开 allowKeysExposure，云端只存了密钥引用）`);
+        toastr.info(`上传Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}${secretIncluded ? `｜🔑 密钥已随行 ${secretIncluded} 个` : ''}`);
+        return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
+    } finally { __csReleaseBusy(); }
+}
+async function importSelectedApiProfiles(names) {
+    if (!Array.isArray(names) || !names.length) { toastr.warning('未选择要导入的Api配置'); return null; }
+    if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
+    try {
+        const ok = [], skipped = [], skippedManual = [], fail = []; const failReasons = [];
+        const batchMode = { applyAll: false, decision: null };
+        showBusy(0, names.length, '导入Api配置');
+        for (let i = 0; i < names.length; i++) {
+            const name = names[i];
+            showBusy(i + 1, names.length, `导入Api配置 ${name}`);
+            try {
+                const c = await Gitee.getText(`${API_CLOUD_DIR}/${__safeName(name)}.json`);
+                if (!c) { fail.push(name); failReasons.push({ name, reason: '云端无该配置' }); continue; }
+                const parsed = JSON.parse(c.content);
+                const profile = parsed && parsed.profile;
+                if (!profile || typeof profile !== 'object') { fail.push(name); failReasons.push({ name, reason: '云端文件损坏(缺profile)' }); continue; }
+                // 密钥先行: 本机已有同key+label+value的条目→复用其id(重复导入不堆积); 没有→原label写入→新id回填profile
+                // (应用时id直配; 即使id失配, 客户端 secret-id 命令还有 label=== 兜底匹配)
+                let secretNote = '';
+                if (parsed.secret && parsed.secret.key && parsed.secret.value) {
+                    let newId = null;
+                    try {
+                        await __secretReadState();
+                        const skey = parsed.secret.key, sval = parsed.secret.value, slab = parsed.secret.label || name;
+                        const sarr = (__secretState || {})[skey];
+                        if (Array.isArray(sarr)) {
+                            const dup = sarr.find((x) => x && x.label === slab && x.value === sval);
+                            if (dup) newId = dup.id; // 密钥值逐字一致(明文态才可比) → 复用
+                        }
+                    } catch { }
+                    if (!newId) { try { newId = await __secretWrite(parsed.secret.key, parsed.secret.value, parsed.secret.label || name); } catch { } }
+                    if (newId) profile['secret-id'] = newId;
+                    else secretNote = '密钥写入失败, 导入后需手动选一次key';
+                } else if (profile['secret-id']) {
+                    secretNote = '云端未含密钥值(上传端未开 allowKeysExposure), 导入后需手动选一次key';
+                }
+                if (!extension_settings.connectionManager || typeof extension_settings.connectionManager !== 'object') extension_settings.connectionManager = {};
+                if (!Array.isArray(extension_settings.connectionManager.profiles)) extension_settings.connectionManager.profiles = [];
+                const arr = extension_settings.connectionManager.profiles;
+                const keyName = profile.name || name;
+                let idx = profile.id ? arr.findIndex((x) => x && x.id === profile.id) : -1;
+                if (idx < 0) idx = arr.findIndex((x) => x && x.name === keyName);
+                let savedAs = keyName;
+                if (idx >= 0) {
+                    if (jsonStableString(arr[idx]) === jsonStableString(profile)) { skipped.push(name); if (secretNote) failReasons.push({ name, reason: secretNote }); continue; }
+                    const decision = await resolveCfgImportConflict('Api配置', keyName, batchMode);
+                    if (decision === 'cancel') { skippedManual.push(name); continue; }
+                    if (decision === 'copy') {
+                        savedAs = uniqueCfgName(keyName, (n2) => arr.some((x) => x && x.name === n2));
+                        profile.name = savedAs;
+                        profile.id = _apiNewId();
+                        arr.push(profile);
+                    } else arr[idx] = profile;
+                } else arr.push(profile);
+                ok.push(savedAs === keyName ? keyName : `${keyName}→另存「${savedAs}」`);
+                if (secretNote) failReasons.push({ name: savedAs, reason: secretNote });
+            } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
+        }
+        saveSettingsDebounced(); // 官方保存路径: 页面活设置 + 正确版本号(ST/TT 通用)
+        hideBusy();
+        toastr.info(`导入Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}`);
+        return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
+    } finally { __csReleaseBusy(); }
+}
+async function deleteSelectedApiProfiles(names, mode) {
+    mode = mode || 'local';
+    if (!Array.isArray(names) || !names.length) return null;
+    const ok = [], fail = []; const failReasons = [];
+    for (const name of names) {
+        try {
+            if (mode === 'cloud') {
+                const path = `${API_CLOUD_DIR}/${__safeName(name)}.json`;
+                const c = await Gitee.getText(path);
+                if (!c) { fail.push(name); failReasons.push({ name, reason: '云端无该配置' }); continue; }
+                await Gitee.deleteFile(path, c.sha, `delete api profile ${name}`);
+                _apiCloudEvict(__safeName(name));
+                delete __dirEntryCache[API_CLOUD_DIR];
+            } else {
+                const arr = _apiProfilesArr();
+                const idx = arr.findIndex((p) => p && (p.name === name || __safeName(p.name || '') === __safeName(name)));
+                if (idx < 0) { fail.push(name); failReasons.push({ name, reason: '本地无该配置' }); continue; }
+                arr.splice(idx, 1);
+                saveSettingsDebounced();
+                // 落盘验证(同正则分项: 防抖保存后回读确认, 防静默失败)
+                let verified = false;
+                for (let t = 0; t < 5 && !verified; t++) {
+                    await new Promise((r2) => setTimeout(r2, 800));
+                    try {
+                        const d2 = await fetchSettingsJson(true);
+                        const o2 = typeof d2.settings === 'string' ? JSON.parse(d2.settings) : d2.settings;
+                        const arr2 = (o2 && o2.extension_settings && o2.extension_settings.connectionManager && o2.extension_settings.connectionManager.profiles) || [];
+                        verified = !arr2.some((p2) => p2 && (p2.name === name || __safeName(p2.name || '') === __safeName(name)));
+                    } catch { }
+                }
+                if (!verified) { fail.push(name); failReasons.push({ name, reason: '删除未生效（落盘验证失败，请重试或到酒馆连接配置界面删除）' }); continue; }
+            }
+            ok.push(name);
+        } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
+    }
+    return { ok: ok.length, fail: fail.length, failReasons };
+}
+async function _apiDiffMap() {
+    const out = new Map();
+    const entries = await __cachedListEntries(API_CLOUD_DIR).catch(() => []);
+    const localArr = _apiProfilesArr();
+    for (const e of entries) {
+        if (e.type !== 'file' || !e.name.endsWith('.json')) continue;
+        const key = e.name.replace(/\.json$/, '');
+        const j = await _apiCloudJson(key).catch(() => null);
+        const cp = j && j.profile;
+        if (!cp) continue;
+        const nm = cp.name || key; // 行值=云端profile原始名(与 listCloud 返回一致)
+        const p = localArr.find((x) => x && x.name === nm) || localArr.find((x) => x && __safeName(x.name || '') === key);
+        if (!p) continue; // 仅云端: 存在性徽章已表达
+        const path = `${API_CLOUD_DIR}/${key}.json`;
+        const same = jsonStableString(cp) === jsonStableString(p);
+        if (same) out.set(nm, 'same');
+        else {
+            const mem = settings.lastCloudSha && settings.lastCloudSha[path];
+            out.set(nm, (mem && mem !== e.sha) ? 'cloud' : 'local');
+        }
+        settings.lastCloudSha = settings.lastCloudSha || {};
+        settings.lastCloudSha[path] = e.sha;
+    }
+    return out;
+}
+
     window.__cfgDrivers = {
 ext: {
             label: '拓展',
@@ -5735,6 +5979,31 @@ ext: {
                 return out;
             },
         },
+        api: {
+            label: 'Api配置',
+            async listLocal() {
+                const arr = _apiProfilesArr().filter((p) => p && p.name);
+                window.__apiLocalCache = arr;
+                return arr.map((p) => p.name);
+            },
+            async listCloud() {
+                const entries = await Gitee.listEntries(API_CLOUD_DIR); // 直连不走目录缓存(空目录会被缓存5分钟——上传后立刻切云端视图看不到新文件, 真机踩过)
+                const keys = entries.filter((e) => e.type === 'file' && e.name.endsWith('.json')).map((e) => e.name.replace(/\.json$/, ''));
+                window.__apiCloudCache = {};
+                const out = [];
+                for (const key of keys) {
+                    const j = await _apiCloudJson(key).catch(() => null);
+                    window.__apiCloudCache[key] = j && j.profile ? _apiProfileSummary(j.profile) : null;
+                    out.push((j && j.profile && j.profile.name) || key); // 返回原始名(与本地行 whereSets 匹配; 文件名被 safeName 弄过的没关系)
+                }
+                return out;
+            },
+            rowHtml(n, mode) { return _apiRowHtml(n, mode); },
+            async push(items) { return pushSelectedApiProfiles(items); },
+            async pull(items) { return importSelectedApiProfiles(items); },
+            async del(items, mode) { return deleteSelectedApiProfiles(items, mode); },
+            async diffMap() { return _apiDiffMap(); },
+        },
         conn: {
             label: '预设',
             async listLocal() { return (await _connPresetLocalNames()); },
@@ -5848,7 +6117,7 @@ ext: {
         const list = $('cs_cfg_list'); const tgt = $('cs_cfg_target'); const st2 = $('cs_cfg2_status');
         if (!list) return;
         // 切分项时提示"正在切换至XX分页"(渲染完成后被列表内容覆盖)
-        const TAB_NAMES = { conn: '预设', theme: '主题', regex: '全局正则', user: 'User人设', ext: '拓展', thp: '酒馆助手' };
+        const TAB_NAMES = { conn: '预设', theme: '主题', regex: '全局正则', user: 'User人设', ext: '拓展', thp: '酒馆助手', api: 'Api配置' };
         if (st2) { st2.textContent = '正在切换至「' + (TAB_NAMES[window.__cfgTab] || window.__cfgTab) + '」分页…'; st2.style.color = ''; }
         const __csTabSwitchedAt = Date.now();
         const tab = window.__cfgTab;
@@ -5877,6 +6146,7 @@ ext: {
                 }
             }
         } catch { }
+        window.__cfgWhereSets = { tab, localSet: whereSets.localSet, cloudSet: whereSets.cloudSet }; // rowHtml 分项(api)取存在性徽章
         // 存在性徽章: 本地视图=双端/仅本地; 云端视图=(用户方案)【仅预设 conn】不显示 双端/仅云端 字样、双端项显示框内差异;
         //   主题/正则的云端视图照常显示 双端/仅云端 徽章(差异在框内), 与本地视图一致。
         // 统一名规范化(集合与行值都走同一规则, 否则第三分项带 third-party/ 前缀永不匹配)
@@ -5938,7 +6208,7 @@ ext: {
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
         if (tgt) tgt.textContent = mode === 'cloud' ? '当前为云端视图，将导入云端选中' : '当前为本地视图，将上传本地选中';
         list.innerHTML = names.length
-            ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}${__cfgTypeTag(drv, n)}${__cfgUpdTag(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
+            ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n, mode) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}${__cfgTypeTag(drv, n)}${__cfgUpdTag(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
         __applyCfgFilter(); // 应用当前筛选(徽章已就位)
         __fillDiffBadges(); // 异步补差异徽章(存在性先行, 内容位渐进显示, 不阻塞列表)
@@ -5946,7 +6216,7 @@ ext: {
     // 分类切换
     // 分项视图按钮文案跟随 tab(用户要求: 本地预设/云端预设、本地主题/云端主题、本地正则/云端正则; User 栏隐藏)
     function __updateCfgViewBtns() {
-        const map = { conn: ['本地预设', '云端预设'], theme: ['本地主题', '云端主题'], regex: ['本地正则', '云端正则'], user: ['本地人设', '云端人设'], ext: ['本地拓展', '云端拓展'], thp: ['本地酒馆助手', '云端酒馆助手'] };
+        const map = { conn: ['本地预设', '云端预设'], theme: ['本地主题', '云端主题'], regex: ['本地正则', '云端正则'], user: ['本地人设', '云端人设'], ext: ['本地拓展', '云端拓展'], thp: ['本地酒馆助手', '云端酒馆助手'], api: ['本地Api', '云端Api'] };
         const t = window.__cfgTab;
         const l = document.getElementById('cs_cfg_local'), c = document.getElementById('cs_cfg_cloud');
         if (!l || !c) return;
@@ -5961,6 +6231,15 @@ ext: {
         if (ua) ua.style.display = t === 'ext' ? '' : 'none';
         if (brn) brn.style.display = t === 'user' ? '' : 'none';
         if (rrn) rrn.style.display = t === 'user' ? '' : 'none';
+        const asr = document.getElementById('cs_cfg_api_secret_row');
+        if (asr) asr.style.display = t === 'api' ? 'inline-flex' : 'none';
+        if (t === 'api') {
+            const hb = document.getElementById('cs_cfg_api_secret_hint');
+            if (hb) {
+                hb.textContent = '密钥权限探测中…';
+                (async () => { let c = null; try { c = await __secretCanView(); } catch { } hb.textContent = c === true ? '✓ 密钥可读写' : '⚠ 服务端未开 allowKeysExposure——密钥不随行, 导入端需手动选一次key'; })();
+            }
+        }
 
     }
     window.__updateCfgViewBtns = __updateCfgViewBtns;
@@ -6202,6 +6481,10 @@ ext: {
             saveSettingsDebounced();
             try { if (typeof saveSettings === 'function') saveSettings().catch(() => { }); } catch { }
         }
+        if (e.target && e.target.id === 'cs_api_secret') {
+            settings.apiSyncSecrets = !!e.target.checked;
+            saveSettingsDebounced();
+        }
     });
     $('cs_cfg_updall')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
@@ -6245,7 +6528,7 @@ ext: {
         try { await window.__renderCfgList(window.__cfgMode); } catch { } // 先刷新
         if (st2) st2.textContent = `删除完成：成功 ${r ? r.ok : 0} / 共 ${sel.length}${r && r.fail ? `，失败 ${r.fail}` : ''}`;
         // 精确失效(不整清缓存): 云端删→目录剔除被删文件; 本地删→只清差异缓存
-        const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas' };
+        const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas', api: () => API_CLOUD_DIR };
         try {
             const t2 = window.__cfgTab || '';
             const dir = DIR_BY_TAB[t2] && DIR_BY_TAB[t2]();
@@ -6253,7 +6536,7 @@ ext: {
                 __evictDirCacheItems(dir, sel, t2);
                 for (const it of sel) {
                     const pure = __stripApiId(it);
-                    delete __diffCache[`${dir}/${t2 === 'user' ? pure + '.meta.json' : pure + '.json'}`];
+                    delete __diffCache[`${dir}/${t2 === 'user' ? pure + '.meta.json' : (t2 === 'api' ? __safeName(pure) + '.json' : pure + '.json')}`];
                 }
             } else {
                 for (const k of Object.keys(__diffCache)) delete __diffCache[k];
