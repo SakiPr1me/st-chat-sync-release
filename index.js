@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.8'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.9'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4069,10 +4069,15 @@ window.__csCheckUpdate = async function (opts) {
 async function __csDoSelfUpdate(btn, remoteVer) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ 更新中…'; }
     try {
-        const resp = await fetch('/api/extensions/update', {
+        let resp = await fetch('/api/extensions/update', {
             method: 'POST',
             headers: getRequestHeaders(),
             body: JSON.stringify({ extensionName: '/st-chat-sync', global: false }),
+        });
+        if (resp.status === 404) resp = await fetch('/api/extensions/update', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ extensionName: '/st-chat-sync', global: true }),
         });
         if (!resp.ok) throw new Error('HTTP ' + resp.status + ': ' + (await resp.text()).slice(0, 120));
         const j = await resp.json().catch(() => ({}));
@@ -4402,9 +4407,106 @@ function wirePanelEvents() {
             ? names.map((n) => {
                 const both = sideSet.has(n);
                 const whereCls = mode === 'local' ? (both ? 'both' : 'local') : (both ? 'both' : 'cloud');
-                return `<label class="cs-role-item"><input type="checkbox" value="${escapeHtml(n)}" name="cs_role_sel" ${prevChecked.has(n) ? 'checked' : ''}><img class="cs-role-avatar" loading="lazy" src="${escapeHtml(avSrcFor(n))}" title="${escapeHtml(n)}" onerror="if(!this.dataset.f){this.dataset.f=1;this.src=this.src.replace('/master/','/main/');}else{this.style.visibility='hidden';}"><b class="cs-cln-where cs-cln-where-${whereCls}">${both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端')}</b><span>${escapeHtml(n)}</span></label>`;
+                return `<label class="cs-role-item"><input type="checkbox" value="${escapeHtml(n)}" name="cs_role_sel" ${prevChecked.has(n) ? 'checked' : ''}><img class="cs-role-avatar" loading="lazy" src="${escapeHtml(avSrcFor(n))}" title="${escapeHtml(n)}" onerror="if(!this.dataset.f){this.dataset.f=1;this.src=this.src.replace('/master/','/main/');}else{this.style.visibility='hidden';}"><b class="cs-cln-where cs-cln-where-${whereCls}">${both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端')}<span class="cs-where-diff" data-where-diff=""></span></b><span>${escapeHtml(n)}</span></label>`;
             }).join('')
             : `<p class="cs-hint">（无${mode === 'cloud' ? '云端' : '本地'}角色）</p>`;
+        // ── 角色差异徽章(卡+绑定世界书+聊天): 与上传侧同构口径(卡字节/世界书文本/聊天段sha1Text) ──
+        (async () => {
+            try {
+                const NL = String.fromCharCode(10);
+                const rowsAll = [...list.querySelectorAll('label.cs-role-item')].filter((r) => r.querySelector('input[name=cs_role_sel]'));
+                if (!rowsAll.length) return;
+                const files = await Gitee.listAllFiles('sync');
+                const byChar = {};
+                for (const f of files) {
+                    const m2 = String(f.path).match(/^sync\/([^/]+)\/(.*)$/);
+                    if (!m2) continue;
+                    const e = (byChar[m2[1]] = byChar[m2[1]] || { cardSha: '', chunks: [], chats: [] });
+                    if (m2[2] === 'character.png') e.cardSha = f.sha;
+                    else if (m2[2].startsWith('character.png.parts/')) e.chunks.push({ rest: m2[2], sha: f.sha });
+                    else if (m2[2].startsWith('chats/') && m2[2].endsWith('.manifest.json')) e.chats.push({ rest: m2[2], sha: f.sha });
+                }
+                let cursor2 = 0;
+                const worker2 = async () => {
+                    while (cursor2 < rowsAll.length) {
+                        const row = rowsAll[cursor2++];
+                        try {
+                            const name = (row.querySelector('input[type=checkbox]') || {}).value;
+                            const e = byChar[name];
+                            if (!e) continue;
+                            const det = {};
+                            const ch = (getContext().characters || []).find((x) => x.name === name);
+                            try {
+                                const b64 = await getCharacterCardB64(name);
+                                if (b64) {
+                                    const clean = String(b64).replace(/\s/g, '');
+                                    const bin = atob(clean);
+                                    const u8 = new Uint8Array(bin.length);
+                                    for (let i2 = 0; i2 < bin.length; i2++) u8[i2] = bin.charCodeAt(i2);
+                                    if (e.chunks.length) {
+                                        const cparts = e.chunks.slice().sort((a2, b2) => a2.rest.localeCompare(b2.rest, undefined, { numeric: true }));
+                                        const localShas = [];
+                                        for (let i2 = 0; i2 < clean.length; i2 += CARD_CHUNK_CHARS) localShas.push(await gitBlobSha(new TextEncoder().encode(clean.slice(i2, i2 + CARD_CHUNK_CHARS))));
+                                        det.card = (localShas.length === cparts.length && localShas.every((sh, i3) => sh === cparts[i3].sha)) ? 'same' : 'local';
+                                    } else if (e.cardSha) {
+                                        det.card = ((await gitBlobSha(u8)) === e.cardSha) ? 'same' : 'local';
+                                    }
+                                }
+                            } catch { }
+                            try {
+                                const wname = ch && ch.data && ch.data.extensions && ch.data.extensions.world;
+                                if (wname) {
+                                    const wf = files.find((f) => f.path === 'sync/' + name + '/world.json');
+                                    if (wf) {
+                                        const wc = await getWorldContent(wname);
+                                        if (wc) det.wb = ((await gitBlobSha(new TextEncoder().encode(String(wc)))) === wf.sha) ? 'same' : 'local';
+                                    }
+                                }
+                            } catch { }
+                            try {
+                                const av = (ch && ch.avatar) || '';
+                                let chatState = '';
+                                for (const cm of e.chats) {
+                                    const mc = await Gitee.getText('sync/' + name + '/' + cm.rest).catch(() => null);
+                                    if (!mc || !mc.content) continue;
+                                    const man = JSON.parse(mc.content);
+                                    const chatName = cm.rest.replace(/^chats\//, '').replace(/\.manifest\.json$/, '');
+                                    let chatText = '';
+                                    try { chatText = await getChatContent(chatName, name); } catch { continue; }
+                                    const lines = String(chatText).split(NL).filter((l) => l.trim());
+                                    const msgLines = [];
+                                    lines.forEach((l, idx) => {
+                                        if (idx === 0) { try { const o = JSON.parse(l); if (o && typeof o === 'object' && !('mes' in o)) return; } catch { } }
+                                        msgLines.push(l);
+                                    });
+                                    if (msgLines.length < SEG_MIN_MSGS) continue;
+                                    const segs = splitChatSegmentsBySize(msgLines, SEG_TARGET_BYTES);
+                                    const localJoin = (await Promise.all(segs.map((sg) => sha1Text(sg.join(NL))))).join('|');
+                                    const cloudJoin = (man.parts || []).map((pp) => pp.sha).join('|');
+                                    if (localJoin !== cloudJoin) { chatState = 'local'; break; }
+                                    chatState = chatState || 'same';
+                                }
+                                if (chatState) det.chat = chatState;
+                            } catch { }
+                            const parts2 = [];
+                            if (det.card) parts2.push('卡:' + (det.card === 'same' ? '一致' : '本地新'));
+                            if (det.wb) parts2.push('世界书:' + (det.wb === 'same' ? '一致' : '本地新'));
+                            if (det.chat) parts2.push('聊天:' + (det.chat === 'same' ? '一致' : '本地新'));
+                            const dir2 = (det.card === 'local' || det.wb === 'local' || det.chat === 'local') ? 'local' : '';
+                            const sp2 = row.querySelector('.cs-where-diff');
+                            if (sp2) {
+                                sp2.textContent = dir2 ? DIFF_LABEL[dir2] : '';
+                                sp2.title = parts2.join('；');
+                                if (dir2) { const wb3 = sp2.closest('.cs-cln-where'); if (wb3) for (const n3 of [...wb3.childNodes]) if (n3.nodeType === 3) n3.textContent = ''; }
+                            }
+                        } catch { }
+                    }
+                };
+                await Promise.all(Array.from({ length: 2 }, worker2));
+                if (window.__applyCfgFilter) window.__applyCfgFilter();
+                console.warn('[csdiff] done');
+            } catch { }
+        })();
         __applyRowFilter('cs_roles_list', window.__rowFilter_cs_roles_list || '全部');
     };
     // 部分选择按钮事件
@@ -5397,7 +5499,22 @@ ext: {
             },
             async del(items, mode) {
                 const ok = [], fail = [];
-                if (mode === 'local') { fail.push(items[0] + ': 本机扩展请在「扩展管理」里删除'); return { ok: 0, fail: items.length, failReasons: fail.map((x) => ({ name: x, reason: '' })) }; }
+                if (mode === 'local') {
+                    for (const full of items) {
+                        const sname = String(full).split('/').pop();
+                        try {
+                            const t = (window.__extType && window.__extType[full]) || 'local';
+                            const r = await fetch('/api/extensions/delete', {
+                                method: 'POST', headers: getRequestHeaders(),
+                                body: JSON.stringify({ extensionName: sname, global: t === 'global' }),
+                            });
+                            if (!r.ok) { fail.push(sname + ': HTTP ' + r.status + ' ' + (await r.text()).slice(0, 60)); continue; }
+                            try { if (window.__extType) delete window.__extType[full]; if (window.__extMeta) delete window.__extMeta[full]; } catch { }
+                            ok.push(sname);
+                        } catch (e) { fail.push(sname + ':' + ((e && e.message) || e)); }
+                    }
+                    return { ok: ok.length, fail: fail.length, failReasons: fail.map((x) => ({ name: x, reason: '' })) };
+                }
                 let man = {};
                 try { man = JSON.parse((await Gitee.getText(EXT_MANIFEST_PATH))?.content || '{}'); } catch { }
                 for (const full of items) {
@@ -5913,12 +6030,16 @@ ext: {
         }
         if (st2) st2.style.color = '';
         if (st2) st2.textContent = '上传中…';
+        showBusy(0, 0, '📤 上传' + (window.__cfgDrivers[window.__cfgTab].label || '') + '中…');
         try {
             const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
+            hideBusy();
             if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 上传出错：没有返回结果'; st2.style.color = '#e66'; } return; }
             if (st2) { st2.textContent = `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}`; st2.style.color = r.fail ? '#e66' : ''; }
             try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新视图
+            try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新
         } catch (e) {
+            hideBusy();
             if (st2) { st2.textContent = '❌ 上传异常：' + ((e && e.message) || e); st2.style.color = '#e66'; }
             console.warn('[chat-sync] 上传异常', e);
         }
@@ -5933,10 +6054,18 @@ ext: {
         }
         if (st2) st2.style.color = '';
         if (st2) st2.textContent = '导入中…';
-        const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
-        if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 导入出错：没有返回结果'; st2.style.color = '#e66'; } return; }
-        if (st2) { st2.textContent = `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}`; st2.style.color = r.fail ? '#e66' : ''; }
-        try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新视图(徽章/状态立变)
+        showBusy(0, 0, '📥 导入' + (window.__cfgDrivers[window.__cfgTab].label || '') + '中…');
+        try {
+            const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
+            hideBusy();
+            if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 导入出错：没有返回结果'; st2.style.color = '#e66'; } return; }
+            if (st2) { st2.textContent = `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}`; st2.style.color = r.fail ? '#e66' : ''; }
+            try { window.__renderCfgList(window.__cfgMode); } catch { }
+        } catch (e) {
+            hideBusy();
+            if (st2) { st2.textContent = '❌ 导入异常：' + ((e && e.message) || e); st2.style.color = '#e66'; }
+            console.warn('[chat-sync] 导入异常', e);
+        }
     });
     // 筛选 chips 点击(document委托, 面板重渲染不失效)
     document.addEventListener('click', (ev) => {
