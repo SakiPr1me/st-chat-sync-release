@@ -2,7 +2,7 @@
   "name": "st-chat-sync",
   "display_name": "🌐 一键云同步（角色/聊天/世界书/配置）",
   "description": "一键云同步：角色卡／聊天记录／世界书／酒馆配置 多端云同步（Gitee/私有仓库）——换设备一键拉回，配置支持分项选择同步。",
-  "version": "0.12.14",
+  "version": "0.12.15",
   "author": "SakiPr1me",
   "js": "index.js"
 }
