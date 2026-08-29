@@ -21,7 +21,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.11.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.11.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4161,7 +4161,7 @@ window.__csManualCheck = async function (btn) {
         const cmp = __csCompareVer(remoteVer, PLUGIN_VERSION);
         if (cmp > 0) { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; } const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
         else if (cmp === 0) { txt = '✅ 已是最新'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
-        else { txt = '⚠ 本地更高'; cls = 'higher'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
+        else { txt = '✅ 已是最新（CDN 缓存延迟中）'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
         title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）';
     } catch (e) {
         txt = '❌ 检测失败';
