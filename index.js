@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5518,13 +5518,11 @@ function _apiRowHtml(n, mode) {
     let sum = null;
     if (mode === 'cloud') sum = (window.__apiCloudCache || {})[key] || (window.__apiCloudCache || {})[n] || null;
     else { const p = _apiProfileByName(n); sum = p ? _apiProfileSummary(p) : null; }
-    const keyTag = sum && sum.hasSecret ? '<b class="cs-cln-en" style="cursor:default;opacity:.85" title="配置绑定了API密钥">🔑</b>' : '';
-    const apiTag = sum && sum.api ? `<b class="cs-cln-en" style="cursor:default;opacity:.8" title="API 类型">${escapeHtml(sum.api)}</b>` : '';
-    const sec = [];
-    if (sum && sum.model) sec.push('模型: ' + sum.model);
-    if (sum && sum.url) sec.push('端点: ' + sum.url);
-    return `${_apiWhereHtml(n, mode)}${keyTag}${apiTag}<span style="flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(n)}">${escapeHtml(n)}</span>`
-        + `<span style="flex:1 1 30%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.75em;opacity:.72">${escapeHtml(sec.join('｜')) || (mode === 'cloud' ? '（云端未存摘要）' : '（无模型/端点信息）')}</span>`;
+    // 0.12.2 简化(用户拍板): 去掉🔑/API类型芯片, 重点=名字/模型名/端点, 三色区分无前缀
+    return `${_apiWhereHtml(n, mode)}`
+        + `<span style="flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--SmartThemeBodyColor,#e1e1e1);font-weight:600" title="${escapeHtml(n)}">${escapeHtml(n)}</span>`
+        + `<span style="flex:1 1 25%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78em;color:var(--SmartThemeQuoteColor,#f0a35e);font-weight:600" title="${escapeHtml((sum && sum.model) || '')}">${escapeHtml((sum && sum.model) || (mode === 'cloud' ? '' : '无模型'))}</span>`
+        + `<span style="flex:1 1 35%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.76em;color:#7fd0a8;opacity:.9" title="${escapeHtml((sum && sum.url) || '')}">${escapeHtml((sum && sum.url) || (mode === 'cloud' ? '（云端未存端点）' : '无端点'))}</span>`;
 }
 async function pushSelectedApiProfiles(names) {
     if (!Array.isArray(names) || !names.length) { toastr.warning('未选择要上传的Api配置'); return null; }
