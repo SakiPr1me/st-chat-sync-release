@@ -21,7 +21,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.17'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.11.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4051,7 +4051,7 @@ async function __csFetchRemoteVer() {
         try {
             const headers = {};
             if (url.includes('api.github.com')) { headers['Accept'] = 'application/vnd.github+json'; if (settings.token && sv.includes('github')) headers['Authorization'] = 'Bearer ' + settings.token; }
-            else if (url.includes('gitee.com/api')) { if (settings.token && (sv === '' || sv.includes('gitee'))) headers['Authorization'] = 'token ' + settings.token; }
+            else if (url.includes('gitee.com/api')) { headers['Authorization'] = 'token ' + (settings.token && (sv === '' || sv.includes('gitee')) ? settings.token : '2bf7029efdcafba86f4ed28968f85f25'); }
             const r = await fetch(url, { cache: 'no-store', headers, signal: AbortSignal.timeout(6000) });
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const text = await r.text();
