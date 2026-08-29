@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5187,7 +5187,11 @@ async function __discoverExts() {
             // URL 获取三级: ①按type查version → ②反着再试 → ③读扩展目录 .git/config 的 remote url
             // (TT fork: discover 把数据目录报为 global, 但 version 只查 public——后装扩展必定 404;
             //  官方为扩展目录开了静态读取(users.js createExtensionsRouteHandler), .git/config 可直接拿到 remote url, 实测 TT 全局类扩展 200)
-            const gs = window.__extType[full] === 'global' ? [true, false] : [false, true];
+            const gFirst = window.__extType[full] === 'global';
+            const nmFull = full, nmPure = String(full).split('/').pop();
+            const combos = gFirst
+                ? [{ n: nmFull, g: true }, { n: nmFull, g: false }, { n: nmPure, g: true }, { n: nmPure, g: false }]
+                : [{ n: nmFull, g: false }, { n: nmPure, g: false }, { n: nmFull, g: true }, { n: nmPure, g: true }];
             const fetchConfigUrl = async () => {
                 try {
                     const r = await fetch(`/scripts/extensions/${full}/.git/config`, { cache: 'no-store' });
@@ -5200,20 +5204,20 @@ async function __discoverExts() {
             };
             jobs.push((async () => {
                 let firstErr = '';
-                const tryVersion = async (g) => {
+                const tryVersion = async (nm, g) => {
                     const r = await fetch('/api/extensions/version', {
                         method: 'POST', headers: getRequestHeaders(),
-                        body: JSON.stringify({ extensionName: full, global: g }),
+                        body: JSON.stringify({ extensionName: nm, global: g }),
                     });
                     if (!r.ok) { firstErr = 'HTTP ' + r.status + ' ' + (await r.text().catch(() => '')).slice(0, 50); return null; }
                     const v = await r.json();
                     const url = String(v.remoteUrl || '');
-                    if (url) return { url, branch: String(v.currentBranchName || ''), commit: String(v.currentCommitHash || ''), err: '' };
+                    if (url) return { url, branch: String(v.currentBranchName || ''), commit: String(v.currentCommitHash || ''), upToDate: !!v.isUpToDate, err: '' };
                     firstErr = '版本查询200但remoteUrl为空';
                     return null;
                 };
-                for (const g of gs) {
-                    try { const got = await tryVersion(g); if (got) { window.__extMeta[full] = got; return; } }
+                for (const c of combos) {
+                    try { const got = await tryVersion(c.n, c.g); if (got) { window.__extMeta[full] = got; return; } }
                     catch (e2) { if (!firstErr) firstErr = String((e2 && e2.message) || e2).slice(0, 90); }
                 }
                 // version 全灭 → .git/config 兜底
@@ -5439,7 +5443,7 @@ ext: {
             async push(items) {
                 const ok = [], fail = [];
 
-                for (const full of items) {
+                let __i = 0; const __n = items.length; for (const full of items) { __i++; showBusy(__i, __n, '上传拓展 ' + String(full).split('/').pop() + '…');
                     const sname = String(full).split('/').pop();
                     const skey = __extSettingsKey(sname);
                     try {
@@ -5472,7 +5476,7 @@ ext: {
                 const ok = [], fail = [], failReasons = [];
                 let man = {};
                 try { man = JSON.parse((await Gitee.getText(EXT_MANIFEST_PATH))?.content || '{}'); } catch { }
-                for (const full of items) {
+                let __i2 = 0; const __n2 = items.length; for (const full of items) { __i2++; showBusy(__i2, __n2, '导入拓展 ' + String(full).split('/').pop() + '…');
                     const sname = String(full).split('/').pop();
                     try {
                         const entry = man[sname] || {};
@@ -5602,7 +5606,7 @@ ext: {
             },
             async push(items) {
                 const ok = [], fail = [];
-                for (const it of items) {
+                let __t = 0; const __tn = items.length; for (const it of items) { __t++; showBusy(__t, __tn, '上传脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…');
                     // 行值格式: [类型]名字
                     const type = it.startsWith('[文件夹]') ? 'folder' : 'script';
                     const name = it.replace(/^\[(脚本|文件夹)\]/, '');
@@ -5622,7 +5626,7 @@ ext: {
             async pull(items) {
                 const ok = [], fail = [], failReasons = [];
                 const replaceMode = !!settings.thReplace;
-                for (const it of items) {
+                let __t2 = 0; const __tn2 = items.length; for (const it of items) { __t2++; showBusy(__t2, __tn2, '导入脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…');
                     const type = it.startsWith('[文件夹]') ? 'folder' : 'script';
                     const name = it.replace(/^\[(脚本|文件夹)\]/, '');
                     try {
@@ -5851,6 +5855,14 @@ ext: {
             return `<b class="cs-cln-en" style="cursor:default;opacity:.8" title="安装类型(为所有人=全局 / 仅为用户)">${t === 'global' ? '全局' : '用户'}</b>`;
         } catch { return ''; }
     }
+    const __cfgUpdTag = (drv, n, mode) => { // 拓展行"⬆更新"按钮: version.isUpToDate=false 时显示
+        try {
+            if (drv !== window.__cfgDrivers.ext || mode !== 'local') return '';
+            const meta = (window.__extMeta && window.__extMeta[String(n)]) || {};
+            if (meta.upToDate !== false) return '';
+            return `<button type="button" class="cs-btn cs-upd-row" data-upd-n="${escapeHtml(n)}" style="padding:1px 8px;font-size:.72em;flex:none" title="检测到远端有新版本, 点击更新此扩展">⬆ 更新</button>`;
+        } catch { return ''; }
+    };
     function __cfgStatusChip(drv, n, mode) {
             if (typeof drv.statusOf !== 'function') return '';
             let st;
@@ -5878,7 +5890,7 @@ ext: {
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
         if (tgt) tgt.textContent = mode === 'cloud' ? '当前为云端视图，将导入云端选中' : '当前为本地视图，将上传本地选中';
         list.innerHTML = names.length
-            ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}${__cfgTypeTag(drv, n)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
+            ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}${__cfgTypeTag(drv, n)}${__cfgUpdTag(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
         __applyCfgFilter(); // 应用当前筛选(徽章已就位)
         __fillDiffBadges(); // 异步补差异徽章(存在性先行, 内容位渐进显示, 不阻塞列表)
@@ -6090,6 +6102,39 @@ ext: {
     });
     // 筛选 chips 点击(document委托, 面板重渲染不失效)
     document.addEventListener('click', (ev) => {
+        const ub = ev.target && ev.target.closest ? ev.target.closest('.cs-upd-row') : null;
+        if (ub) {
+            ev.preventDefault(); ev.stopPropagation();
+            const full = ub.dataset.updN;
+            showBusy(0, 0, '更新扩展 ' + String(full).split('/').pop() + '…');
+            const pure2 = String(full).split('/').pop();
+            const gFirst2 = (window.__extType && window.__extType[full]) === 'global';
+            const combos2 = gFirst2
+                ? [{ n: full, g: true }, { n: full, g: false }, { n: pure2, g: true }, { n: pure2, g: false }]
+                : [{ n: full, g: false }, { n: pure2, g: false }, { n: full, g: true }, { n: pure2, g: true }];
+            const tryUpd = async (c) => {
+                const r2 = await fetch('/api/extensions/update', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ extensionName: c.n, global: c.g }) });
+                if (r2.status === 404) return null;
+                const j2 = await r2.json().catch(() => ({}));
+                return { ok: r2.ok, j: j2 };
+            };
+            (async () => {
+                let lastErr = '';
+                for (const c of combos2) {
+                    try {
+                        const res = await tryUpd(c);
+                        if (!res) { lastErr = '404'; continue; }
+                        hideBusy();
+                        if (!res.ok) { toastr.error('更新失败 HTTP ' + lastErr); return; }
+                        toastr.success('✅ 扩展已更新，2 秒后刷新页面');
+                        setTimeout(() => location.reload(), 2000);
+                        return;
+                    } catch (e3) { lastErr = String(e3).slice(0, 80); }
+                }
+                hideBusy();
+                toastr.error('更新失败：本插件目录缺少 git 更新元数据——请在扩展管理删除后用 URL 重装一次(' + lastErr + ')');
+            })();
+        }
         const b = ev.target && ev.target.closest ? ev.target.closest('.cs-flt') : null;
         if (!b) return;
         const tgt = b.dataset.target || 'cs_cfg_list';
