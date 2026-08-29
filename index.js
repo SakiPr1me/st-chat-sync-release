@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.16'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.17'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6334,7 +6334,7 @@ ext: {
         m.innerHTML = `<div style="position:relative;width:min(640px,92vw);max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);display:flex;flex-direction:column;background:var(--SmartThemeBlurTintColor,#1b1b1b);border:1px solid var(--SmartThemeBorderColor,#333);border-radius:12px;padding:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.5)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--SmartThemeBorderColor,#333)">
                 <b style="font-size:.95em">${escapeHtml(r.name || file)} <small style="opacity:.6;font-weight:400">（人设预览）</small></b>
-                <button id="__qa_pclose" style="padding:3px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.25);background:rgba(44,44,52,0.85);color:#f0f0f0;cursor:pointer;font-size:.9em">✕ 关闭</button>
+                <button id="__qa_pclose" style="padding:3px 14px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor);background:rgba(255,255,255,0.05);color:var(--SmartThemeBodyColor,#eee);cursor:pointer;font-size:.9em">✕ 关闭</button>
             </div>
             <div id="__qa_pbody" style="flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;white-space:pre-wrap;word-break:break-word;font-size:.88em;line-height:1.7;color:var(--SmartThemeBodyColor,#e1e1e1)">${__fmtPrevText(desc.slice(0, 8000)) || '（该人设暂无描述内容）'}</div>
             <button class="cs-top-fab" id="__qa_top" type="button">↑ 回顶部</button>
@@ -6945,10 +6945,10 @@ function ensurePanel() {
 
 // ===== 面板卡片样式（参照余温工具箱的卡片化折叠块：主题变量 + 圆角 + hover，差异化非搬运）=====
 const CHAT_SYNC_CSS = `
-.cs-card { border:1px solid var(--SmartThemeBorderColor); border-left:3px solid var(--SmartThemeQuoteColor); border-radius:12px; overflow:hidden; background:rgba(128,128,128,0.10); margin-top:10px; }
+.cs-card { border:1px solid var(--SmartThemeBorderColor); border-left:3px solid var(--SmartThemeQuoteColor); border-radius:12px; overflow:hidden; background:rgba(255,255,255,0.03); margin-top:10px; }
 #cs_float_win .cs-card { margin-top:0; border:0; background:transparent; }
 .cs-card.cs-last { margin-bottom:28px; }
-.cs-fold > summary { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:#ececec; background:rgba(44,44,52,0.85); border-bottom:1px solid rgba(255,255,255,0.18); list-style:none; outline:none; }
+.cs-fold > summary { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:var(--SmartThemeBodyColor, inherit); background:rgba(255,255,255,0.03); border-bottom:1px solid var(--SmartThemeBorderColor); list-style:none; outline:none; }
 .cs-fold > summary::-webkit-details-marker { display:none; }
 .cs-fold > summary::after { content:'▸'; transition:transform .18s ease; opacity:.7; font-size:13px; margin-left:auto; line-height:1; }
 .cs-fold[open] > summary::after { transform:rotate(90deg); }
@@ -6964,7 +6964,7 @@ const CHAT_SYNC_CSS = `
 .cs-role-item input { transform:scale(.85); flex:none; }
 .cs-group-title { font-size:.78em; font-weight:600; color:var(--SmartThemeBodyColor,var(--grey_color)); margin:6px 0 3px; }
 .cs-row { display:flex; gap:8px; align-items:center; }
-.cs-btn { padding:3px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.22); background:rgba(44,44,52,0.85); color:#f0f0f0; cursor:pointer; font-size:.85em; transition:filter .15s ease; }
+.cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor, inherit); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 .cs-btn:hover { filter:brightness(1.15); }
 .cs-btn.cs-primary { border-color:var(--SmartThemeQuoteColor); color:var(--SmartThemeQuoteColor); }
 .cs-current { font-size:.9em; color:var(--SmartThemeBodyColor,inherit); }
@@ -6976,7 +6976,7 @@ const CHAT_SYNC_CSS = `
 .cs-btn.cs-btn-local { color:#6fce6f; border-color:rgba(111,206,111,.55); }
 .cs-btn.cs-btn-cloud { color:#6fb7f0; border-color:rgba(111,183,240,.55); }
 .cs-cln-row .cs-cln-size { color:#e8a44c; font-size:.95em; font-weight:700; }
-.cs-cln-row .cs-cln-date { color:#b8b8b8; opacity:.85; } /* 0.12.16 固色防浅色主题黑字 */
+.cs-cln-row .cs-cln-date { color:var(--SmartThemeBodyColor,var(--grey_color)); opacity:.65; }
 .cs-cln-modal { display:flex; width:min(940px,94vw); height:min(640px, calc(100vh - 24px)); height:min(640px, calc(100dvh - 24px)); background:var(--SmartThemeBlurTintColor,#1b1b1b); border:1px solid var(--SmartThemeBorderColor,#333); border-radius:12px; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,.5); }
 @media (max-width: 700px) { .cs-cln-modal { flex-direction:column; height:calc(100vh - 24px); height:calc(100dvh - 24px); } .cs-cln-left { flex:none; max-height:48%; } .cs-cln-right { flex:1; border-left:none; border-top:1px solid var(--SmartThemeBorderColor,#333); } }
 .cs-cln-left { flex:1.5; display:flex; flex-direction:column; overflow:hidden; padding:0; position:relative; }
@@ -6984,7 +6984,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-ptitle { margin-bottom:8px; font-size:.85em; line-height:1.6; }
 .cs-role-avatar { width:30px; height:30px; border-radius:50%; object-fit:cover; flex:none; background:rgba(128,128,128,0.16); border:1px solid var(--SmartThemeBorderColor,#333); }
 .cs-role-avatar.cs-av-ph { display:inline-flex; align-items:center; justify-content:center; font-size:.9em; opacity:.55; }
-.cs-cln-ptext { white-space:pre-wrap; word-break:break-word; font-size:.85em; line-height:1.7; color:#e1e1e1; }
+.cs-cln-ptext { white-space:pre-wrap; word-break:break-word; font-size:.85em; line-height:1.7; color:var(--SmartThemeBodyColor,#e1e1e1); }
 /* 预览正文格式着色: 与聊天页同款主题变量(斜体/引用/下划线) */
 .cs-cln-ptext em.cs-prev-em { color: var(--SmartThemeEmColor, #7f9cf5); font-style: italic; }
 .cs-cln-ptext .cs-prev-q { color: var(--SmartThemeQuoteColor, #f0a35e); }
@@ -7048,7 +7048,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-modal .cs-cln-mrow:hover { background:rgba(128,128,128,0.14); }
 .cs-cln-modal .cs-cln-mrow .cs-cln-fname { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.85em; }
 /* 弹窗挂在 body 下，吃不到 作用域 → 按钮/输入样式单独给（否则白底灰字原生样式） */
-.cs-cln-modal .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.22); background:rgba(44,44,52,0.85); color:#f0f0f0; cursor:pointer; font-size:.85em; transition:filter .15s ease; }
+.cs-cln-modal .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor, inherit); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 .cs-cln-modal .cs-btn:hover:not(:disabled) { filter:brightness(1.25); }
 .cs-cln-modal .cs-btn:disabled { opacity:.4; cursor:not-allowed; }
 .cs-cln-modal .cs-btn.cs-danger-btn { border-color:#a33; color:#ff8787; background:rgba(170,51,51,.2); }
@@ -7058,17 +7058,15 @@ const CHAT_SYNC_CSS = `
 .cs-cln-fbody { flex:1; min-height:0; overflow:auto; padding:12px; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
 .cs-cln-fnum { font-size:.82em; font-weight:700; opacity:.9; white-space:nowrap; }
 /* 0.12.12: 整个面板板块不透明白: 面板/卡/全部文字固色深底浅字, 彻底不依赖主题半透明 */
-#chat_sync_settings, #cs_float_win, #cs_quick_float, .cs-cln-modal { color:#e8e8e8; }
-#chat_sync_settings small, #cs_float_win small, #cs_quick_float small, .cs-cln-modal small { color:#d0d0d0; }
-#chat_sync_settings { background:rgba(24,24,30,0.97); border-radius:12px; padding:8px 10px; margin-top:6px; }
-.cs-card { background:rgba(42,42,50,0.94); }
-.cs-label, .cs-hint, .cs-group-title, .cs-current { color:#d4d4d4; opacity:1; }
-.cs-role-item span { color:#e6e6e6; }
+#chat_sync_settings, #cs_float_win, #cs_quick_float, .cs-cln-modal { color:var(--SmartThemeBodyColor, inherit); }
+#chat_sync_settings small, #cs_float_win small, #cs_quick_float small, .cs-cln-modal small { color:var(--SmartThemeBodyColor, inherit); opacity:.75; }
+#chat_sync_settings { border-radius:12px; padding:8px 10px; margin-top:6px; }
+
 .cs-role-item:hover { background:rgba(128,128,128,0.18); }
 /* 0.12.11: 面板内所有原生控件统一深色(浅色主题下 .text_pole/select/checkbox 原生就是白色, 一并压掉) */
-#chat_sync_settings .text_pole, #cs_float_win .text_pole, #cs_quick_float .text_pole, .cs-cln-modal .text_pole, #chat_sync_settings select, #cs_float_win select, #cs_quick_float select, .cs-cln-modal select, #chat_sync_settings input[type='text'], #cs_float_win input[type='text'], #cs_quick_float input[type='text'], .cs-cln-modal input[type='text'], #chat_sync_settings input[type='password'], #cs_float_win input[type='password'], #cs_quick_float input[type='password'], .cs-cln-modal input[type='password'], #chat_sync_settings textarea, #cs_float_win textarea, #cs_quick_float textarea, .cs-cln-modal textarea { background:rgba(30,30,36,0.90); color:#e8e8e8; border:1px solid rgba(255,255,255,0.22); border-radius:8px; padding:3px 8px; color-scheme:dark; }
+#chat_sync_settings .text_pole, #cs_float_win .text_pole, #cs_quick_float .text_pole, .cs-cln-modal .text_pole, #chat_sync_settings select, #cs_float_win select, #cs_quick_float select, .cs-cln-modal select, #chat_sync_settings input[type='text'], #cs_float_win input[type='text'], #cs_quick_float input[type='text'], .cs-cln-modal input[type='text'], #chat_sync_settings input[type='password'], #cs_float_win input[type='password'], #cs_quick_float input[type='password'], .cs-cln-modal input[type='password'], #chat_sync_settings textarea, #cs_float_win textarea, #cs_quick_float textarea, .cs-cln-modal textarea { background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor, inherit); border:1px solid var(--SmartThemeBorderColor); border-radius:8px; padding:3px 8px; }
 #chat_sync_settings select, #cs_float_win select, #cs_quick_float select, .cs-cln-modal select { color-scheme:dark; }
-#chat_sync_settings select option, #cs_float_win select option, #cs_quick_float select option, .cs-cln-modal select option { background:#1e1e24 !important; color:#e8e8e8 !important; }
+#chat_sync_settings select option, #cs_float_win select option, #cs_quick_float select option, .cs-cln-modal select option { background:var(--SmartThemeBlurTintColor,rgba(0,0,0,0.08)); color:var(--SmartThemeBodyColor, inherit); }
 #chat_sync_settings input[type='checkbox'], #cs_float_win input[type='checkbox'], #cs_quick_float input[type='checkbox'], .cs-cln-modal input[type='checkbox'] { accent-color:var(--SmartThemeQuoteColor,#f0a35e); }
 `;
 function injectSettingsCss() {
@@ -7347,7 +7345,7 @@ function __csEnsureFloatWin() {
     w.innerHTML = `
         <div class="csf-float-head" style="display:flex;align-items:center;gap:6px;cursor:grab;user-select:none">
             <span style="opacity:.6;cursor:grab">⠿</span><b style="font-size:.9em" id="cs_float_win_title">设置</b>
-            <button id="cs_float_win_close" type="button" style="margin-left:auto;padding:0 8px;font-size:.85em;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;background:rgba(44,44,52,0.85);color:#f0f0f0;border-color:rgba(255,255,255,0.25);cursor:pointer">✕</button>
+            <button id="cs_float_win_close" type="button" style="margin-left:auto;padding:0 8px;font-size:.85em;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;background:rgba(255,255,255,0.05);color:var(--SmartThemeBodyColor,#eee);border:1px solid var(--SmartThemeBorderColor);cursor:pointer">✕</button>
         </div>
         <div id="cs_float_win_body" style="margin-top:6px"></div>`;
     document.body.appendChild(w);
