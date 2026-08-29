@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.7'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.8'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7286,14 +7286,94 @@ function csFloatPageEnabled(key) {
     if (Array.isArray(settings.floatPageKeys)) return settings.floatPageKeys.includes(key); // 兼容旧数组存档
     return true;
 }
+// 0.12.8 面板型入口改"独立浮窗"(仿余温openCardFloat): 把原卡 DOM 搬进 fixed 浮窗(绑定跟元素走, 全部交互原样可用), 改完移回原位
+// ——原"滚动到面板内卡片"在面板未开时点不出来(用户反馈"点不出页面来")
+let __csFloatWin = null, __csFloatOrigin = null;
+function __csClampFloatWin(w) {
+    if (!w || !w.isConnected) return;
+    const r = w.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let x = (w.style.left !== '') ? parseInt(w.style.left, 10) : NaN;
+    if (w.style.right !== '' && isNaN(x)) x = vw - r.width - parseInt(w.style.right, 10);
+    if (isNaN(x)) x = r.left;
+    let y = (w.style.top !== '') ? parseInt(w.style.top, 10) : NaN;
+    if (isNaN(y)) y = r.top;
+    x = Math.min(Math.max(x, 4), Math.max(vw - r.width - 4, 4));
+    y = Math.min(Math.max(y, 4), Math.max(vh - r.height - 4, 4));
+    if (x !== r.left || y !== r.top) { w.style.left = x + 'px'; w.style.top = y + 'px'; w.style.right = 'auto'; }
+}
 function __csFloatJumpSection(kw) {
-    const wrap = document.getElementById('cs_content');
-    if (wrap && wrap.style.display === 'none') wrap.style.display = '';
     const details = [...document.querySelectorAll('#chat_sync_settings details.cs-fold')].find((d) => { const sm = d.querySelector('summary'); return sm && sm.textContent.includes(kw); });
     if (!details) return;
+    __csCloseFloatWin(); // 已有打开的先移回
+    __csFloatOrigin = { parent: details.parentNode, next: details.nextSibling };
+    const w = __csEnsureFloatWin();
+    const sm0 = details.querySelector('summary');
+    const title = sm0 ? String(sm0.textContent).replace(/\s+/g, ' ').trim() : kw;
+    w.querySelector('#cs_float_win_title').textContent = title;
+    const body = w.querySelector('#cs_float_win_body');
+    body.innerHTML = '';
+    body.appendChild(details);
+    if (sm0) sm0.style.display = 'none'; // 浮窗头已显示标题
     details.open = true;
-    details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    w.style.display = 'block';
+    setTimeout(() => __csClampFloatWin(w), 30);
 }
+function __csEnsureFloatWin() {
+    if (__csFloatWin && document.body.contains(__csFloatWin)) return __csFloatWin;
+    const w = document.createElement('div');
+    w.id = 'cs_float_win';
+    w.style.cssText = 'position:fixed;top:60px;right:14px;z-index:9600;width:min(560px,94vw);max-height:84vh;overflow-y:auto;display:none;' +
+        'border:1px solid var(--SmartThemeBorderColor);border-left:3px solid var(--SmartThemeQuoteColor);border-radius:12px;' +
+        'background:var(--SmartThemeBlurTintColor,rgb(23 23 23));color:var(--SmartThemeBodyColor);' +
+        'box-shadow:0 8px 30px rgba(0,0,0,.55);padding:10px 12px;user-select:none';
+    w.innerHTML = `
+        <div class="csf-float-head" style="display:flex;align-items:center;gap:6px;cursor:grab;user-select:none">
+            <span style="opacity:.6;cursor:grab">⠿</span><b style="font-size:.9em" id="cs_float_win_title">设置</b>
+            <button id="cs_float_win_close" type="button" style="margin-left:auto;padding:0 8px;font-size:.85em;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;background:rgba(255,255,255,.06);color:var(--SmartThemeBodyColor,#eee);cursor:pointer">✕</button>
+        </div>
+        <div id="cs_float_win_body" style="margin-top:6px"></div>`;
+    document.body.appendChild(w);
+    const $head = $('.csf-float-head', w);
+    let dragging = false, dx, dy, startX, startY;
+    $head.on('mousedown touchstart', function (e) {
+        if (e.target && e.target.closest && e.target.closest('button')) return;
+        dragging = false;
+        const ev = e.touches ? e.touches[0] : e;
+        startX = ev.clientX; startY = ev.clientY;
+        const pos = $(w).position();
+        dx = startX - pos.left; dy = startY - pos.top;
+        e.preventDefault();
+    });
+    $(document).on('mousemove.csfw touchmove.csfw', function (e) {
+        if (dx === undefined || !w.isConnected) return;
+        const ev = e.touches ? e.touches[0] : e;
+        if (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3) dragging = true;
+        if (dragging) { e.preventDefault(); $(w).css({ left: (ev.clientX - dx) + 'px', top: (ev.clientY - dy) + 'px', right: 'auto' }); }
+    });
+    $(document).on('mouseup.csfw touchend.csfw', function () { dx = undefined; setTimeout(() => __csClampFloatWin(w), 30); });
+    $(window).on('resize.csfw', function () { if (w.style.display === 'block') __csClampFloatWin(w); });
+    document.getElementById('cs_float_win_close').addEventListener('click', () => __csCloseFloatWin());
+    __csFloatWin = w;
+    return w;
+}
+function __csCloseFloatWin() {
+    const w = __csFloatWin;
+    if (w && document.body.contains(w)) {
+        const body = w.querySelector('#cs_float_win_body');
+        const card = body ? body.firstElementChild : null;
+        if (card && __csFloatOrigin && __csFloatOrigin.parent) {
+            const sm = card.querySelector('summary');
+            if (sm) sm.style.display = '';
+            if (__csFloatOrigin.next && __csFloatOrigin.next.parentNode === __csFloatOrigin.parent) __csFloatOrigin.parent.insertBefore(card, __csFloatOrigin.next);
+            else __csFloatOrigin.parent.appendChild(card);
+        }
+        if (body) body.innerHTML = '';
+        w.style.display = 'none';
+    }
+    __csFloatOrigin = null;
+}
+window.__csCloseFloatWin = __csCloseFloatWin;
 function __csRunInstant(kind) { // 复用官方按钮完整进度/冲突/提示链路
     const btn = document.getElementById(kind === 'upload' ? 'cs_push_chat' : 'cs_pull_chat');
     if (btn) { btn.click(); return; }
