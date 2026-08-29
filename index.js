@@ -4101,6 +4101,7 @@ async function __csDoSelfUpdate(btn, remoteVer) {
         if (!resp.ok) {
             const t = (await resp.text()).slice(0, 100);
             if (resp.status === 400 && t.includes('metadata')) throw new Error('本插件目录缺少 git 更新元数据(复制安装导致)——请在扩展管理删除后用 URL 重装一次, 之后自动更新恢复正常');
+            if (resp.status === 500) throw new Error('酒馆服务端 git 操作失败(可能是网络不通或本地文件被占用)——请检查网络后重试, 或到扩展管理手动更新');
             throw new Error('HTTP ' + resp.status + ': ' + t);
         }
         const j = await resp.json().catch(() => ({}));
