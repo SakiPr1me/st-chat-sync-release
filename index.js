@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.9'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1922,6 +1922,7 @@ async function pushSelectedConnPresets(items) { // items: [{apiId, name}]
         const ok = [], skipped = [], skippedManual = [], fail = []; const failReasons = [];
         showBusy(0, items.length, '上传预设');
         for (let i = 0; i < items.length; i++) {
+        showBusy(i + 1, items.length, `上传预设 ${items[i] && items[i].name || '未命名'}…`);
             const { apiId, name } = items[i];
             showBusy(i + 1, items.length, `上传预设 ${name}`);
             try {
@@ -2001,6 +2002,7 @@ async function importSelectedConnPresets(items) { // items: [{apiId, name}]
         const batchMode = { applyAll: false, decision: null };
         showBusy(0, items.length, '导入预设');
         for (let i = 0; i < items.length; i++) {
+        showBusy(i + 1, items.length, `导入预设 ${items[i] && items[i].name || '未命名'}…`);
             const { apiId, name } = items[i];
             showBusy(i + 1, items.length, `导入预设 ${name}`);
             try {
@@ -2114,6 +2116,7 @@ async function pushSelectedThemes(names) {
         const local = await _themeLocalList();
         showBusy(0, names.length, '上传主题');
         for (let i = 0; i < names.length; i++) {
+        showBusy(i + 1, names.length, `上传主题 ${names[i]}…`);
             const name = names[i];
             showBusy(i + 1, names.length, `上传主题 ${name}`);
             try {
@@ -2222,6 +2225,7 @@ async function importSelectedThemes(names) {
         const batchMode = { applyAll: false, decision: null };
         showBusy(0, names.length, '导入主题');
         for (let i = 0; i < names.length; i++) {
+        showBusy(i + 1, names.length, `导入主题 ${names[i]}…`);
             const name = names[i];
             showBusy(i + 1, names.length, `导入主题 ${name}`);
             try {
@@ -2285,6 +2289,7 @@ async function pushSelectedRegex(names) {
         const local = await _regexLocalList();
         showBusy(0, names.length, '上传全局正则');
         for (let i = 0; i < names.length; i++) {
+        showBusy(i + 1, names.length, `上传正则 ${names[i]}…`);
             const name = names[i];
             showBusy(i + 1, names.length, `上传正则 ${name}`);
             try {
@@ -2315,6 +2320,7 @@ async function importSelectedRegex(names) {
         const batchMode = { applyAll: false, decision: null };
         showBusy(0, names.length, '导入全局正则');
         for (let i = 0; i < names.length; i++) {
+        showBusy(i + 1, names.length, `导入正则 ${names[i]}…`);
             const name = names[i];
             showBusy(i + 1, names.length, `导入正则 ${name}`);
             try {
@@ -4503,9 +4509,9 @@ function wirePanelEvents() {
                     }
                 };
                 await Promise.all(Array.from({ length: 2 }, worker2));
+                hideBusy();
                 if (window.__applyCfgFilter) window.__applyCfgFilter();
-                console.warn('[csdiff] done');
-            } catch { }
+            } catch { hideBusy(); }
         })();
         __applyRowFilter('cs_roles_list', window.__rowFilter_cs_roles_list || '全部');
     };
@@ -6035,9 +6041,8 @@ ext: {
             const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
             hideBusy();
             if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 上传出错：没有返回结果'; st2.style.color = '#e66'; } return; }
+            try { await window.__renderCfgList(window.__cfgMode); } catch { } // 先刷新(刷新会清状态行), 再写完成文案
             if (st2) { st2.textContent = `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}`; st2.style.color = r.fail ? '#e66' : ''; }
-            try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新视图
-            try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新
         } catch (e) {
             hideBusy();
             if (st2) { st2.textContent = '❌ 上传异常：' + ((e && e.message) || e); st2.style.color = '#e66'; }
@@ -6059,8 +6064,8 @@ ext: {
             const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
             hideBusy();
             if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 导入出错：没有返回结果'; st2.style.color = '#e66'; } return; }
+            try { await window.__renderCfgList(window.__cfgMode); } catch { }
             if (st2) { st2.textContent = `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}`; st2.style.color = r.fail ? '#e66' : ''; }
-            try { window.__renderCfgList(window.__cfgMode); } catch { }
         } catch (e) {
             hideBusy();
             if (st2) { st2.textContent = '❌ 导入异常：' + ((e && e.message) || e); st2.style.color = '#e66'; }
@@ -6098,8 +6103,8 @@ ext: {
         if (!ok) { if (st2) st2.textContent = '已取消'; return; }
         if (st2) st2.textContent = '删除中…';
         const r = await window.__cfgDrivers[window.__cfgTab].del(sel, mode);
+        try { await window.__renderCfgList(window.__cfgMode); } catch { } // 先刷新
         if (st2) st2.textContent = `删除完成：成功 ${r ? r.ok : 0} / 共 ${sel.length}${r && r.fail ? `，失败 ${r.fail}` : ''}`;
-        try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新视图
         // 精确失效(不整清缓存): 云端删→目录剔除被删文件; 本地删→只清差异缓存
         const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas' };
         try {
