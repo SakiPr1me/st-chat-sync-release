@@ -4091,12 +4091,12 @@ async function __csDoSelfUpdate(btn, remoteVer) {
         let resp = await fetch('/api/extensions/update', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ extensionName: 'third-party/st-chat-sync', global: false }),
+            body: JSON.stringify({ extensionName: 'st-chat-sync', global: false }),
         });
         if (resp.status === 404) resp = await fetch('/api/extensions/update', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ extensionName: 'third-party/st-chat-sync', global: true }),
+            body: JSON.stringify({ extensionName: 'st-chat-sync', global: true }),
         });
         if (!resp.ok) {
             const t = (await resp.text()).slice(0, 100);
