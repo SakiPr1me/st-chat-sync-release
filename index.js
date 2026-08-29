@@ -3,13 +3,23 @@
 // 云端：Gitee Contents API（浏览器直连，CORS 已实测放行）
 
 import { extension_settings, getContext } from '../../../extensions.js';
-import { eventSource, event_types, saveSettingsDebounced, saveSettings, saveCharacterDebounced, importCharacterChat, displayPastChats, openCharacterChat, getRequestHeaders, getCharacters, select_selected_character, setCharacterId, reloadCurrentChat, doNewChat, deleteCharacter, chat_metadata, saveMetadata, redisplayChat, scrollChatToBottom, deleteCharacterChatByName, settings as stSettings } from '../../../../script.js';
+import { eventSource, event_types, saveSettingsDebounced, saveSettings, saveCharacterDebounced, displayPastChats, openCharacterChat, getRequestHeaders, getCharacters, select_selected_character, setCharacterId, reloadCurrentChat, doNewChat, deleteCharacter, chat_metadata, saveMetadata, scrollChatToBottom, deleteCharacterChatByName, settings as stSettings } from '../../../../script.js';
+// 0.12.23 旧版酒馆兼容(1.13/1.14看不到插件的真凶): importCharacterChat/redisplayChat 在1.14未导出/不存在——
+// 顶层命名导入会让模块链接失败、整个插件静默消失。改命名空间导入+运行时探测降级：旧版能加载，功能优雅降级
+import * as __stCompat from '../../../../script.js';
+const importCharacterChat = (typeof __stCompat.importCharacterChat === 'function') ? __stCompat.importCharacterChat : (async () => { console.warn('[chat-sync] 当前酒馆版本未导出 importCharacterChat，聊天导入不可用（需 ≥1.15）'); return {}; });
+const redisplayChat = (typeof __stCompat.redisplayChat === 'function') ? __stCompat.redisplayChat : (() => { console.warn('[chat-sync] 当前酒馆版本未导出 redisplayChat，重绘降级（需 ≥1.15）'); });
 import { Popup } from '../../../../scripts/popup.js';
 import { importGroupChat } from '../../../group-chats.js';
 import { loadWorldInfo, importWorldInfo, world_names, deleteWorldInfo } from '../../../world-info.js';
 import { power_user } from '../../../power-user.js'; // 主题删除走官方按钮时需要(官方 deleteTheme 删的是 power_user.theme)
 // Api分项密钥随行(0.12.0): canViewSecrets探测allowKeysExposure / writeSecret写入(返回新id,内部已刷新state) / readSecretState刷新 / secret_state活绑定(含掩码或明文)
-import { canViewSecrets as __secretCanView, writeSecret as __secretWrite, readSecretState as __secretReadState, secret_state as __secretState } from '../../../secrets.js';
+// 0.12.23 兼容: canViewSecrets 在 ≤1.15 不存在——命名空间导入+守护别名, 旧版不炸, 密钥功能降级(不随行, 导入留引用)
+import * as __secCompat from '../../../secrets.js';
+const __secretCanView = (typeof __secCompat.canViewSecrets === 'function') ? __secCompat.canViewSecrets : async () => null;
+const __secretWrite = (typeof __secCompat.writeSecret === 'function') ? __secCompat.writeSecret : async () => null;
+const __secretReadState = (typeof __secCompat.readSecretState === 'function') ? __secCompat.readSecretState : async () => {};
+const __secretState = (typeof __secCompat.secret_state !== 'undefined') ? __secCompat.secret_state : {};
 
 // 加载探针：供 headless 验证/调试确认插件确实执行
 window.__stChatSyncLoaded = true;
@@ -23,7 +33,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.22'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.23'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
