@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1433,14 +1433,23 @@ function showBusy(page, total, msg) {
     if (!__csBusyEl) {
         __csBusyEl = document.createElement('div');
         __csBusyEl.id = 'cs_busy_bar';
-        // 底部输入框之上(顶部会让开官方功能条; 动态取输入区高度)
-        let bottomPx = 120;
-        try { const sf = document.querySelector('#send_form, .send_form, .send-input-header'); if (sf) { const r = sf.getBoundingClientRect(); bottomPx = Math.max(4, Math.round(window.innerHeight - r.top)); } } catch { }
-        __csBusyEl.style.cssText = `position:fixed;left:0;right:0;bottom:${bottomPx}px;z-index:99999;` +
-            'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
-            'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
-            'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
-        document.body.appendChild(__csBusyEl);
+        // 贴「扩展设置面板」底部(sticky, 随面板滚动, 不遮输入框/其它插件入口); 面板缺失退回输入框上方
+        const host = document.getElementById('extensions_settings');
+        if (host) {
+            __csBusyEl.style.cssText = 'position:sticky;bottom:0;left:0;right:0;z-index:99999;display:block;' +
+                'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
+                'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
+                'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
+            host.appendChild(__csBusyEl);
+        } else {
+            let bottomPx = 120;
+            try { const sf = document.querySelector('#send_form, .send_form, .send-input-header'); if (sf) { const r2 = sf.getBoundingClientRect(); bottomPx = Math.max(4, Math.round(window.innerHeight - r2.top)); } } catch { }
+            __csBusyEl.style.cssText = `position:fixed;left:0;right:0;bottom:${bottomPx}px;z-index:99999;` +
+                'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
+                'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
+                'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
+            document.body.appendChild(__csBusyEl);
+        }
     }
     const label = msg || '同步';
     __csBusyEl.textContent = (total && total > 0)
@@ -3401,7 +3410,12 @@ async function __fillDiffBadges() {
         try {
             const cb = row.querySelector('input[type="checkbox"]');
             if (!cb) return;
-            const r = dm.get(__valueOf(cb.value));
+            const key0 = __valueOf(cb.value);
+            let r = dm.get(key0);
+            if (r === undefined) { // 大小写兜底(扩展目录改名/大小写漂移时仍能对上)
+                const kl = String(key0).toLowerCase();
+                for (const [k2, v2] of dm) if (String(k2).toLowerCase() === kl) { r = v2; break; }
+            }
             const sp = row.querySelector('.cs-where-diff');
             if (!sp) return;
             if (!r || r === 'same') { sp.textContent = ''; sp.title = ''; return; } // 一致/无云端: 不占位
@@ -3948,7 +3962,10 @@ function __refreshCurRepoLine() {
     const el = document.getElementById('cs_cur_repo');
     if (!el) return;
     const curRepo = settings.owner && settings.repo ? `${settings.owner}/${settings.repo}` : '（未配置）';
-    el.innerHTML = `<b>🌐 当前云端仓库：</b>${escapeHtml(curRepo)}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
+    const platName = String(settings.server || '').includes('github') ? 'GitHub' : (String(settings.server || '').includes('gitlab.com') ? 'GitLab' : 'Gitee');
+    let lastConn = '—';
+    try { if (settings.lastConnectAt) { const d = new Date(settings.lastConnectAt); lastConn = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } } catch { }
+    el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
     __fillCloudUsage();
     try {
         if (typeof window.__csCheckUpdate === 'function') window.__csCheckUpdate();
@@ -4174,6 +4191,12 @@ window.__csManualCheck = async function (btn) {
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_push_sel" type="button" class="cs-btn">📤 上传选中角色</button>
                             <button id="${id}_pull_sel" type="button" class="cs-btn">📥 导入选中角色</button>
+<span style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
+                            </span>
                             <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn" title="删除选中的文件">🗑 删除选中文件</button>
                             <span id="${id}_delete_target" class="cs-hint" style="margin-left:6px"></span>
                         </div>
@@ -4198,6 +4221,12 @@ window.__csManualCheck = async function (btn) {
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_wb_push" type="button" class="cs-btn">📤 上传选中世界书</button>
                             <button id="${id}_wb_pull" type="button" class="cs-btn">📥 导入选中世界书</button>
+<span style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
+                            </span>
                             <button id="${id}_wb_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的全局世界书(本地视图删本地/云端视图删云端)">🗑 删除选中世界书</button>
                         </div>
                         <p id="${id}_wb_status" class="cs-hint" style="margin-top:4px"></p>
@@ -4255,12 +4284,12 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_cfg_pull" type="button" class="cs-btn">📥 导入选中</button>
                             <button id="${id}_cfg_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的配置项(本地视图删本地/云端视图删云端)">🗑 删除选中</button>
                             <span id="${id}_cfg_filter" style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
-                                <button type="button" class="cs-btn cs-flt" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
-                                <button type="button" class="cs-btn cs-flt" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
-                                <button type="button" class="cs-btn cs-flt" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
-                                <button type="button" class="cs-btn cs-flt" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
-                                <button type="button" class="cs-btn cs-flt" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
-                                <button type="button" class="cs-btn cs-flt" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
+                                <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
                             </span>
                         </div>
                         <div class="cs-row" style="margin-top:2px;flex-wrap:wrap">
@@ -4365,11 +4394,12 @@ function wirePanelEvents() {
                 return `<label class="cs-role-item"><input type="checkbox" value="${escapeHtml(n)}" name="cs_role_sel" ${prevChecked.has(n) ? 'checked' : ''}><img class="cs-role-avatar" loading="lazy" src="${escapeHtml(avSrcFor(n))}" title="${escapeHtml(n)}" onerror="if(!this.dataset.f){this.dataset.f=1;this.src=this.src.replace('/master/','/main/');}else{this.style.visibility='hidden';}"><b class="cs-cln-where cs-cln-where-${whereCls}">${both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端')}</b><span>${escapeHtml(n)}</span></label>`;
             }).join('')
             : `<p class="cs-hint">（无${mode === 'cloud' ? '云端' : '本地'}角色）</p>`;
+        __applyRowFilter('cs_roles_list', window.__rowFilter_cs_roles_list || '全部');
     };
     // 部分选择按钮事件
     $('cs_refresh_local')?.addEventListener('click', () => window.__renderRoleMultiList('local'));
     $('cs_refresh_cloud2')?.addEventListener('click', () => window.__renderRoleMultiList('cloud'));
-    $('cs_roles_selall')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_role_sel"]').forEach((c) => { c.checked = true; }));
+    $('cs_roles_selall')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_role_sel"]').forEach((c) => { if (c.closest('label') && c.closest('label').style.display === 'none') return; c.checked = true; }));
     $('cs_roles_clr')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_role_sel"]').forEach((c) => { c.checked = false; }));
     $('cs_push_sel')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
@@ -4479,7 +4509,7 @@ function wirePanelEvents() {
             out.textContent += rr.ok ? `｜仓库 ${owner}/${repo} 可访问` : '｜⚠️ 仓库不存在或没权限，请先建私有仓库';
             if (rr.ok && isGl) { try { const pj = await rr.json(); settings.gitlabBranch = pj.default_branch || 'main'; saveSettingsDebounced(); } catch { } }
             if (rr.ok) {
-                settings.owner = owner; settings.repo = repo; settings.token = token; saveSettingsDebounced(); __refreshCurRepoLine();
+                settings.owner = owner; settings.repo = repo; settings.token = token; settings.lastConnectAt = Date.now(); saveSettingsDebounced(); __refreshCurRepoLine();
                 // 目录盘点: 与"云端角色/云端预设/云端正则/云端人设"按钮用同一套读取方法, 直证各列表链路
                 const parts = ['角色(sync)', '预设(connections/openai)', '主题(themes)', '全局正则(regex)', '人设(personas)'];
                 const dirs = ['sync', 'config-sync/connections/openai', 'config-sync/themes', 'config-sync/regex', 'config-sync/user/personas'];
@@ -5629,7 +5659,7 @@ ext: {
         const whereSets = { localSet: new Set(), cloudSet: new Set() };
         try {
             if (tab !== 'user') {
-                const _nm = (v) => __stripApiId(String(v).replace(/^third-party\//, ''));
+                const _nm = (v) => __stripApiId(String(v).replace(/^third-party\//, '')).toLowerCase();
                 let lc = null, cc = null;
                 try { lc = await drv.listLocal(); } catch { }
                 try { cc = await drv.listCloud(); } catch { }
@@ -5647,7 +5677,7 @@ ext: {
         // 存在性徽章: 本地视图=双端/仅本地; 云端视图=(用户方案)【仅预设 conn】不显示 双端/仅云端 字样、双端项显示框内差异;
         //   主题/正则的云端视图照常显示 双端/仅云端 徽章(差异在框内), 与本地视图一致。
         // 统一名规范化(集合与行值都走同一规则, 否则第三分项带 third-party/ 前缀永不匹配)
-        const _nm2 = (v) => __stripApiId(String(v).replace(/^third-party\//, ''));
+        const _nm2 = (v) => __stripApiId(String(v).replace(/^third-party\//, '')).toLowerCase();
         const __whereOf = (n) => {
             if (tab === 'user') return '';
             const nn = _nm2(n);
@@ -5785,21 +5815,23 @@ ext: {
     });
     // 筛选: 按行内徽章文本过滤(与显示一致, 不重算); 差异徽章异步填充后需重放
     window.__cfgFilter = '全部';
-    function __applyCfgFilter() {
+    function __applyRowFilter(targetId, kind) {
         try {
-            const kind = window.__cfgFilter || '全部';
-            const rows = [...document.querySelectorAll('#cs_cfg_list label.cs-role-item')];
+            const host = document.getElementById(targetId);
+            if (!host) return;
+            const rows = [...host.querySelectorAll('label.cs-role-item')];
             for (const r of rows) {
                 if (kind === '全部') { r.style.display = ''; continue; }
                 const wEl = r.querySelector('.cs-cln-where');
                 const dEl = r.querySelector('.cs-where-diff');
-                const w = wEl ? wEl.childNodes[0] && wEl.textContent.trim().split('·')[0] : '';
+                const w = wEl ? wEl.textContent.trim().split('·')[0] : '';
                 const d = dEl ? dEl.textContent.trim() : '';
                 const hit = (kind === '双端' && w === '双端') || (kind === '仅本地' && w === '仅本地') || (kind === '仅云端' && w === '仅云端') || (kind === '本地新' && d === '本地新') || (kind === '云端新' && d === '云端新');
                 r.style.display = hit ? '' : 'none';
             }
         } catch { }
     }
+    function __applyCfgFilter() { __applyRowFilter('cs_cfg_list', window.__cfgFilter || '全部'); }
     window.__applyCfgFilter = __applyCfgFilter;
 // 上传诊断: URL缺失原因(供源头设备定位为何新设备无法重装)
     function urlNotesTxt(r2) {
@@ -5847,9 +5879,12 @@ ext: {
     document.addEventListener('click', (ev) => {
         const b = ev.target && ev.target.closest ? ev.target.closest('.cs-flt') : null;
         if (!b) return;
-        window.__cfgFilter = b.dataset.flt || '全部';
-        document.querySelectorAll('.cs-flt').forEach((x) => { x.style.opacity = (x.dataset.flt === window.__cfgFilter) ? '1' : '.55'; x.style.fontWeight = (x.dataset.flt === window.__cfgFilter) ? '700' : '400'; });
-        __applyCfgFilter();
+        const tgt = b.dataset.target || 'cs_cfg_list';
+        const grp = b.closest('span') || b.parentElement;
+        if (grp) grp.querySelectorAll('.cs-flt').forEach((x) => { const on = x.dataset.flt === b.dataset.flt; x.style.opacity = on ? '1' : '.55'; x.style.fontWeight = on ? '700' : '400'; });
+        if (tgt === 'cs_cfg_list') window.__cfgFilter = b.dataset.flt || '全部';
+        window['__rowFilter_' + tgt] = b.dataset.flt || '全部';
+        __applyRowFilter(tgt, b.dataset.flt || '全部');
     });
     // 启动自动更新勾选: 元素由 __refreshCurRepoLine 动态创建(晚于直接绑定) → 用 document 委托, 永不失绑
     document.addEventListener('change', (e) => {
@@ -5984,6 +6019,7 @@ ext: {
                 return `<label class="cs-role-item" data-wb="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_wb_sel" ${prevChecked.has(n) ? 'checked' : ''}>${whereB}<span>${escapeHtml(n)}</span></label>`;
             }).join('')
             : `<p class="cs-hint">（无${mode === 'cloud' ? '云端' : '本地全局'}世界书）</p>`;
+        __applyRowFilter('cs_wb_list', window.__rowFilter_cs_wb_list || '全部');
         // 差异徽章: 目录sha一次拿全 vs 本地内容指纹
         (async () => {
             try {
@@ -6009,7 +6045,7 @@ ext: {
     };
     $('cs_wb_local')?.addEventListener('click', () => window.__renderWorldbookList('local'));
     $('cs_wb_cloud')?.addEventListener('click', () => window.__renderWorldbookList('cloud'));
-    $('cs_wb_selall')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_wb_sel"]').forEach((c) => { c.checked = true; }));
+    $('cs_wb_selall')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_wb_sel"]').forEach((c) => { if (c.closest('label') && c.closest('label').style.display === 'none') return; c.checked = true; }));
     $('cs_wb_clr')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_wb_sel"]').forEach((c) => { c.checked = false; }));
     // 世界书列表 拖拽划选（与角色列表同款实现，含<4px单击/≥4px拖拽防翻、one-shot拦截防双击双翻）
     (function bindWbDragSelect() {
@@ -6516,11 +6552,18 @@ async function registerSlashCommand() {
 async function autoConnectIfConfigured() {
     if (!settings.owner || !settings.repo || !settings.token) return;
     try {
-        const r = await fetch(`https://gitee.com/api/v5/user?access_token=${encodeURIComponent(settings.token)}`);
+        const base = (settings.server || 'https://gitee.com/api/v5').replace(/\/$/, '');
+        const isGh = base.includes('github'), isGl = base.includes('gitlab.com');
+        const url = `${base}/user${isGh ? '' : (isGl ? '?private_token=' : '?access_token=') + encodeURIComponent(settings.token)}`;
+        const headers = isGl ? { 'PRIVATE-TOKEN': settings.token } : (isGh ? { 'Authorization': 'Bearer ' + settings.token, 'Accept': 'application/vnd.github+json' } : { 'Authorization': 'token ' + settings.token });
+        const r = await fetch(url, { headers, cache: 'no-store' });
         if (!r.ok) return;
         const u = await r.json();
+        settings.lastConnectAt = Date.now();
+        saveSettingsDebounced();
+        __refreshCurRepoLine();
         const st = document.getElementById('cs_testresult');
-        if (st) st.textContent = `✅ 已自动连接：${u.login}`;
+        if (st) st.textContent = `✅ 已自动连接：${u.login || u.username}`;
     } catch { /* 静默：不打扰，用户可点连接测试 */ }
 }
 
