@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.7'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.8'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1434,21 +1434,12 @@ function showBusy(page, total, msg) {
     if (!__csBusyEl) {
         __csBusyEl = document.createElement('div');
         __csBusyEl.id = 'cs_busy_bar';
-        // 扩展面板内容最末尾(面板边界之上, 普通文档流, 不盖输入框); 面板缺失退回视口大底部
-        const host = document.getElementById('extensions_settings');
-        if (host) {
-            __csBusyEl.style.cssText = 'position:static;display:block;margin:6px 0 0;' +
-                'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
-                'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
-                'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;border-radius:6px;';
-            host.appendChild(__csBusyEl);
-        } else {
-            __csBusyEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;' +
-                'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
-                'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
-                'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
-            document.body.appendChild(__csBusyEl);
-        }
+        // 半透明悬浮小卡(右上角, toastr 风格, 不占长条不遮输入框)
+        __csBusyEl.style.cssText = 'position:fixed;top:14px;right:14px;z-index:99999;max-width:320px;' +
+            'background:rgba(20,20,24,.82);color:#eee;padding:8px 14px;font-weight:600;font-size:13px;' +
+            'text-align:left;border-radius:10px;border:1px solid rgba(255,255,255,.15);' +
+            'box-shadow:0 4px 16px rgba(0,0,0,.5);backdrop-filter:blur(6px);pointer-events:none;';
+        document.body.appendChild(__csBusyEl);
     }
     const label = msg || '同步';
     __csBusyEl.textContent = (total && total > 0)
@@ -4423,12 +4414,12 @@ function wirePanelEvents() {
     $('cs_roles_clr')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_role_sel"]').forEach((c) => { c.checked = false; }));
     $('cs_push_sel')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
-        try { const r = await pushSelectedCharacters(sel); if (r && typeof r.ok === 'number') toastr.info(`上传角色完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}`); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
+        try { const r = await pushSelectedCharacters(sel); if (r && typeof r.ok === 'number') toastr.info(`上传角色完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}（${csShortList((r.failReasons || []).map(x => x.name + ':' + x.reason).slice(0, 3))}）` : ''}`); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
         catch (e) { toastr.error('上传选中角色失败：' + e.message); }
     });
     $('cs_pull_sel')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
-        try { const r = await importSelectedCharacters(sel); if (r && typeof r.ok === 'number') toastr.info(`导入角色完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}`); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
+        try { const r = await importSelectedCharacters(sel); if (r && typeof r.ok === 'number') toastr.info(`导入角色完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}（${csShortList((r.failReasons || []).map(x => x.name + ':' + x.reason).slice(0, 3))}）` : ''}`); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
         catch (e) { toastr.error('导入选中角色失败：' + e.message); }
     });
     // 拖拽划选：按住左键拖动，经过的 checkbox 切换（首次经过=勾选；再次经过同一项=取消）。同一项一次拖动只toggle一次。
@@ -5342,7 +5333,7 @@ ext: {
                 for (const full of items) {
                     const sname = String(full).split('/').pop();
                     const meta = (window.__extMeta && window.__extMeta[full]) || {};
-                    man[sname] = { url: meta.url || '', branch: meta.branch || '', commit: meta.commit || '', config: !!__extSettingsKey(sname), dn: (window.__extDisplayBy && window.__extDisplayBy[sname]) || sname, enabled: __extEnabled(full) };
+                    man[sname] = { url: meta.url || '', branch: meta.branch || '', commit: meta.commit || '', config: !!__extSettingsKey(sname), dn: (window.__extDisplayBy && window.__extDisplayBy[sname]) || sname, enabled: __extEnabled(full), type: (window.__extType && window.__extType[full]) || 'local' };
                 }
                 await Gitee.putText(EXT_MANIFEST_PATH, JSON.stringify(man, null, 2), (await Gitee.getText(EXT_MANIFEST_PATH))?.sha, 'ext manifest');
 // url 缺失时附加原因(上传诊断: 让源头一眼看到为什么没记录到仓库地址)
@@ -5372,7 +5363,7 @@ ext: {
                             if (entry.url) {
                                 rr = await fetch('/api/extensions/install', {
                                     method: 'POST', headers: getRequestHeaders(),
-                                    body: JSON.stringify({ url: entry.url, global: true, branch: entry.branch || '' }),
+                                    body: JSON.stringify({ url: entry.url, global: entry.type !== 'local', branch: entry.branch || '' }), // 按云端记录的安装类型装回(全局→全局/用户→用户, 不造成双份)
                                 });
                             }
                             if (!entry.url || !rr.ok) {
