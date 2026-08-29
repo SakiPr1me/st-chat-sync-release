@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.21'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.22'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4370,6 +4370,7 @@ window.__csManualCheck = async function (btn) {
                         <div id="${id}_cln_listbox" class="cs-roles cs-sellect" style="max-height:230px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:4px;padding:4px;margin-top:4px"><p class="cs-hint">（先选角色，列表自动出现）</p></div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_cln_del" type="button" class="cs-btn cs-danger-btn" title="删除勾选的聊天：本地+云端同名一起删">🗑 删除选中（本地+云端同名同删）</button>
+                            <input type="text" id="cs_search_cln" class="text_pole" placeholder="🔍搜索…" style="width:150px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cln_listbox" title="按聊天名快速过滤">
                         </div>
                         <p id="${id}_cln_status" class="cs-hint" style="margin-top:4px"></p>
                     </div>
@@ -4955,6 +4956,7 @@ function wirePanelEvents() {
         if (st) st.textContent = `${window.__clnView === 'local' ? '本地' : '云端'}视图：${shown.length} 条（该角色总共 ${rows.length} 条：双端 ${rows.filter(r=>r.where==='both').length} / 仅本地 ${rows.filter(r=>r.where==='local').length} / 仅云端 ${rows.filter(r=>r.where==='cloud').length}）`;
         box.innerHTML = shown.length ? shown.map(__clnRowHtml).join('')
             : `<p class="cs-hint">（${window.__clnView === 'local' ? '本地' : '云端'}没有该角色的聊天记录）</p>`;
+        try { __applyRowFilter('cs_cln_listbox', '全部'); } catch { } // 0.12.22 渲染后再套搜索关键词
     }
     // 角色切换 → 自动列出
     $('cs_cln_char')?.addEventListener('change', async () => { await __renderCleanerList(); });
