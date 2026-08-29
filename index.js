@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1453,6 +1453,10 @@ function showBusy(page, total, msg) {
 }
 function hideBusy() {
     if (__csBusyEl) { __csBusyEl.remove(); __csBusyEl = null; }
+    try {
+        const s2 = document.getElementById('cs_cfg2_status');
+        if (s2 && s2.textContent.startsWith('🔄 ')) { s2.textContent = ''; s2.style.color = ''; }
+    } catch { }
 }
 
 // ============ 弹窗确认（兼容 ST/TT） ============
@@ -2839,8 +2843,11 @@ function resolveUploadConflict(localMsgs, cloudMsgs, fileName, batchMode = null)
     return (async () => {
         const ALL_OVER = 3101, ALL_SAVE = 3102;   // 应用于本次全部
         const isDiverged = diff.relation === 'diverged';
+        const sameLen = diff.localTail.length === diff.cloudTail.length;
         const desc = isDiverged
-            ? `本地和云端都各自多了一些楼层（公共 ${diff.common} 层之后，本地多 ${diff.localTail.length} 层，云端多 ${diff.cloudTail.length} 层）`
+            ? (sameLen
+                ? `本地和云端的最后 ${diff.localTail.length} 层内容不一样（很可能是同一层被修改成了不同内容）`
+                : `本地和云端产生分叉（公共 ${diff.common} 层之后，本地多 ${diff.localTail.length} 层，云端多 ${diff.cloudTail.length} 层）`)
             : `本地比云端多 ${diff.localTail.length} 层新内容`;
         const baseMsg = `聊天「${escapeHtml(fileName)}」：${desc}。<br>你想怎么处理它？`;
         const choice = await Popup.show.confirm(
@@ -4317,6 +4324,7 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_cfg_push" type="button" class="cs-btn">📤 上传选中</button>
                             <button id="${id}_cfg_pull" type="button" class="cs-btn">📥 导入选中</button>
                             <button id="${id}_cfg_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的配置项(本地视图删本地/云端视图删云端)">🗑 删除选中</button>
+                            <button id="${id}_cfg_updall" type="button" class="cs-btn" style="display:none" title="按顺序更新选中的拓展(仅本地视图, 多个可连点, 最后刷新页面一次生效)">⬆ 更新选中</button>
                             <span id="${id}_cfg_filter" style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
@@ -5860,7 +5868,7 @@ ext: {
             if (drv !== window.__cfgDrivers.ext || mode !== 'local') return '';
             const meta = (window.__extMeta && window.__extMeta[String(n)]) || {};
             if (meta.upToDate !== false) return '';
-            return `<button type="button" class="cs-btn cs-upd-row" data-upd-n="${escapeHtml(n)}" style="padding:1px 8px;font-size:.72em;flex:none" title="检测到远端有新版本, 点击更新此扩展">⬆ 更新</button>`;
+            return `<button type="button" class="cs-btn cs-upd-row" data-upd-n="${escapeHtml(n)}" style="padding:1px 8px;font-size:.72em;flex:none" title="检测到远端有新版本, 点击更新(多个可一起点, 最后刷新页面生效)" style="padding:0 6px;color:#6fce6f;border-color:rgba(111,206,111,.55)">New</button>`;
         } catch { return ''; }
     };
     function __cfgStatusChip(drv, n, mode) {
@@ -5909,6 +5917,8 @@ ext: {
         c.innerHTML = '<i class="fa-solid fa-rotate" aria-hidden="true"></i> ' + labels[1];
         // user tab: 显示 一键备份/恢复全部(灾难恢复整包); 其余 tab 隐藏
         const brn = document.getElementById('cs_cfg_user_br'), rrn = document.getElementById('cs_cfg_user_rr');
+        const ua = document.getElementById('cs_cfg_updall');
+        if (ua) ua.style.display = t === 'ext' ? '' : 'none';
         if (brn) brn.style.display = t === 'user' ? '' : 'none';
         if (rrn) rrn.style.display = t === 'user' ? '' : 'none';
 
@@ -6126,8 +6136,9 @@ ext: {
                         if (!res) { lastErr = '404'; continue; }
                         hideBusy();
                         if (!res.ok) { toastr.error('更新失败 HTTP ' + lastErr); return; }
-                        toastr.success('✅ 扩展已更新，2 秒后刷新页面');
-                        setTimeout(() => location.reload(), 2000);
+                        ub.textContent = '✓';
+                        ub.style.color = '#6fce6f';
+                        toastr.success('✅ 扩展已更新——可继续点其它 New, 全部完成后刷新一次页面生效');
                         return;
                     } catch (e3) { lastErr = String(e3).slice(0, 80); }
                 }
@@ -6151,6 +6162,33 @@ ext: {
             saveSettingsDebounced();
             try { if (typeof saveSettings === 'function') saveSettings().catch(() => { }); } catch { }
         }
+    });
+    $('cs_cfg_updall')?.addEventListener('click', async () => {
+        const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
+        const st2 = $('cs_cfg2_status');
+        if (!sel.length) { if (st2) st2.textContent = '请先勾选要更新的拓展'; return; }
+        let okN = 0, failN = 0;
+        for (let i = 0; i < sel.length; i++) {
+            const full = sel[i];
+            const pure = String(full).split('/').pop();
+            showBusy(i + 1, sel.length, '更新拓展 ' + pure + '…');
+            try {
+                const gF = (window.__extType && window.__extType[full]) === 'global';
+                const combos = [{ n: full, g: gF }, { n: full, g: !gF }, { n: pure, g: gF }, { n: pure, g: !gF }];
+                let done = false;
+                for (const c of combos) {
+                    const r = await fetch('/api/extensions/update', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ extensionName: c.n, global: c.g }) });
+                    if (r.status === 404) continue;
+                    if (r.ok) { okN++; } else { failN++; }
+                    done = true;
+                    break;
+                }
+                if (!done) failN++;
+            } catch { failN++; }
+        }
+        hideBusy();
+        if (st2) st2.textContent = `更新完成：成功 ${okN} / 共 ${sel.length}${failN ? `，失败 ${failN}` : ''}——刷新页面后生效`;
+        toastr.success(`⬆ 拓展更新完成(成功 ${okN}/${sel.length})——刷新一次页面全部生效`);
     });
     $('cs_cfg_del')?.addEventListener('click', async () => {
         const st2 = $('cs_cfg2_status');
