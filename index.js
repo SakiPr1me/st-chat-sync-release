@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -41,6 +41,12 @@ const DEFAULT_SETTINGS = {
     uploadBundle: undefined,  // (已停用) 备份本体功能已移除(0.9.0): 打包依赖从仓库再拉代码, 作者删库后无法生成, 与防删库目的不符; 云端旧安全包仍可被导入端读取兜底
     connSlots: [],           // 连接槽位[{platform,repo,token,lastConnectAt}]: 保存配置自动去重入库, 下拉一秒切换, 可删
     autoUpdate: true,         // 自动更新插件至最新(默认勾选; 每次启动检查, 有新版自动升级+刷新)
+    floatEnabled: true,       // 0.12.6 快捷入口: 悬浮球总开关(每页可见, 点头部展开/收起, 可拖拽)
+    floatUploadChat: true,    // 悬浮球内「上传当前聊天」(功能型, 绿色)
+    floatImportChat: true,    // 悬浮球内「导入云端至当前聊天」(功能型, 蓝色)
+    menuUploadChat: true,     // 左下角拓展菜单入口「上传当前聊天」
+    menuImportChat: true,     // 左下角拓展菜单入口「导入云端至当前聊天」
+    floatPageKeys: ['conn', 'roles', 'wb', 'cfg'], // 悬浮球面板入口(打开对应页面): 连接配置/角色·聊天/世界书/酒馆配置
 };
 
 // 统一从 settings 读；未初始化就建
@@ -4350,6 +4356,21 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
+                    <summary><i class="fa-solid fa-wand-magic-sparkles cs-ico" aria-hidden="true"></i>⭐ 快捷入口（悬浮球 / 左下角拓展菜单）</summary>
+                    <div class="cs-body">
+                        <label style="display:flex!important;align-items:center;gap:6px;font-size:.92em;margin-bottom:4px;cursor:pointer"><input type="checkbox" id="cs_float_enabled" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.floatEnabled === false ? '' : 'checked'}><span>开启悬浮球🌐（每个页面都在，点🌐展开/收起，可拖拽）</span></label>
+                        <div style="margin:2px 0 6px 22px;opacity:.92">
+                            <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_upload" style="margin:0" ${settings.floatUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">悬浮球内「上传当前聊天」</span></label>
+                            <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_import" style="margin:0" ${settings.floatImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">悬浮球内「导入云端至当前聊天」</span></label>
+                        </div>
+                        <div class="cs-sep"></div>
+                        <div style="font-size:.84em;opacity:.85;margin:2px 0 4px">左下角拓展菜单入口（勾选后出现在页面左下角的拓展菜单里）：</div>
+                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_upload" style="margin:0" ${settings.menuUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">菜单「上传当前聊天」</span></label>
+                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_import" style="margin:0" ${settings.menuImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">菜单「导入云端至当前聊天」</span></label>
+                    </div>
+                    </details>
+
+                    <details class="cs-fold">
                     <summary><i class="fa-solid fa-database cs-ico" aria-hidden="true"></i>酒馆配置同步（预设/主题/正则/插件等设置）</summary>
                     <div class="cs-body">
                         <p id="${id}_cfg_status" class="cs-hint" style="margin-top:4px"></p>
@@ -6510,6 +6531,13 @@ ext: {
             saveSettingsDebounced();
             try { if (typeof saveSettings === 'function') saveSettings().catch(() => { }); } catch { }
         }
+        if (e.target && ['cs_float_enabled', 'cs_float_upload', 'cs_float_import', 'cs_menu_upload', 'cs_menu_import'].includes(e.target.id)) {
+            const k = { cs_float_enabled: 'floatEnabled', cs_float_upload: 'floatUploadChat', cs_float_import: 'floatImportChat', cs_menu_upload: 'menuUploadChat', cs_menu_import: 'menuImportChat' }[e.target.id];
+            settings[k] = !!e.target.checked;
+            saveSettingsDebounced();
+            __csUpdateFloat();
+            __csUpdateMenuEntries();
+        }
     });
     $('cs_cfg_updall')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
@@ -7234,9 +7262,159 @@ async function autoConnectIfConfigured() {
     }
 })();
 jQuery(() => {
+
+// ═══ 快捷入口(0.12.6, 逻辑仿 st-kimi-reasoning-injector 悬浮条) ═══
+// 悬浮球: body 级 fixed, 每个页面都在; 点头部展开/收起; 拖拽(3px阈值+边界钳制+位置记忆); 窗口缩放钳回视口
+// 条目: 功能区(直接执行, 彩色, 最前, 分隔线) + 面板区(打开对应页面, 橙)
+function __csFloatJumpSection(kw) {
+    const wrap = document.getElementById('cs_content');
+    if (wrap && wrap.style.display === 'none') wrap.style.display = '';
+    const details = [...document.querySelectorAll('#chat_sync_settings details.cs-fold')].find((d) => { const sm = d.querySelector('summary'); return sm && sm.textContent.includes(kw); });
+    if (!details) return;
+    details.open = true;
+    details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function __csRunInstant(kind) { // 复用官方按钮完整进度/冲突/提示链路
+    const btn = document.getElementById(kind === 'upload' ? 'cs_push_chat' : 'cs_pull_chat');
+    if (btn) { btn.click(); return; }
+    toastr.warning('面板未就绪——请先打开一次插件面板，再用快捷入口');
+}
+function __csFloatPageKeys() { return Array.isArray(settings.floatPageKeys) ? settings.floatPageKeys : ['conn', 'roles', 'wb', 'cfg']; }
+function __csUpdateFloat() {
+    const id = 'cs_quick_float';
+    $('#' + id).remove();
+    $(document).off('.csf');
+    $(window).off('.csf');
+    if (settings.floatEnabled === false) return;
+    const showU = settings.floatUploadChat !== false, showI = settings.floatImportChat !== false;
+    if (!showU && !showI) return;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('cs_float_pos') || 'null'); } catch (e) { }
+    const W = 46, HEAD = 40, ITEM = 38;
+    const $box = $(`<div id="${id}" style="
+        position:fixed;z-index:9600;width:${W}px;overflow:hidden;
+        border:1px solid var(--SmartThemeBorderColor);border-radius:14px;
+        background:rgba(128,128,128,0.32);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+        box-shadow:0 3px 10px rgba(0,0,0,.3);user-select:none;
+        ${saved ? `left:${saved.x}px;top:${saved.y}px;right:auto;bottom:auto` : 'right:16px;bottom:150px'}
+    "></div>`).appendTo('body');
+    $box.append(`<div class="csf-head" style="height:${HEAD}px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:grab;font-size:15px;color:var(--SmartThemeBodyColor,#eee);border-bottom:1px solid rgba(255,255,255,.08)">
+        <span style="font-size:17px;line-height:1">🌐</span>
+    </div>`);
+    // 功能区(直接执行, 彩色, 在最前) + 面板区(打开对应同步页面, 橙) —— 中间分隔线
+    const ACTION_DEFS = [
+        { key: 'upload', ico: 'fa-cloud-arrow-up', label: '上传当前聊天', color: '#6fce6f', run: () => __csRunInstant('upload') },
+        { key: 'import', ico: 'fa-cloud-arrow-down', label: '导入云端至当前聊天', color: '#6fbcf6', run: () => __csRunInstant('import') },
+    ].filter(a => ((a.key === 'upload' && showU) || (a.key === 'import' && showI)));
+    const PAGE_DEFS = [
+        { key: 'conn', ico: 'fa-plug', label: '连接配置', kw: '连接配置' },
+        { key: 'roles', ico: 'fa-user', label: '角色·聊天', kw: '角色卡+绑定世界书+聊天同步' },
+        { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书同步' },
+        { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置同步' },
+    ].filter(d => __csFloatPageKeys().includes(d.key));
+    const rowCount = ACTION_DEFS.length + PAGE_DEFS.length + (ACTION_DEFS.length ? 1 : 0);
+    const $items = $(`<div class="csf-body" style="overflow:hidden;height:0;background:rgba(0,0,0,.16)"></div>`).appendTo($box);
+    ACTION_DEFS.forEach(def => {
+        $items.append(`<div class="csf-item csf-action" data-act="${def.key}" style="
+            height:${ITEM}px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
+            cursor:pointer;border-bottom:1px solid rgba(255,255,255,.07);position:relative
+        " title="${def.label}"><i class="fa-solid ${def.ico}" aria-hidden="true" style="font-size:15px;color:${def.color}"></i></div>`);
+    });
+    if (ACTION_DEFS.length) $items.append(`<div class="csf-sep" style="height:5px;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.08);cursor:default"></div>`);
+    PAGE_DEFS.forEach(def => {
+        $items.append(`<div class="csf-item" data-act="${def.key}" style="
+            height:${ITEM}px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
+            cursor:pointer;border-bottom:1px solid rgba(255,255,255,.07);position:relative
+        " title="打开「${def.label}」页面"><i class="fa-solid ${def.ico}" aria-hidden="true" style="font-size:15px;color:var(--SmartThemeQuoteColor)"></i></div>`);
+    });
+    $items.find('.csf-item').on('mouseenter', function () { $(this).css('background', 'rgba(128,128,128,.22)'); });
+    $items.find('.csf-item').on('mouseleave', function () { $(this).css('background', ''); });
+    let expanded = false;
+    function setExpanded(on) {
+        expanded = on;
+        const h = on ? rowCount * ITEM : 0;
+        $items.css({ height: h + 'px', transition: 'height .22s ease' });
+        $box.css('box-shadow', on ? '0 6px 18px rgba(0,0,0,.4)' : '0 3px 10px rgba(0,0,0,.3)');
+    }
+    setExpanded(false);
+    $box.find('.csf-head').on('click.csf', function () { setExpanded(!expanded); });
+    $items.find('.csf-item').on('click.csf', function () {
+        const act = $(this).attr('data-act');
+        if ($(this).hasClass('csf-action')) {
+            const def = ACTION_DEFS.find(a => a.key === act);
+            if (def) { try { def.run(); } catch (e) { console.warn('[chat-sync] 快捷执行失败', e); } }
+            return;
+        }
+        const def = PAGE_DEFS.find(a => a.key === act);
+        if (def) __csFloatJumpSection(def.kw);
+    });
+    // 拖拽(3px 阈值 + 边界钳制 + 位置记忆); 点击头部不拖拽时=展开
+    let dragging = false, dx, dy, startX, startY;
+    $box.find('.csf-head').on('mousedown.csf touchstart.csf', function (e) {
+        dragging = false;
+        const ev = e.touches ? e.touches[0] : e;
+        startX = ev.clientX;
+        startY = ev.clientY;
+        const pos = $box.position();
+        dx = startX - pos.left;
+        dy = startY - pos.top;
+        $box.css({ cursor: 'grabbing', transition: 'none' });
+    });
+    $(document).on('mousemove.csf touchmove.csf', function (e) {
+        if (!$box[0] || dx === undefined) return;
+        const ev = e.touches ? e.touches[0] : e;
+        if (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3) dragging = true;
+        if (!dragging) return;
+        e.preventDefault();
+        const maxX = window.innerWidth - $box.outerWidth() - 2;
+        const maxY = window.innerHeight - $box.outerHeight() - 2;
+        const lx = Math.min(Math.max(ev.clientX - dx, 2), Math.max(maxX, 2));
+        const ly = Math.min(Math.max(ev.clientY - dy, 2), Math.max(maxY, 2));
+        $box.css({ left: lx + 'px', top: ly + 'px', right: 'auto', bottom: 'auto' });
+        try { localStorage.setItem('cs_float_pos', JSON.stringify({ x: lx, y: ly })); } catch (err) { }
+    });
+    $(document).on('mouseup.csf touchend.csf', function () {
+        if (!$box[0]) return;
+        $box.css({ cursor: '', transition: '' });
+        dx = undefined;
+    });
+    $(window).on('resize.csf', function () {
+        const $b = $('#cs_quick_float');
+        if (!$b.length || $b[0].style.left === '') return;
+        const maxX = window.innerWidth - $b.outerWidth() - 2;
+        const maxY = window.innerHeight - $b.outerHeight() - 2;
+        let lx = parseInt($b.css('left'), 10), ly = parseInt($b.css('top'), 10);
+        if (isNaN(lx) || isNaN(ly)) return;
+        const nx = Math.min(Math.max(lx, 2), Math.max(maxX, 2));
+        const ny = Math.min(Math.max(ly, 2), Math.max(maxY, 2));
+        if (nx !== lx) $b.css('left', nx);
+        if (ny !== ly) $b.css('top', ny);
+        try { localStorage.setItem('cs_float_pos', JSON.stringify({ x: nx, y: ny })); } catch (e) { }
+    });
+}
+window.__csUpdateFloat = __csUpdateFloat;
+// 左下角拓展菜单入口(幂等重建: 勾选变化/面板重渲染后调用)
+function __csUpdateMenuEntries() {
+    $('#cs_menu_upload').remove();
+    $('#cs_menu_import').remove();
+    const $menu = $('#extensionsMenu');
+    if (!$menu.length) return;
+    if (settings.menuUploadChat !== false) {
+        $menu.append(`<a id="cs_menu_upload" class="list-group-item" href="#" title="上传当前聊天（增量冲突抉择+进度悬浮卡）"><i class="fa-solid fa-cloud-arrow-up" style="color:#6fce6f"></i> 上传当前聊天</a>`);
+        $('#cs_menu_upload').on('click', (e) => { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); __csRunInstant('upload'); });
+    }
+    if (settings.menuImportChat !== false) {
+        $menu.append(`<a id="cs_menu_import" class="list-group-item" href="#" title="导入云端至当前聊天（增量补楼）"><i class="fa-solid fa-cloud-arrow-down" style="color:#6fbcf6"></i> 导入云端至当前聊天</a>`);
+        $('#cs_menu_import').on('click', (e) => { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); __csRunInstant('import'); });
+    }
+}
+window.__csUpdateMenuEntries = __csUpdateMenuEntries;
+
     // 页面加载完成直接挂载设置面板到 #extensions_settings（ST 标准扩展设置区）
     ensurePanel();
     __refreshCurRepoLine();
+    __csUpdateFloat();
+    __csUpdateMenuEntries();
     // 检测远程新版本(面板稳定后); 勾选了「自动更新」则启动即自动升级
     setTimeout(() => { try { if (settings.autoUpdate) { window.__csCheckUpdate && window.__csCheckUpdate({ auto: true }); } else { window.__csCheckUpdate && window.__csCheckUpdate(); } } catch { } }, 500);
     // 0.12.5 自愈刷新: 磁盘上的插件版本 > 本页正在运行的旧代码 → 说明此前一次更新的自动刷新没完成(手机WebView/协调函数失效/脚本缓存)
