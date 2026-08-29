@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1433,23 +1433,12 @@ function showBusy(page, total, msg) {
     if (!__csBusyEl) {
         __csBusyEl = document.createElement('div');
         __csBusyEl.id = 'cs_busy_bar';
-        // 贴「扩展设置面板」底部(sticky, 随面板滚动, 不遮输入框/其它插件入口); 面板缺失退回输入框上方
-        const host = document.getElementById('extensions_settings');
-        if (host) {
-            __csBusyEl.style.cssText = 'position:sticky;bottom:0;left:0;right:0;z-index:99999;display:block;' +
-                'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
-                'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
-                'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
-            host.appendChild(__csBusyEl);
-        } else {
-            let bottomPx = 120;
-            try { const sf = document.querySelector('#send_form, .send_form, .send-input-header'); if (sf) { const r2 = sf.getBoundingClientRect(); bottomPx = Math.max(4, Math.round(window.innerHeight - r2.top)); } } catch { }
-            __csBusyEl.style.cssText = `position:fixed;left:0;right:0;bottom:${bottomPx}px;z-index:99999;` +
-                'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
-                'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
-                'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
-            document.body.appendChild(__csBusyEl);
-        }
+        // 整页大底部(视口最底)
+        __csBusyEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;' +
+            'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
+            'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
+            'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
+        document.body.appendChild(__csBusyEl);
     }
     const label = msg || '同步';
     __csBusyEl.textContent = (total && total > 0)
@@ -3966,6 +3955,8 @@ function __refreshCurRepoLine() {
     let lastConn = '—';
     try { if (settings.lastConnectAt) { const d = new Date(settings.lastConnectAt); lastConn = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } } catch { }
     el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
+    const slot2 = document.getElementById('cs_slot2');
+    if (slot2) slot2.innerHTML = `<b>📦 槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}`;
     __fillCloudUsage();
     try {
         if (typeof window.__csCheckUpdate === 'function') window.__csCheckUpdate();
@@ -4130,6 +4121,7 @@ window.__csManualCheck = async function (btn) {
                     <details class="cs-fold" ${(!settings.token || !settings.repo) ? 'open' : ''}>
                     <summary><i class="fa-solid fa-plug cs-ico" aria-hidden="true"></i>连接配置</summary>
                     <div class="cs-body">
+                        <div id="${id}_slot2" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(255,255,255,0.03)"></div>
                         <label class="cs-label" for="${id}_platform">云平台：</label>
                         <select id="${id}_platform" class="text_pole" style="width:100%;box-sizing:border-box">
                             <option value="https://api.github.com" ${(!settings.server && !settings.owner) || String(settings.server || '').includes('github') ? 'selected' : ''}>GitHub（需能访问外网·单仓库建议&lt;1GB，上限约100GB，默认）</option>
