@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.8'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.9'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4217,13 +4217,13 @@ window.__csManualCheck = async function (btn) {
             </div>
             <div class="inline-drawer-content" id="${id}_content" style="display:none">
 
-                <p id="${id}_cur_repo" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(255,255,255,0.03)"></p>
+                <p id="${id}_cur_repo" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(128,128,128,0.08)"></p>
 
                 <div class="cs-card">
                     <details class="cs-fold" ${(!settings.token || !settings.repo) ? 'open' : ''}>
                     <summary><i class="fa-solid fa-plug cs-ico" aria-hidden="true"></i>连接配置</summary>
                     <div class="cs-body">
-                        <div id="${id}_slot2" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(255,255,255,0.03)"></div>
+                        <div id="${id}_slot2" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(128,128,128,0.08)"></div>
                         <label class="cs-label" for="${id}_platform">云平台：</label>
                         <select id="${id}_platform" class="text_pole" style="width:100%;box-sizing:border-box">
                             <option value="https://api.github.com" ${(!settings.server && !settings.owner) || String(settings.server || '').includes('github') ? 'selected' : ''}>GitHub（需能访问外网·单仓库建议&lt;1GB，上限约100GB，默认）</option>
@@ -6943,9 +6943,9 @@ function ensurePanel() {
 
 // ===== 面板卡片样式（参照余温工具箱的卡片化折叠块：主题变量 + 圆角 + hover，差异化非搬运）=====
 const CHAT_SYNC_CSS = `
-#chat_sync_settings .cs-card { border:1px solid var(--SmartThemeBorderColor); border-left:3px solid var(--SmartThemeQuoteColor); border-radius:12px; overflow:hidden; background:rgba(0,0,0,0.08); margin-top:10px; }
+#chat_sync_settings .cs-card { border:1px solid var(--SmartThemeBorderColor); border-left:3px solid var(--SmartThemeQuoteColor); border-radius:12px; overflow:hidden; background:rgba(128,128,128,0.10); margin-top:10px; }
 #chat_sync_settings .cs-card.cs-last { margin-bottom:28px; }
-#chat_sync_settings .cs-fold > summary { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:var(--SmartThemeBodyColor,inherit); background:rgba(255,255,255,0.04); border-bottom:1px solid var(--SmartThemeBorderColor); list-style:none; outline:none; }
+#chat_sync_settings .cs-fold > summary { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:var(--SmartThemeBodyColor,inherit); background:rgba(128,128,128,0.14); border-bottom:1px solid var(--SmartThemeBorderColor); list-style:none; outline:none; }
 #chat_sync_settings .cs-fold > summary::-webkit-details-marker { display:none; }
 #chat_sync_settings .cs-fold > summary::after { content:'▸'; transition:transform .18s ease; opacity:.7; font-size:13px; margin-left:auto; line-height:1; }
 #chat_sync_settings .cs-fold[open] > summary::after { transform:rotate(90deg); }
@@ -6961,7 +6961,7 @@ const CHAT_SYNC_CSS = `
 #chat_sync_settings .cs-role-item input { transform:scale(.85); flex:none; }
 #chat_sync_settings .cs-group-title { font-size:.78em; font-weight:600; color:var(--SmartThemeBodyColor,var(--grey_color)); margin:6px 0 3px; }
 #chat_sync_settings .cs-row { display:flex; gap:8px; align-items:center; }
-#chat_sync_settings .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor,inherit); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
+#chat_sync_settings .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); background:rgba(128,128,128,0.18); color:var(--SmartThemeBodyColor,inherit); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 #chat_sync_settings .cs-btn:hover { filter:brightness(1.15); }
 #chat_sync_settings .cs-btn.cs-primary { border-color:var(--SmartThemeQuoteColor); color:var(--SmartThemeQuoteColor); }
 #chat_sync_settings .cs-current { font-size:.9em; color:var(--SmartThemeBodyColor,inherit); }
@@ -6979,7 +6979,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-left { flex:1.5; display:flex; flex-direction:column; overflow:hidden; padding:0; position:relative; }
 .cs-cln-right { flex:1; display:flex; flex-direction:column; border-left:1px solid var(--SmartThemeBorderColor,#333); min-width:0; }
 .cs-cln-ptitle { margin-bottom:8px; font-size:.85em; line-height:1.6; }
-.cs-role-avatar { width:30px; height:30px; border-radius:50%; object-fit:cover; flex:none; background:rgba(255,255,255,.06); border:1px solid var(--SmartThemeBorderColor,#333); }
+.cs-role-avatar { width:30px; height:30px; border-radius:50%; object-fit:cover; flex:none; background:rgba(128,128,128,0.16); border:1px solid var(--SmartThemeBorderColor,#333); }
 .cs-role-avatar.cs-av-ph { display:inline-flex; align-items:center; justify-content:center; font-size:.9em; opacity:.55; }
 .cs-cln-ptext { white-space:pre-wrap; word-break:break-word; font-size:.85em; line-height:1.7; color:var(--SmartThemeBodyColor,#e1e1e1); }
 /* 预览正文格式着色: 与聊天页同款主题变量(斜体/引用/下划线) */
@@ -7000,7 +7000,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-modal .cs-cln-size { color:#e8a44c; font-weight:700; }
 /* 人设管理·表格行: 每列定宽对齐 */
 #chat_sync_settings .cs-prow { display:flex; align-items:center; gap:10px; padding:2px 4px; }
-#chat_sync_settings .cs-prow:hover { background:rgba(255,255,255,.05); border-radius:3px; }
+#chat_sync_settings .cs-prow:hover { background:rgba(128,128,128,0.14); border-radius:3px; }
 #chat_sync_settings .cs-prow .cs-pcol-name { flex:0 1 auto !important; max-width:110px; font-size:.85em; }
 #chat_sync_settings .cs-prow .cs-pcol-count { flex:none !important; font-size:.82em; font-weight:700; color:var(--SmartThemeQuoteColor,#f0a35e); }
 #chat_sync_settings .cs-prow .cs-pcol-desc { flex:1 1 0% !important; min-width:60px; font-size:.78em; opacity:.72; }
@@ -7037,15 +7037,15 @@ const CHAT_SYNC_CSS = `
 .cs-where-diff[data-where-diff="cloud"] { color:#f0a35e; }
 .cs-where-diff[data-where-diff="local"] { color:#6fb7f0; }
 .cs-where-diff[data-where-diff="same"] { color:#6fce6f; }
-.cs-cln-mbar { display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-bottom:1px solid var(--SmartThemeBorderColor,#333); background:rgba(255,255,255,.03); }
+.cs-cln-mbar { display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-bottom:1px solid var(--SmartThemeBorderColor,#333); background:rgba(128,128,128,0.08); }
 .cs-cln-mbar-title { font-size:.88em; font-weight:700; }
 .cs-cln-mbar-title small { font-weight:400; opacity:.65; font-size:.85em; }
 .cs-cln-mbar-btns { display:flex; gap:8px; flex-wrap:wrap; }
 .cs-cln-modal .cs-cln-mrow { display:flex; align-items:center; gap:6px; padding:2px 4px; border-radius:3px; cursor:pointer; }
-.cs-cln-modal .cs-cln-mrow:hover { background:rgba(255,255,255,.05); }
+.cs-cln-modal .cs-cln-mrow:hover { background:rgba(128,128,128,0.14); }
 .cs-cln-modal .cs-cln-mrow .cs-cln-fname { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.85em; }
 /* 弹窗挂在 body 下，吃不到 #chat_sync_settings 作用域 → 按钮/输入样式单独给（否则白底灰字原生样式） */
-.cs-cln-modal .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor,#555); background:rgba(255,255,255,0.06); color:var(--SmartThemeBodyColor,#eee); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
+.cs-cln-modal .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor,#555); background:rgba(128,128,128,0.18); color:var(--SmartThemeBodyColor,#eee); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 .cs-cln-modal .cs-btn:hover:not(:disabled) { filter:brightness(1.25); }
 .cs-cln-modal .cs-btn:disabled { opacity:.4; cursor:not-allowed; }
 .cs-cln-modal .cs-btn.cs-danger-btn { border-color:#a33; color:#ff8787; background:rgba(170,51,51,.2); }
@@ -7330,7 +7330,7 @@ function __csEnsureFloatWin() {
     w.innerHTML = `
         <div class="csf-float-head" style="display:flex;align-items:center;gap:6px;cursor:grab;user-select:none">
             <span style="opacity:.6;cursor:grab">⠿</span><b style="font-size:.9em" id="cs_float_win_title">设置</b>
-            <button id="cs_float_win_close" type="button" style="margin-left:auto;padding:0 8px;font-size:.85em;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;background:rgba(255,255,255,.06);color:var(--SmartThemeBodyColor,#eee);cursor:pointer">✕</button>
+            <button id="cs_float_win_close" type="button" style="margin-left:auto;padding:0 8px;font-size:.85em;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;background:rgba(128,128,128,0.20);color:var(--SmartThemeBodyColor,#eee);cursor:pointer">✕</button>
         </div>
         <div id="cs_float_win_body" style="margin-top:6px"></div>`;
     document.body.appendChild(w);
@@ -7415,7 +7415,7 @@ function __csUpdateFloat() {
             cursor:pointer;border-bottom:1px solid rgba(255,255,255,.07);position:relative
         " title="${def.label}"><i class="fa-solid ${def.ico}" aria-hidden="true" style="font-size:15px;color:${def.color}"></i></div>`);
     });
-    if (ACTION_DEFS.length) $items.append(`<div class="csf-sep" style="height:5px;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.08);cursor:default"></div>`);
+    if (ACTION_DEFS.length) $items.append(`<div class="csf-sep" style="height:5px;background:rgba(128,128,128,0.12);border-bottom:1px solid rgba(128,128,128,.25);cursor:default"></div>`);
     PAGE_DEFS.forEach(def => {
         $items.append(`<div class="csf-item" data-act="${def.key}" style="
             height:${ITEM}px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
