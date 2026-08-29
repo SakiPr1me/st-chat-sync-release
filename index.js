@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.17'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.18'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4312,7 +4312,7 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
-                            </span>
+                            </span><input type="text" id="cs_search_roles" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_roles_list" title="按名字快速过滤（可与上方筛选叠加）">
                             <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn" title="删除选中的文件">🗑 删除选中文件</button>
                             <span id="${id}_delete_target" class="cs-hint" style="margin-left:6px"></span>
                         </div>
@@ -4344,7 +4344,7 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
-                            </span>
+                            </span><input type="text" id="cs_search_wb" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_wb_list" title="按名字快速过滤（可与上方筛选叠加）">
                             <button id="${id}_wb_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的全局世界书(本地视图删本地/云端视图删云端)">🗑 删除选中世界书</button>
                         </div>
                         <p id="${id}_wb_status" class="cs-hint" style="margin-top:4px"></p>
@@ -4410,7 +4410,7 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
-                            </span>
+                            </span><input type="text" id="cs_search_cfg" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cfg_list" title="按名字快速过滤（可与上方筛选叠加）">
                         </div>
                         <div class="cs-row" style="margin-top:2px;flex-wrap:wrap;align-items:center">
                             <button id="${id}_cfg_user_br" type="button" class="cs-btn" style="display:none" title="一键备份：用户名+全部人设+全部头像照片">💾 一键备份全部</button>
@@ -6376,7 +6376,11 @@ ext: {
             const host = document.getElementById(targetId);
             if (!host) return;
             const rows = [...host.querySelectorAll('label.cs-role-item')];
+            const kw = String(window['__rowKw_' + targetId] || '').toLowerCase(); // 0.12.18 搜索: 行文本包含关键词才可见
             for (const r of rows) {
+                let kwHit = true;
+                if (kw) kwHit = (r.textContent || '').toLowerCase().includes(kw);
+                if (!kwHit) { r.style.display = 'none'; continue; }
                 if (kind === '全部') { r.style.display = ''; continue; }
                 const wEl = r.querySelector('.cs-cln-where');
                 const dEl = r.querySelector('.cs-where-diff');
@@ -6530,6 +6534,16 @@ ext: {
         __applyRowFilter(tgt, b.dataset.flt || '全部');
     });
     // 启动自动更新勾选: 元素由 __refreshCurRepoLine 动态创建(晚于直接绑定) → 用 document 委托, 永不失绑
+    // 0.12.18 搜索框(与筛选chips叠加; 防抖 + 重放筛选)
+    document.addEventListener('input', (e) => {
+        const kwTgt = e.target && e.target.dataset && e.target.dataset.kwTarget;
+        if (!kwTgt) return;
+        window['__rowKw_' + kwTgt] = String(e.target.value || '').trim().toLowerCase();
+        clearTimeout(window.__csKwTimer);
+        window.__csKwTimer = setTimeout(() => {
+            __applyRowFilter(kwTgt, window['__rowFilter_' + kwTgt] || '全部');
+        }, 200);
+    });
     document.addEventListener('change', (e) => {
         if (e.target && e.target.id === 'cs_auto_upd') {
             settings.autoUpdate = e.target.checked;
