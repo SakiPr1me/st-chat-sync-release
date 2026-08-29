@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4036,6 +4036,21 @@ function __b64ToText(s) {
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new TextDecoder().decode(bytes);
 }
+// 0.12.3: 最近一次检测是否得到"权威"(非CDN)源确认——Gitee/GitHub API(contents接口)不走CDN缓存, raw/jsDelivr可能滞后
+let __csRemoteAuthoritative = false;
+// 版本分级(纯函数, 可单测): newer=有新版 / latest=权威确认最新 / stale=仅CDN源回声, 疑似滞后 / local-higher=本地更高(CDN旧缓存或开发版)
+function __csTriageVer(localVer, remoteVer, authoritative) {
+    const cmp = __csCompareVer(remoteVer, localVer);
+    if (cmp > 0) return 'newer';
+    if (cmp === 0) return authoritative ? 'latest' : 'stale';
+    return 'local-higher';
+}
+// 更新后刷新: 协调刷新(与余温插件最后完成者统一) + 5s watchdog 兜底——即使协调函数在手机上失效/不存在, 也必刷一次
+// (用户反馈: 手机"已是最新但必须手动刷新才生效"→真相是协调reload没触发, 页面一直跑旧代码)
+window.__csDoReload = function () {
+    try { if (typeof window.__kimiCoordReload === 'function') window.__kimiCoordReload(3000); } catch { }
+    setTimeout(() => { if (!window.__csReloadGuard) { window.__csReloadGuard = 1; location.reload(); } }, 5000);
+};
 async function __csFetchRemoteVer() {
     // 多源取最大版本: 权威 API 在前, raw/CDN 在后(可能有 CDN 缓存旧版);
     // 「第一个成功即返回」会让缓存旧版被当作最新→误判"本地更高", 故收集所有可达源版本取 max
@@ -4049,6 +4064,7 @@ async function __csFetchRemoteVer() {
         'https://gitee.com/satosaki/tavern-synchronization-plugin/raw/master/manifest.json', // ⑤ Gitee raw
     ];
     const found = [];
+    let foundApi = false; // 任一权威API源成功 → 检测结果可信(CDN回声取不到更高版本)
     let lastErr = null;
     for (const url of sources) {
         try {
@@ -4064,10 +4080,11 @@ async function __csFetchRemoteVer() {
                 v = (j && typeof j.content === 'string') ? JSON.parse(__b64ToText(j.content)).version : j.version;
             } catch { throw new Error('parse'); }
             v = String(v || '').trim();
-            if (v) found.push(v);
+            if (v) { found.push(v); if (url.includes('api.')) foundApi = true; } // api.github.com / gitee.com/api 即权威
         } catch (e) { lastErr = e; }
     }
     if (!found.length) throw lastErr || new Error('所有更新源均失败');
+    __csRemoteAuthoritative = foundApi; // 0.12.3: 权威源有没有成功——决定"已是最新"是否可信
     // 取可达源里的最大版本(拉平 CDN 旧缓存)
     return found.reduce((a, b) => (__csCompareVer(b, a) > 0 ? b : a));
 }
@@ -4113,7 +4130,7 @@ async function __csDoSelfUpdate(btn, remoteVer) {
             if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
             if (btn) btn.textContent = '✅ 已更新';
             toastr.success('✅ 插件已更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
-            (window.__kimiCoordReload || ((ms) => setTimeout(() => location.reload(), ms || 2200)))(3000); // 协调刷新：多插件并发更新由最后完成者统一刷新
+            window.__csDoReload(); // 协调刷新(多插件并发由最后完成者统一) + watchdog兜底必刷
             return;
         } catch (e2) { }
     }
@@ -4136,7 +4153,7 @@ async function __csDoSelfUpdate(btn, remoteVer) {
         });
         if (!ri.ok) throw new Error('HTTP ' + ri.status);
         toastr.success('✅ 已通过重装方式更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
-        (window.__kimiCoordReload || ((ms) => setTimeout(() => location.reload(), ms || 3000)))(3000);
+        window.__csDoReload();
         return;
     } catch (e3) { toastr.error('重装也失败：' + ((e3 && e3.message) || e3) + '。请手动到扩展管理删除后重装。'); }
     if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新'; }
@@ -4161,11 +4178,12 @@ window.__csManualCheck = async function (btn) {
     let txt = '', title2 = '', cls = '';
     try {
         const remoteVer = await __csFetchRemoteVer();
-        const cmp = __csCompareVer(remoteVer, PLUGIN_VERSION);
-        if (cmp > 0) { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; } const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
-        else if (cmp === 0) { txt = '✅ 已是最新'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
+        const state = __csTriageVer(PLUGIN_VERSION, remoteVer, __csRemoteAuthoritative);
+        if (state === 'newer') { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; } const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
+        else if (state === 'latest') { txt = '✅ 已是最新'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
+        else if (state === 'stale') { txt = '🔄 疑似最新（更新源均未确认，可再点强制更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
         else { txt = '✅ 已是最新（CDN 缓存延迟中）'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
-        title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）';
+        title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + (state === 'stale' ? '\n⚠ 本次检测全部源均为 CDN 回声，无法确认是否真的最新——再点一次按钮＝直接执行官方更新（无需令牌/检测）' : '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）');
     } catch (e) {
         txt = '❌ 检测失败';
         title2 = String(e).slice(0, 80) + '\n（再点一次按钮＝直接执行官方更新，无需令牌/检测）';
