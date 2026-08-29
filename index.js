@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.7'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -46,7 +46,7 @@ const DEFAULT_SETTINGS = {
     floatImportChat: true,    // 悬浮球内「导入云端至当前聊天」(功能型, 蓝色)
     menuUploadChat: true,     // 左下角拓展菜单入口「上传当前聊天」
     menuImportChat: true,     // 左下角拓展菜单入口「导入云端至当前聊天」
-    floatPageKeys: ['conn', 'roles', 'wb', 'cfg'], // 悬浮球面板入口(打开对应页面): 连接配置/角色·聊天/世界书/酒馆配置
+    floatPages: { conn: true, roles: true, wb: true, cfg: true }, // 悬浮球面板入口(打开对应页面)逐页开关
 };
 
 // 统一从 settings 读；未初始化就建
@@ -4246,6 +4246,24 @@ window.__csManualCheck = async function (btn) {
                 </div>
 
                 <div class="cs-card">
+                    <details class="cs-fold" ${settings.floatEnabled === false ? 'open' : ''}>
+                    <summary><i class="fa-solid fa-wand-magic-sparkles cs-ico" aria-hidden="true"></i>快捷入口</summary>
+                    <div class="cs-body">
+                        <label style="display:flex!important;align-items:center;gap:6px;font-size:.92em;margin-bottom:4px;cursor:pointer"><input type="checkbox" id="cs_float_enabled" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.floatEnabled === false ? '' : 'checked'}><span>开启悬浮球🌐（每个页面都在，点🌐展开/收起，可拖拽；入口勾选见下）</span></label>
+                        <div class="cs-sep"></div>
+                        <div style="font-size:.85em;font-weight:700;margin:4px 0 2px;opacity:.9">功能型（点图标直接执行）</div>
+                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_upload" style="margin:0" ${settings.floatUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">悬浮球「上传当前聊天」</span></label>
+                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_import" style="margin:0" ${settings.floatImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">悬浮球「导入云端至当前聊天」</span></label>
+                        <div class="cs-sep"></div>
+                        <div style="font-size:.85em;font-weight:700;margin:4px 0 2px;opacity:.9">面板型（点图标打开对应页面）</div>
+                        ${CS_FLOAT_PAGES.map((p) => `<label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_fpg_${p.key}" style="margin:0" ${settings.floatPages && settings.floatPages[p.key] === false ? '' : 'checked'}><span>悬浮球「${p.label}」</span></label>`).join('')}
+                        <div class="cs-sep"></div>
+                        <div style="font-size:.85em;font-weight:700;margin:4px 0 2px;opacity:.9">拓展菜单（左下角拓展菜单入口）</div>
+                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_upload" style="margin:0" ${settings.menuUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">菜单「上传当前聊天」</span></label>
+                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_import" style="margin:0" ${settings.menuImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">菜单「导入云端至当前聊天」</span></label>
+                    </div>
+                    </details>
+
                     <details class="cs-fold">
                     <summary><i class="fa-solid fa-user cs-ico" aria-hidden="true"></i>角色卡+绑定世界书+聊天同步</summary>
                     <div class="cs-body">
@@ -4355,21 +4373,6 @@ window.__csManualCheck = async function (btn) {
                 </div>
 
                 <div class="cs-card">
-                    <details class="cs-fold">
-                    <summary><i class="fa-solid fa-wand-magic-sparkles cs-ico" aria-hidden="true"></i>⭐ 快捷入口（悬浮球 / 左下角拓展菜单）</summary>
-                    <div class="cs-body">
-                        <label style="display:flex!important;align-items:center;gap:6px;font-size:.92em;margin-bottom:4px;cursor:pointer"><input type="checkbox" id="cs_float_enabled" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.floatEnabled === false ? '' : 'checked'}><span>开启悬浮球🌐（每个页面都在，点🌐展开/收起，可拖拽）</span></label>
-                        <div style="margin:2px 0 6px 22px;opacity:.92">
-                            <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_upload" style="margin:0" ${settings.floatUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">悬浮球内「上传当前聊天」</span></label>
-                            <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_import" style="margin:0" ${settings.floatImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">悬浮球内「导入云端至当前聊天」</span></label>
-                        </div>
-                        <div class="cs-sep"></div>
-                        <div style="font-size:.84em;opacity:.85;margin:2px 0 4px">左下角拓展菜单入口（勾选后出现在页面左下角的拓展菜单里）：</div>
-                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_upload" style="margin:0" ${settings.menuUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">菜单「上传当前聊天」</span></label>
-                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_import" style="margin:0" ${settings.menuImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">菜单「导入云端至当前聊天」</span></label>
-                    </div>
-                    </details>
-
                     <details class="cs-fold">
                     <summary><i class="fa-solid fa-database cs-ico" aria-hidden="true"></i>酒馆配置同步（预设/主题/正则/插件等设置）</summary>
                     <div class="cs-body">
@@ -6538,6 +6541,13 @@ ext: {
             __csUpdateFloat();
             __csUpdateMenuEntries();
         }
+        if (e.target && e.target.id && String(e.target.id).startsWith('cs_fpg_')) {
+            const k2 = String(e.target.id).slice(7); // conn/roles/wb/cfg
+            settings.floatPages = settings.floatPages || {};
+            settings.floatPages[k2] = !!e.target.checked;
+            saveSettingsDebounced();
+            __csUpdateFloat();
+        }
     });
     $('cs_cfg_updall')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
@@ -7261,11 +7271,21 @@ async function autoConnectIfConfigured() {
         });
     }
 })();
-jQuery(() => {
-
-// ═══ 快捷入口(0.12.6, 逻辑仿 st-kimi-reasoning-injector 悬浮条) ═══
+// ═══ 快捷入口(0.12.7, 逻辑仿 st-kimi-reasoning-injector 悬浮条) ═══
 // 悬浮球: body 级 fixed, 每个页面都在; 点头部展开/收起; 拖拽(3px阈值+边界钳制+位置记忆); 窗口缩放钳回视口
-// 条目: 功能区(直接执行, 彩色, 最前, 分隔线) + 面板区(打开对应页面, 橙)
+// 条目: 功能区(直接执行, 彩色, 最前, 分隔线) + 面板区(打开对应页面, 橙); 勾选控制见 settings.floatPages
+const CS_FLOAT_PAGES = [
+    { key: 'conn', ico: 'fa-plug', label: '连接配置', kw: '连接配置' },
+    { key: 'roles', ico: 'fa-user', label: '角色·聊天', kw: '角色卡+绑定世界书+聊天同步' },
+    { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书同步' },
+    { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置同步' },
+];
+function csFloatPageEnabled(key) {
+    const fp = settings.floatPages;
+    if (fp && typeof fp[key] === 'boolean') return fp[key];
+    if (Array.isArray(settings.floatPageKeys)) return settings.floatPageKeys.includes(key); // 兼容旧数组存档
+    return true;
+}
 function __csFloatJumpSection(kw) {
     const wrap = document.getElementById('cs_content');
     if (wrap && wrap.style.display === 'none') wrap.style.display = '';
@@ -7279,7 +7299,6 @@ function __csRunInstant(kind) { // 复用官方按钮完整进度/冲突/提示�
     if (btn) { btn.click(); return; }
     toastr.warning('面板未就绪——请先打开一次插件面板，再用快捷入口');
 }
-function __csFloatPageKeys() { return Array.isArray(settings.floatPageKeys) ? settings.floatPageKeys : ['conn', 'roles', 'wb', 'cfg']; }
 function __csUpdateFloat() {
     const id = 'cs_quick_float';
     $('#' + id).remove();
@@ -7287,7 +7306,8 @@ function __csUpdateFloat() {
     $(window).off('.csf');
     if (settings.floatEnabled === false) return;
     const showU = settings.floatUploadChat !== false, showI = settings.floatImportChat !== false;
-    if (!showU && !showI) return;
+    const pagesOn = CS_FLOAT_PAGES.some((p) => csFloatPageEnabled(p.key)); // 0.12.7修: 只关两即时功能但页面入口还勾着时, 球不能整个消失
+    if (!showU && !showI && !pagesOn) return;
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('cs_float_pos') || 'null'); } catch (e) { }
     const W = 46, HEAD = 40, ITEM = 38;
@@ -7306,12 +7326,7 @@ function __csUpdateFloat() {
         { key: 'upload', ico: 'fa-cloud-arrow-up', label: '上传当前聊天', color: '#6fce6f', run: () => __csRunInstant('upload') },
         { key: 'import', ico: 'fa-cloud-arrow-down', label: '导入云端至当前聊天', color: '#6fbcf6', run: () => __csRunInstant('import') },
     ].filter(a => ((a.key === 'upload' && showU) || (a.key === 'import' && showI)));
-    const PAGE_DEFS = [
-        { key: 'conn', ico: 'fa-plug', label: '连接配置', kw: '连接配置' },
-        { key: 'roles', ico: 'fa-user', label: '角色·聊天', kw: '角色卡+绑定世界书+聊天同步' },
-        { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书同步' },
-        { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置同步' },
-    ].filter(d => __csFloatPageKeys().includes(d.key));
+    const PAGE_DEFS = CS_FLOAT_PAGES.filter((d) => csFloatPageEnabled(d.key));
     const rowCount = ACTION_DEFS.length + PAGE_DEFS.length + (ACTION_DEFS.length ? 1 : 0);
     const $items = $(`<div class="csf-body" style="overflow:hidden;height:0;background:rgba(0,0,0,.16)"></div>`).appendTo($box);
     ACTION_DEFS.forEach(def => {
@@ -7395,20 +7410,24 @@ function __csUpdateFloat() {
 window.__csUpdateFloat = __csUpdateFloat;
 // 左下角拓展菜单入口(幂等重建: 勾选变化/面板重渲染后调用)
 function __csUpdateMenuEntries() {
-    $('#cs_menu_upload').remove();
-    $('#cs_menu_import').remove();
+    $('#cs_menu_upload_ext').remove();
+    $('#cs_menu_import_ext').remove();
     const $menu = $('#extensionsMenu');
     if (!$menu.length) return;
     if (settings.menuUploadChat !== false) {
-        $menu.append(`<a id="cs_menu_upload" class="list-group-item" href="#" title="上传当前聊天（增量冲突抉择+进度悬浮卡）"><i class="fa-solid fa-cloud-arrow-up" style="color:#6fce6f"></i> 上传当前聊天</a>`);
-        $('#cs_menu_upload').on('click', (e) => { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); __csRunInstant('upload'); });
+        $menu.append(`<a id="cs_menu_upload_ext" class="list-group-item" href="#" title="上传当前聊天（增量冲突抉择+进度悬浮卡）"><i class="fa-solid fa-cloud-arrow-up" style="color:#6fce6f"></i> 上传当前聊天</a>`);
+        $('#cs_menu_upload_ext').on('click', (e) => { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); __csRunInstant('upload'); });
     }
     if (settings.menuImportChat !== false) {
-        $menu.append(`<a id="cs_menu_import" class="list-group-item" href="#" title="导入云端至当前聊天（增量补楼）"><i class="fa-solid fa-cloud-arrow-down" style="color:#6fbcf6"></i> 导入云端至当前聊天</a>`);
-        $('#cs_menu_import').on('click', (e) => { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); __csRunInstant('import'); });
+        $menu.append(`<a id="cs_menu_import_ext" class="list-group-item" href="#" title="导入云端至当前聊天（增量补楼）"><i class="fa-solid fa-cloud-arrow-down" style="color:#6fbcf6"></i> 导入云端至当前聊天</a>`);
+        $('#cs_menu_import_ext').on('click', (e) => { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); __csRunInstant('import'); });
     }
 }
 window.__csUpdateMenuEntries = __csUpdateMenuEntries;
+
+jQuery(() => {
+
+
 
     // 页面加载完成直接挂载设置面板到 #extensions_settings（ST 标准扩展设置区）
     ensurePanel();
