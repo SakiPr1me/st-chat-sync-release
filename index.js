@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.9.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.9.7'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS = {
     lastLocalMTime: {},       // {云端路径: 上次同步时本地聊天文件mtime} 增量粗筛
     syncMap: {},              // {角色名: {云路径: 本地导入后的真实文件名}} 稳定身份映射，让跨端同步收敛不复制
     uploadBundle: undefined,  // (已停用) 备份本体功能已移除(0.9.0): 打包依赖从仓库再拉代码, 作者删库后无法生成, 与防删库目的不符; 云端旧安全包仍可被导入端读取兜底
+    connSlots: [],           // 连接槽位[{platform,repo,token,lastConnectAt}]: 保存配置自动去重入库, 下拉一秒切换, 可删
     autoUpdate: true,         // 自动更新插件至最新(默认勾选; 每次启动检查, 有新版自动升级+刷新)
 };
 
@@ -1433,12 +1434,21 @@ function showBusy(page, total, msg) {
     if (!__csBusyEl) {
         __csBusyEl = document.createElement('div');
         __csBusyEl.id = 'cs_busy_bar';
-        // 整页大底部(视口最底)
-        __csBusyEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;' +
-            'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
-            'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
-            'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
-        document.body.appendChild(__csBusyEl);
+        // 扩展面板内容最末尾(面板边界之上, 普通文档流, 不盖输入框); 面板缺失退回视口大底部
+        const host = document.getElementById('extensions_settings');
+        if (host) {
+            __csBusyEl.style.cssText = 'position:static;display:block;margin:6px 0 0;' +
+                'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
+                'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
+                'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;border-radius:6px;';
+            host.appendChild(__csBusyEl);
+        } else {
+            __csBusyEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;' +
+                'background:var(--SmartThemeQuoteColor,#f0a35e);color:#1a1a1a;' +
+                'padding:6px 12px;font-weight:700;font-size:14px;text-align:center;' +
+                'box-shadow:0 2px 8px rgba(0,0,0,.4);pointer-events:none;';
+            document.body.appendChild(__csBusyEl);
+        }
     }
     const label = msg || '同步';
     __csBusyEl.textContent = (total && total > 0)
@@ -3956,7 +3966,25 @@ function __refreshCurRepoLine() {
     try { if (settings.lastConnectAt) { const d = new Date(settings.lastConnectAt); lastConn = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } } catch { }
     el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接测试」看各目录数量</small>`;
     const slot2 = document.getElementById('cs_slot2');
-    if (slot2) slot2.innerHTML = `<b>📦 槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}`;
+    if (slot2) {
+        const arr = Array.isArray(settings.connSlots) ? settings.connSlots : [];
+        const cur = `${settings.owner}/${settings.repo}`;
+        const curKey = String(settings.server || '') + '|' + cur;
+        const opts = arr.map((x, i) => {
+            const nm = (String(x.platform || '').includes('github') ? 'GitHub' : (String(x.platform || '').includes('gitlab.com') ? 'GitLab' : 'Gitee')) + ' · ' + x.repo;
+            const key = String(x.platform || '') + '|' + x.repo;
+            return `<option value="${i}" ${key === curKey ? 'selected' : ''}>${escapeHtml(nm)}</option>`;
+        }).join('');
+        slot2.innerHTML = `<b>📦 槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}` +
+            (arr.length ? `<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;align-items:center">
+                <select id="cs_slot_sel" style="flex:1;min-width:0;font-size:.8em;padding:2px 4px">${opts}</select>
+                <button type="button" id="cs_slot_del" class="cs-btn" style="padding:1px 8px;font-size:.72em">🗑 删除</button>
+            </div>` : '<div style="font-size:.72em;opacity:.7;margin-top:2px">保存配置后自动存为槽位，可一秒切换</div>');
+        const ss2 = document.getElementById('cs_slot_sel');
+        if (ss2) ss2.addEventListener('change', () => window.__csApplySlot(Number(ss2.value)));
+        const sd2 = document.getElementById('cs_slot_del');
+        if (sd2) sd2.addEventListener('click', () => window.__csDeleteSlot(Number((document.getElementById('cs_slot_sel') || {}).value)));
+    }
     __fillCloudUsage();
     try {
         if (typeof window.__csCheckUpdate === 'function') window.__csCheckUpdate();
@@ -4395,12 +4423,12 @@ function wirePanelEvents() {
     $('cs_roles_clr')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_role_sel"]').forEach((c) => { c.checked = false; }));
     $('cs_push_sel')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
-        try { await pushSelectedCharacters(sel); }
+        try { const r = await pushSelectedCharacters(sel); if (r && typeof r.ok === 'number') toastr.info(`上传角色完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}`); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
         catch (e) { toastr.error('上传选中角色失败：' + e.message); }
     });
     $('cs_pull_sel')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
-        try { await importSelectedCharacters(sel); }
+        try { const r = await importSelectedCharacters(sel); if (r && typeof r.ok === 'number') toastr.info(`导入角色完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}`); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
         catch (e) { toastr.error('导入选中角色失败：' + e.message); }
     });
     // 拖拽划选：按住左键拖动，经过的 checkbox 切换（首次经过=勾选；再次经过同一项=取消）。同一项一次拖动只toggle一次。
@@ -4474,6 +4502,8 @@ function wirePanelEvents() {
         settings.token = token;
         __refreshCurRepoLine();
         saveSettingsDebounced();
+        __refreshCurRepoLine();
+        __csUpsertSlot(settings.server || '', `${settings.owner}/${settings.repo}`, settings.token);
         __refreshCurRepoLine();
         toastr.success(owner ? `配置已保存（用户识别为：${owner}/${repo}）` : '配置已保存');
     });
@@ -5683,7 +5713,15 @@ ext: {
             return whereSets.cloudSet.has(nn) ? '<b class="cs-cln-where cs-cln-where-both">双端<span class="cs-where-diff" data-where-diff=""></span></b>' : '<b class="cs-cln-where cs-cln-where-local">仅本地</b>';
         };
         // 开/关状态芯片: 本地=可点按钮, 云端=只读(数据为云端记录)
-        const __cfgStatusChip = (drv, n, mode) => {
+        function __cfgTypeTag(drv, n) { // 拓展行显示安装类型(全局/用户), 来自 discover 的 type
+        try {
+            if (drv !== window.__cfgDrivers.ext) return '';
+            const t = (window.__extType && window.__extType[String(n)]) || '';
+            if (!t) return '';
+            return `<b class="cs-cln-en" style="cursor:default;opacity:.8" title="安装类型(为所有人=全局 / 仅为用户)">${t === 'global' ? '全局' : '用户'}</b>`;
+        } catch { return ''; }
+    }
+    function __cfgStatusChip(drv, n, mode) {
             if (typeof drv.statusOf !== 'function') return '';
             let st;
             try { st = drv.statusOf(n, mode); } catch { return ''; }
@@ -5710,7 +5748,7 @@ ext: {
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
         if (tgt) tgt.textContent = mode === 'cloud' ? '当前为云端视图，将导入云端选中' : '当前为本地视图，将上传本地选中';
         list.innerHTML = names.length
-            ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
+            ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}${__cfgTypeTag(drv, n)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
         __applyCfgFilter(); // 应用当前筛选(徽章已就位)
         __fillDiffBadges(); // 异步补差异徽章(存在性先行, 内容位渐进显示, 不阻塞列表)
@@ -5825,6 +5863,45 @@ ext: {
     }
     function __applyCfgFilter() { __applyRowFilter('cs_cfg_list', window.__cfgFilter || '全部'); }
     window.__applyCfgFilter = __applyCfgFilter;
+// 连接槽位: 保存自动去重入库 / 下拉秒切 / 删除
+    function __csUpsertSlot(platform, repo, token) {
+        try {
+            if (!repo) return;
+            const arr = (settings.connSlots = Array.isArray(settings.connSlots) ? settings.connSlots : []);
+            const same = arr.find((x) => x.platform === platform && x.repo === repo);
+            if (same) { same.token = token; same.lastConnectAt = settings.lastConnectAt || same.lastConnectAt; }
+            else arr.push({ platform, repo, token, lastConnectAt: settings.lastConnectAt || 0 });
+            saveSettingsDebounced();
+        } catch { }
+    }
+    window.__csApplySlot = async function (idx) {
+        try {
+            const arr = (settings.connSlots = Array.isArray(settings.connSlots) ? settings.connSlots : []);
+            const sl = arr[idx];
+            if (!sl) return;
+            const [o, r] = String(sl.repo || '').split('/');
+            settings.server = sl.platform || ''; settings.owner = o || ''; settings.repo = r || ''; settings.token = sl.token || '';
+            settings.lastConnectAt = Date.now();
+            saveSettingsDebounced();
+            const sel = document.getElementById('cs_platform'); if (sel) sel.value = settings.server;
+            const ri = document.getElementById('cs_repoinput'); if (ri) ri.value = settings.owner + '/' + settings.repo;
+            const ti = document.getElementById('cs_token'); if (ti) ti.value = settings.token;
+            __refreshCurRepoLine();
+            autoConnectIfConfigured();
+            toastr.success('已切换仓库：' + sl.repo);
+        } catch (e) { toastr.error('切换槽位失败：' + ((e && e.message) || e)); }
+    };
+    window.__csDeleteSlot = async function (idx) {
+        try {
+            const arr = (settings.connSlots = Array.isArray(settings.connSlots) ? settings.connSlots : []);
+            if (!arr[idx]) return;
+            const ok = await csConfirm('删除槽位', `删除连接槽位 <b>${escapeHtml(arr[idx].repo)}</b>?（不影响当前已保存配置）`);
+            if (!ok) return;
+            arr.splice(idx, 1);
+            saveSettingsDebounced();
+            __refreshCurRepoLine();
+        } catch { }
+    };
 // 上传诊断: URL缺失原因(供源头设备定位为何新设备无法重装)
     function urlNotesTxt(r2) {
         try {
@@ -5849,6 +5926,7 @@ ext: {
             const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
             if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 上传出错：没有返回结果'; st2.style.color = '#e66'; } return; }
             if (st2) { st2.textContent = `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}`; st2.style.color = r.fail ? '#e66' : ''; }
+            try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新视图
         } catch (e) {
             if (st2) { st2.textContent = '❌ 上传异常：' + ((e && e.message) || e); st2.style.color = '#e66'; }
             console.warn('[chat-sync] 上传异常', e);
@@ -5865,7 +5943,9 @@ ext: {
         if (st2) st2.style.color = '';
         if (st2) st2.textContent = '导入中…';
         const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
-        if (st2) st2.textContent = (r && window.__cfgTab === 'ext' && (r.fail || r.ok)) ? `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}` : '';
+        if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 导入出错：没有返回结果'; st2.style.color = '#e66'; } return; }
+        if (st2) { st2.textContent = `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}`; st2.style.color = r.fail ? '#e66' : ''; }
+        try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新视图(徽章/状态立变)
     });
     // 筛选 chips 点击(document委托, 面板重渲染不失效)
     document.addEventListener('click', (ev) => {
@@ -5899,6 +5979,7 @@ ext: {
         if (st2) st2.textContent = '删除中…';
         const r = await window.__cfgDrivers[window.__cfgTab].del(sel, mode);
         if (st2) st2.textContent = `删除完成：成功 ${r ? r.ok : 0} / 共 ${sel.length}${r && r.fail ? `，失败 ${r.fail}` : ''}`;
+        try { window.__renderCfgList(window.__cfgMode); } catch { } // 即时刷新视图
         // 精确失效(不整清缓存): 云端删→目录剔除被删文件; 本地删→只清差异缓存
         const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas' };
         try {
@@ -6086,6 +6167,7 @@ ext: {
         });
     })();
     $('cs_wb_push')?.addEventListener('click', async () => {
+        try { await new Promise(r2 => setTimeout(r2, 500)); window.__renderWorldbookList(window.__wbListMode); } catch { } // 即时刷新(内部 toastr 汇总)
         const sel = [...document.querySelectorAll('input[name="cs_wb_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { toastr.warning('请先勾选要上传的世界书'); return; }
         const st = $('cs_wb_status'); if (st) st.textContent = '上传中…';
@@ -6093,6 +6175,7 @@ ext: {
         if (st) st.textContent = '';
     });
     $('cs_wb_pull')?.addEventListener('click', async () => {
+        try { await new Promise(r2 => setTimeout(r2, 800)); window.__renderWorldbookList(window.__wbListMode); } catch { } // 即时刷新
         const sel = [...document.querySelectorAll('input[name="cs_wb_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { toastr.warning('请先勾选要导入的世界书'); return; }
         const st = $('cs_wb_status'); if (st) st.textContent = '导入中…';
