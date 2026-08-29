@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.10'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.11'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4086,37 +4086,54 @@ window.__csCheckUpdate = async function (opts) {
 // 一键自更新(走酒馆官方 /api/extensions/update)
 async function __csDoSelfUpdate(btn, remoteVer) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ 更新中…'; }
-    try {
-        // 官方 UI 同款: extensionName 用完整名(third-party/前缀, 拼路径多一层目录——此前缺前缀致404); 双路 global
-        const combos = [
-            { n: 'third-party/st-chat-sync', g: false },
-            { n: 'st-chat-sync', g: false },
-            { n: 'third-party/st-chat-sync', g: true },
-            { n: 'st-chat-sync', g: true },
-        ];
-        let lastErr = '';
-        for (const c of combos) {
-            try {
-                const resp = await fetch('/api/extensions/update', {
-                    method: 'POST', headers: getRequestHeaders(),
-                    body: JSON.stringify({ extensionName: c.n, global: c.g }),
-                });
-                if (resp.status === 404) { lastErr = '404'; continue; }
-                if (!resp.ok) { lastErr = 'HTTP ' + resp.status; continue; }
-                const j = await resp.json().catch(() => ({}));
-                if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
-                if (btn) btn.textContent = '✅ 已更新';
-                toastr.success('✅ 插件已更新到 v' + remoteVer + '，2 秒后自动刷新', null, { timeOut: 4000 });
-                setTimeout(() => location.reload(), 2200);
-                return;
-            } catch (e2) { lastErr = String(e2).slice(0, 80); }
-        }
-        if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新' + (remoteVer && remoteVer !== '最新版' ? '至 v' + remoteVer : ''); }
-        toastr.error('自更新失败：' + lastErr + '<br>请到扩展管理删除后用 URL 重装一次', null, { escapeHtml: false, timeOut: 8000 });
-    } catch (e) {
-        if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新' + (remoteVer && remoteVer !== '最新版' ? '至 v' + remoteVer : ''); }
-        toastr.error('自更新失败：' + e.message + '<br>可到「扩展管理」手动点更新', null, { escapeHtml: false, timeOut: 6000 });
+    const REPO_URL = 'https://gitee.com/satosaki/tavern-synchronization-plugin.git';
+    // 阶段1: 尝试官方 update 接口(4组合)
+    const combos = [
+        { n: 'st-chat-sync', g: true }, { n: 'st-chat-sync', g: false },
+        { n: 'third-party/st-chat-sync', g: true }, { n: 'third-party/st-chat-sync', g: false },
+    ];
+    let lastErr = '';
+    for (const c of combos) {
+        try {
+            const resp = await fetch('/api/extensions/update', {
+                method: 'POST', headers: getRequestHeaders(),
+                body: JSON.stringify({ extensionName: c.n, global: c.g }),
+            });
+            if (resp.status === 404) { lastErr = '404'; continue; }
+            if (!resp.ok) { lastErr = 'HTTP ' + resp.status; continue; }
+            const j = await resp.json().catch(() => ({}));
+            if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
+            if (btn) btn.textContent = '✅ 已更新';
+            toastr.success('✅ 插件已更新到 v' + remoteVer + '，2 秒后自动刷新', null, { timeOut: 4000 });
+            setTimeout(() => location.reload(), 2200);
+            return;
+        } catch (e2) { lastErr = String(e2).slice(0, 80); }
     }
+    // 阶段2: update 全灭 → 自动删除旧目录 + URL 重装(自愈式更新)
+    toastr.info('常规更新通道不可用，正在通过重装方式更新…', null, { timeOut: 6000 });
+    if (btn) btn.textContent = '⏳ 重装更新中…';
+    // 删除旧扩展(试两种 global)
+    for (const g of [true, false]) {
+        try {
+            const r = await fetch('/api/extensions/delete', {
+                method: 'POST', headers: getRequestHeaders(),
+                body: JSON.stringify({ extensionName: 'st-chat-sync', global: g }),
+            });
+            if (r.ok) break;
+        } catch { }
+    }
+    // 重装
+    try {
+        const r = await fetch('/api/extensions/install', {
+            method: 'POST', headers: getRequestHeaders(),
+            body: JSON.stringify({ url: REPO_URL, global: true }),
+        });
+        if (!r.ok) throw new Error('重装失败 HTTP ' + r.status);
+        toastr.success('✅ 插件已通过重装方式更新到 v' + remoteVer + '，3 秒后自动刷新', null, { timeOut: 4000 });
+        setTimeout(() => location.reload(), 3000);
+        return;
+    } catch (e3) { toastr.error('重装也失败：' + ((e3 && e3.message) || e3)); }
+    if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新'; }
 }
 // 🔍 手动检测: 四态结果直接显示在按钮上(有新版/最新/本地更高/失败), 3 秒后还原待机
 window.__csManualCheck = async function (btn) {
