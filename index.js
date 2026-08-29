@@ -5186,7 +5186,12 @@ async function __discoverExts() {
     window.__extDisplayBy = window.__extDisplayBy || {};
     // 详情( url/branch/commit )并发取
     window.__extMeta = window.__extMeta || {};
-    await Promise.all(out.map(async (full) => {
+    // 后台异步填充元数据(不阻塞列表渲染); 60s 缓存
+    if (window.__extMetaFetchedAt && Date.now() - window.__extMetaFetchedAt < 60000 && out.every((f) => window.__extMeta[f])) {
+        return out.sort(); // 全部有缓存, 跳过
+    }
+    window.__extMetaFetchedAt = Date.now();
+    Promise.all(out.map(async (full) => {
         const sname = String(full).split('/').pop();
         const jobs = [];
         if (!window.__extDisplayBy[sname]) {
@@ -5242,7 +5247,10 @@ async function __discoverExts() {
             })().catch(() => { }));
         }
         await Promise.all(jobs);
-    }));
+    })).then(() => {
+        window.__extMetaReady = true;
+        if (window.__cfgTab === 'ext') { try { window.__renderCfgList(window.__cfgMode); } catch { } }
+    }).catch(() => { });
     return out.sort();
 }
 // 扩展名 → extension_settings 键: 无通用规则, 用特例表+规范化匹配(源码实证: JSR=tavern_helper, kimi=kimi_reasoning_injector)
