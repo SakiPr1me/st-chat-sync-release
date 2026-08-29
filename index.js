@@ -21,7 +21,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.11.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.11.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4085,7 +4085,7 @@ window.__csCheckUpdate = async function (opts) {
         const remoteVer = await __csFetchRemoteVer();
         if (__csCompareVer(remoteVer, PLUGIN_VERSION) > 0) {
             if (opts && opts.auto && settings.autoUpdate) {
-                toastr.info('🔥 检测到新版本 v' + remoteVer + '，自动更新中…', null, { timeOut: 4000 });
+                toastr.info('🌐 检测到新版本 v' + remoteVer + '，自动更新中…', null, { timeOut: 4000 });
                 __csDoSelfUpdate(null, remoteVer);
             } else __csRenderUpdateBtn(remoteVer);
         }
