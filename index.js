@@ -23,7 +23,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.14'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.15'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -46,7 +46,7 @@ const DEFAULT_SETTINGS = {
     floatImportChat: true,    // 悬浮球内「导入云端至当前聊天」(功能型, 蓝色)
     menuUploadChat: true,     // 左下角拓展菜单入口「上传当前聊天」
     menuImportChat: true,     // 左下角拓展菜单入口「导入云端至当前聊天」
-    floatPages: { conn: true, roles: true, wb: true, cfg: true }, // 悬浮球面板入口(打开对应页面)逐页开关
+    floatPages: { conn: true, roles: true, char: true, wb: true, cln: true, cfg: true }, // 悬浮球面板入口(打开对应页面)逐页开关
 };
 
 // 统一从 settings 读；未初始化就建
@@ -4263,9 +4263,11 @@ window.__csManualCheck = async function (btn) {
                         <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_import" style="margin:0" ${settings.menuImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">菜单「导入云端至当前聊天」</span></label>
                     </div>
                     </details>
+                </div>
 
+                <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-user cs-ico" aria-hidden="true"></i>角色卡+绑定世界书+聊天同步</summary>
+                    <summary><i class="fa-solid fa-comments cs-ico" aria-hidden="true"></i>当前聊天 / 角色同步</summary>
                     <div class="cs-body">
                         <div id="${id}_char_display" class="cs-current">当前角色：<b>${escapeHtml(charName || '（未打开单人角色）')}</b>${worldName ? `<br>绑定世界书：<b>${escapeHtml(worldName)}</b>` : ''}</div>
                         <p class="cs-hint" style="margin:6px 0 2px">当前聊天（增量上传 / 导入）</p>
@@ -6944,6 +6946,7 @@ function ensurePanel() {
 // ===== 面板卡片样式（参照余温工具箱的卡片化折叠块：主题变量 + 圆角 + hover，差异化非搬运）=====
 const CHAT_SYNC_CSS = `
 .cs-card { border:1px solid var(--SmartThemeBorderColor); border-left:3px solid var(--SmartThemeQuoteColor); border-radius:12px; overflow:hidden; background:rgba(128,128,128,0.10); margin-top:10px; }
+#cs_float_win .cs-card { margin-top:0; border:0; background:transparent; }
 .cs-card.cs-last { margin-bottom:28px; }
 .cs-fold > summary { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:#ececec; background:rgba(44,44,52,0.85); border-bottom:1px solid rgba(255,255,255,0.18); list-style:none; outline:none; }
 .cs-fold > summary::-webkit-details-marker { display:none; }
@@ -7287,15 +7290,16 @@ async function autoConnectIfConfigured() {
 // 条目: 功能区(直接执行, 彩色, 最前, 分隔线) + 面板区(打开对应页面, 橙); 勾选控制见 settings.floatPages
 const CS_FLOAT_PAGES = [
     { key: 'conn', ico: 'fa-plug', label: '连接配置', kw: '连接配置' },
-    { key: 'roles', ico: 'fa-user', label: '角色·聊天', kw: '角色卡+绑定世界书+聊天同步' },
+    { key: 'roles', ico: 'fa-comments', label: '当前聊天·角色', kw: '当前聊天 / 角色同步' },
+    { key: 'char', ico: 'fa-user', label: '角色卡', kw: '角色卡+绑定世界书+聊天同步' },
     { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书同步' },
+    { key: 'cln', ico: 'fa-broom', label: '聊天清理器', kw: '聊天记录清理器' },
     { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置同步' },
 ];
 function csFloatPageEnabled(key) {
     const fp = settings.floatPages;
     if (fp && typeof fp[key] === 'boolean') return fp[key];
-    if (Array.isArray(settings.floatPageKeys)) return settings.floatPageKeys.includes(key); // 兼容旧数组存档
-    return true;
+    return true; // 新入口默认可选(0.12.6旧 floatPageKeys 数组存档不再参与, 否则会挡掉后来新增的入口)
 }
 // 0.12.8 面板型入口改"独立浮窗"(仿余温openCardFloat): 把原卡 DOM 搬进 fixed 浮窗(绑定跟元素走, 全部交互原样可用), 改完移回原位
 // ——原"滚动到面板内卡片"在面板未开时点不出来(用户反馈"点不出页面来")
@@ -7523,6 +7527,7 @@ jQuery(() => {
     // 页面加载完成直接挂载设置面板到 #extensions_settings（ST 标准扩展设置区）
     ensurePanel();
     __refreshCurRepoLine();
+    if (Array.isArray(settings.floatPageKeys)) { delete settings.floatPageKeys; saveSettingsDebounced(); } // 0.12.15: 清理0.12.6旧存档, 防误导新入口
     __csUpdateFloat();
     __csUpdateMenuEntries();
     // 检测远程新版本(面板稳定后); 勾选了「自动更新」则启动即自动升级
