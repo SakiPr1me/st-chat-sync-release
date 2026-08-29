@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.25'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.26'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4382,8 +4382,10 @@ window.__csManualCheck = async function (btn) {
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_cln_del" type="button" class="cs-btn cs-danger-btn" title="删除勾选的聊天：本地+云端同名一起删">🗑 删除选中（本地+云端同名同删）</button>
                             <input type="text" id="cs_search_cln" class="text_pole" placeholder="🔍搜索…" style="width:150px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cln_listbox" title="按聊天名快速过滤">
+                            <input type="text" id="cs_search_content" class="text_pole" placeholder="🔎搜内容…" style="width:130px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" title="扫该角色全部本地聊天文件内容，列出命中聊天+楼层+片段">
                         </div>
                         <p id="${id}_cln_status" class="cs-hint" style="margin-top:4px"></p>
+                        <div id="${id}_cln_content_results" class="cs-hint" style="margin-top:4px"></div>
                     </div>
                     </details>
                 </div>
@@ -6558,6 +6560,64 @@ ext: {
         window.__csKwTimer = setTimeout(() => {
             __applyRowFilter(kwTgt, window['__rowFilter_' + kwTgt] || '全部');
         }, 200);
+    });
+    // 0.12.26 清理器内容搜索: 扫该角色全部本地聊天文件楼层文本(500ms防抖)
+    document.addEventListener('input', (e) => {
+        if (e.target && e.target.id === 'cs_search_content') {
+            clearTimeout(window.__csContentTimer);
+            window.__csContentTimer = setTimeout(() => { try { __clnContentSearch(e.target.value); } catch (ex) { console.warn('[chat-sync] 内容搜索异常', ex); } }, 500);
+        }
+    });
+    window.__clnContentSearch = async function (kw) {
+        const res = document.getElementById('cs_cln_content_results');
+        if (!res) return;
+        kw = String(kw || '').trim().toLowerCase();
+        if (!kw) { res.innerHTML = ''; return; }
+        const rows = (window.__clnRows || []).filter((r) => r.where !== 'cloud'); // 只扫可读的本地文件
+        if (!rows.length) { res.innerHTML = '（该角色无本地聊天文件——内容搜索只看本地文件）'; return; }
+        const av = getAvatarFor(window.__clnChar || ''); // 与清理器列表同源(characterId取不到时为空)
+        const hits = [];
+        res.innerHTML = '🔎 扫描中 ' + rows.length + ' 个聊天…';
+        const LIMIT = 80;
+        const slice = rows.slice(0, LIMIT);
+        for (let i = 0; i < slice.length; i++) {
+            const r = slice[i];
+            if ((i + 1) % 10 === 0) res.innerHTML = '🔎 扫描中 ' + (i + 1) + '/' + rows.length + '…';
+            try {
+                const msgs = await readLocalChatMsgs(av, r.fileName);
+                const floors = [];
+                let snippet = '';
+                (Array.isArray(msgs) ? msgs : []).forEach((m, idx) => {
+                    const txt = (m && typeof m.mes === 'string') ? m.mes : '';
+                    if (txt && txt.toLowerCase().includes(kw)) {
+                        floors.push(idx + 1);
+                        if (!snippet) snippet = txt.replace(/\s+/g, ' ').slice(0, 90);
+                    }
+                });
+                if (floors.length) hits.push({ name: String(r.fileName).replace(/\.jsonl$/i, ''), file: r.fileName, floors, snippet });
+            } catch { }
+        }
+        if (!hits.length) { res.innerHTML = '🔎 未命中：' + slice.length + ' 个本地聊天里没有包含「' + kw + '」的内容'; return; }
+        res.innerHTML = '<div style="opacity:.9;margin-bottom:2px">🔎 命中 ' + hits.length + '/' + slice.length + ' 个聊天（含「' + kw + '」；点卡片定位到列表）：</div>' +
+            hits.map((h) => '<div class="cs-cln-cres" data-file="' + escapeHtml(h.file) + '" style="cursor:pointer;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;margin-bottom:4px;background:rgba(255,255,255,0.04)">' +
+                '<b style="font-size:.82em">' + escapeHtml(h.name) + '</b> <span style="font-size:.75em;color:var(--SmartThemeQuoteColor,#f0a35e)">' + h.floors.slice(0, 20).join(',') + (h.floors.length > 20 ? '…' : '') + '</span>' +
+                '<div style="font-size:.72em;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(h.snippet) + '</div></div>').join('');
+    };
+    // 点结果卡片 → 列表定位该聊天行并高亮
+    document.addEventListener('click', (e) => {
+        const cr = e.target && e.target.closest ? e.target.closest('.cs-cln-cres') : null;
+        if (!cr) return;
+        const file = cr.dataset.file;
+        const box = document.getElementById('cs_cln_listbox');
+        const row = box && [...box.querySelectorAll('.cs-role-item')].find((x) => (x.dataset.file || '') === file);
+        if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.style.background = 'rgba(240,163,94,.35)'; setTimeout(() => { row.style.background = ''; }, 1600); }
+    });
+    // 切换角色/视图时清空内容结果
+    document.addEventListener('change', (e) => {
+        if (e.target && (e.target.id === 'cs_cln_char' || e.target.id === 'cs_cln_view')) {
+            const rr = document.getElementById('cs_cln_content_results');
+            if (rr) rr.innerHTML = '';
+        }
     });
     document.addEventListener('change', (e) => {
         if (e.target && e.target.id === 'cs_auto_upd') {
