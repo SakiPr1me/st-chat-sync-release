@@ -13,7 +13,7 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 window.__stChatSyncLoaded = true;
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.10.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.10.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4110,9 +4110,11 @@ async function __csDoSelfUpdate(btn, remoteVer) {
 window.__csManualCheck = async function (btn) {
     // 检测失败后的再点: 直接走官方更新(更新不需要令牌/不需要检测成功), 点完即尝试升到最新
     if (btn.dataset.forceUpdate) {
+        const ver = btn.dataset.forceUpdVer || '最新版';
         delete btn.dataset.forceUpdate;
+        delete btn.dataset.forceUpdVer;
         delete btn.dataset.done;
-        __csDoSelfUpdate(btn, '最新版');
+        __csDoSelfUpdate(btn, ver);
         return;
     }
     if (btn.dataset.busy) return;
@@ -4125,9 +4127,9 @@ window.__csManualCheck = async function (btn) {
     try {
         const remoteVer = await __csFetchRemoteVer();
         const cmp = __csCompareVer(remoteVer, PLUGIN_VERSION);
-        if (cmp > 0) { txt = '✓ 可更新至 v' + remoteVer; cls = 'newer'; }
-        else if (cmp === 0) { txt = '✅ 已是最新'; cls = 'same'; }
-        else { txt = '⚠ 本地更高'; cls = 'higher'; }
+        if (cmp > 0) { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        else if (cmp === 0) { txt = '✅ 已是最新'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
+        else { txt = '⚠ 本地更高'; cls = 'higher'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
         title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）';
     } catch (e) {
         txt = '❌ 检测失败';
