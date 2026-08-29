@@ -21,7 +21,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.11.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.11.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4109,8 +4109,8 @@ async function __csDoSelfUpdate(btn, remoteVer) {
             const j = await r.json().catch(() => ({}));
             if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
             if (btn) btn.textContent = '✅ 已更新';
-            toastr.success('✅ 插件已更新到 v' + remoteVer + '，2 秒后自动刷新', null, { timeOut: 4000 });
-            setTimeout(() => location.reload(), 2200);
+            toastr.success('✅ 插件已更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
+            (window.__kimiCoordReload || ((ms) => setTimeout(() => location.reload(), ms || 2200)))(3000); // 协调刷新：多插件并发更新由最后完成者统一刷新
             return;
         } catch (e2) { }
     }
@@ -4132,8 +4132,8 @@ async function __csDoSelfUpdate(btn, remoteVer) {
             body: JSON.stringify({ url: REPO_URL, global: true }),
         });
         if (!ri.ok) throw new Error('HTTP ' + ri.status);
-        toastr.success('✅ 已通过重装方式更新到 v' + remoteVer + '，3 秒后刷新', null, { timeOut: 4000 });
-        setTimeout(() => location.reload(), 3000);
+        toastr.success('✅ 已通过重装方式更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
+        (window.__kimiCoordReload || ((ms) => setTimeout(() => location.reload(), ms || 3000)))(3000);
         return;
     } catch (e3) { toastr.error('重装也失败：' + ((e3 && e3.message) || e3) + '。请手动到扩展管理删除后重装。'); }
     if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新'; }
