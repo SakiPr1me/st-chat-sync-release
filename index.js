@@ -15,10 +15,10 @@ window.__stChatSyncLoaded = true;
 // 用于自更新: 不硬编码名字, 无论装在什么文件夹名下都能正确调官方接口
 try {
     const __selfUrl = new URL(import.meta.url);
-    const __parts = __selfUrl.pathname.split('/');
-    const __tpIdx = __parts.lastIndexOf('third-party');
-    window.__csSelfFolder = __tpIdx >= 0 ? __parts.slice(__tpIdx).join('/') : __parts.slice(-2).join('/');
-} catch { window.__csSelfFolder = 'third-party/st-chat-sync'; }
+    const __parts = __selfUrl.pathname.split('/').filter(Boolean);
+    __parts.pop(); // 去掉 index.js
+    window.__csSelfFolder = __parts[__parts.length - 1]; // 文件夹名(如 st-chat-sync)
+} catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
 const PLUGIN_VERSION = '0.10.14'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
@@ -4095,15 +4095,14 @@ window.__csCheckUpdate = async function (opts) {
 async function __csDoSelfUpdate(btn, remoteVer) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ 更新中…'; }
     // 用自身实际文件夹名调接口(不硬编码)
-    const selfName = window.__csSelfFolder || 'third-party/st-chat-sync';
-    const pureName = selfName.split('/').pop();
+    const selfName = window.__csSelfFolder || 'st-chat-sync';
     const REPO_URL = 'https://gitee.com/satosaki/tavern-synchronization-plugin.git';
     // 阶段1: 官方 update 接口
     for (const g of [true, false]) {
         try {
             const r = await fetch('/api/extensions/update', {
                 method: 'POST', headers: getRequestHeaders(),
-                body: JSON.stringify({ extensionName: pureName, global: g }),
+                body: JSON.stringify({ extensionName: selfName, global: g }),
             });
             if (r.status === 404) continue;
             if (!r.ok) { lastErr_g = g; lastErr_s = 'HTTP ' + r.status; continue; }
@@ -4122,7 +4121,7 @@ async function __csDoSelfUpdate(btn, remoteVer) {
         try {
             const rd = await fetch('/api/extensions/delete', {
                 method: 'POST', headers: getRequestHeaders(),
-                body: JSON.stringify({ extensionName: pureName, global: g }),
+                body: JSON.stringify({ extensionName: selfName, global: g }),
             });
             if (rd.ok) break;
         } catch { }
