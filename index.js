@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.33'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.34'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5087,6 +5087,15 @@ function wirePanelEvents() {
     async function __clnShowPreview(fileName) {
         const pane = document.getElementById('cs_cln_preview');
         if (!pane) return;
+        // 0.12.35 双向联动: 弹窗里预览谁, 外面清理器列表就持久标记谁(关掉弹窗也能看出当前是哪条)
+        try {
+            const outerBox = document.getElementById('cs_cln_listbox');
+            if (outerBox) {
+                outerBox.querySelectorAll('.cs-role-item.cs-cln-current').forEach((el) => el.classList.remove('cs-cln-current'));
+                const orow = [...outerBox.querySelectorAll('.cs-role-item')].find((x) => (x.dataset.file || '') === fileName);
+                if (orow) { orow.classList.add('cs-cln-current'); orow.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+            }
+        } catch { }
         pane.dataset.retryFile = fileName;
         if (!pane.dataset.retryBound) {
             pane.dataset.retryBound = '1';
@@ -5147,6 +5156,7 @@ function wirePanelEvents() {
         list.innerHTML = shown.map((r) => `<div class="cs-role-item cs-cln-mrow" data-file="${escapeHtml(r.fileName)}" title="${escapeHtml(r.fileName)} ｜ latest: ${escapeHtml(r.lastTime || '?')}">
             <input type="checkbox" value="${escapeHtml(r.fileName)}" name="cs_cln_msel">
             <span class="cs-cln-fname">${escapeHtml(r.fileName)}</span>
+            <b style="color:var(--SmartThemeQuoteColor,#f0a35e);font-size:.82em;flex:none" title="楼层数">${r.mesCount ?? '?'}楼</b>
             <b class="cs-cln-size">${escapeHtml(String(r.size || '?'))}</b>
         </div>`).join('');
         // 点行(非勾选框) → 切换预览
@@ -7234,6 +7244,8 @@ const CHAT_SYNC_CSS = `
 #chat_sync_settings select option, #cs_float_win select option, #cs_quick_float select option, .cs-cln-modal select option { background:var(--SmartThemeBlurTintColor,rgba(0,0,0,0.08)); color:var(--SmartThemeBodyColor, inherit); }
 #chat_sync_settings input[type='checkbox'], #cs_float_win input[type='checkbox'], #cs_quick_float input[type='checkbox'], .cs-cln-modal input[type='checkbox'] { accent-color:var(--SmartThemeQuoteColor,#f0a35e); }
 
+/* 0.12.35: 弹窗当前预览行 → 外面列表持久标记(橙色淡底) */
+.cs-cln-row.cs-cln-current { background: rgba(240, 163, 94, 0.22) !important; outline: 1px solid var(--SmartThemeQuoteColor, #f0a35e); border-radius: 4px; }
 /* 0.12.28: 手机端嵌套滚动(touch-action 声明纵向平移由本容器处理, 防止滑动被外层抽走) */
 .cs-roles, .cs-cln-fbody, #cs_cln_mlist, #cs_cln_preview { touch-action: pan-y; -webkit-overflow-scrolling: touch; }
 `;
