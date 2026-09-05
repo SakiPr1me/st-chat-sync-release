@@ -974,30 +974,33 @@ async function pushCurrentCharacter(charName, opts = {}) {
 
 // 批量上传：遍历本地所有角色，逐个按名字同步（卡+世界书+全部聊天）。不切换当前聊天/角色。
 async function pushAllCharacters(skipConfirm = false, presetDecision = null) {
-    // 防连点: 整批期间持锁, 进行中再点直接忽略(否则两轮循环并发推同一批角色)
-    if (!__csTryBusy()) { toastr.warning('已有同步在进行中，本次忽略'); return; }
+    // 0.12.27 修: 此前顶部抢全局同步锁且整批持有, 而每个角色内部 pushCurrentCharacter 还要再抢同一把锁——
+    // 必然抢不到→静默跳过并返回false→外层还把false计成"成功"→假成功实际什么都没传(用户实报)。
+    // 改: 独立防连点标志(不占同步锁), 锁由每个角色的 pushCurrentCharacter 自持
+    if (window.__csAllPushRunning) { toastr.warning('全部角色上传已在进行中，本次忽略'); return; }
+    window.__csAllPushRunning = true;
     try {
     const chars = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group'));
     const total = chars.length;
     if (!total) { toastr.warning('本地没有可上传的角色'); return; }
-    // 防误点：全部级操作先确认一次（增量机制会跳过已最新的，不会重复刷）
+    // 防误点：全部级操作先确认一次（增量机制会跳过已最新的，不会重复上传）
     if (!await csConfirm('⚠ 上传全部角色', `将把本地 <b>${total}</b> 个角色同步到云端（内容一致的会自动跳过，不会重复上传）。<br>确定开始吗？`)) return;
-    // ⚠️ 不在外层拿锁：pushCurrentCharacter 内部自己拿锁（外层再拿会全部误报"已有同步在进行中"）
     setStatus(`正在同步全部角色：0/${total}…`);
-    let ok = 0, fail = 0;
-    const failedNames = [];
+    let ok = 0, fail = 0, skipped = 0;
+    const failedNames = []; const skippedNames = [];
     for (let i = 0; i < total; i++) {
         const name = chars[i].name;
         setStatus(`正在同步全部角色：${i + 1}/${total}（${name}）…`);
         showBusy(i + 1, total, `上传全部角色`);
         try {
-            await pushCurrentCharacter(name, { presetDecision });
-            ok++;
+            const r = await pushCurrentCharacter(name, { presetDecision });
+            if (r === false) { skipped++; skippedNames.push(name); } // 内部抢锁失败=被跳过, 如实计
+            else ok++;
         } catch (e) { fail++; failedNames.push(name); console.warn('[chat-sync] 角色同步失败', name, e); setStatus(`角色「${name}」同步失败`); }
     }
     setStatus('');
-    toastr.success(`全部角色同步完成：成功 ${ok}，失败 ${fail} / 共 ${total}${failedNames.length ? `（失败：${csShortList(failedNames)}）` : ''}`);
-    } finally { __csReleaseBusy(); }
+    toastr.success(`全部角色同步完成：成功 ${ok}，失败 ${fail}${skipped ? `，跳过 ${skipped}` : ''} / 共 ${total}${failedNames.length ? `（失败：${csShortList(failedNames)}）` : ''}${skippedNames.length ? `（跳过：${csShortList(skippedNames)}）` : ''}`);
+    } finally { window.__csAllPushRunning = false; }
 }
 
 // 批量导入：遍历云端 sync/ 下所有角色，逐个整包导入（卡+世界书+全部聊天）。用于换设备迁移。
