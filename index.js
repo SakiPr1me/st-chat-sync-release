@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.28'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.29'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1795,30 +1795,19 @@ function previewAfterContent(mes) {
 async function getCleanerPreviewFull(charName, fileName) {
     const avatar = getAvatarFor(charName);
     let msgs = null;
-    const stem = String(fileName).replace(/\.jsonl$/i, '');
+    // 0.12.29 本地读取复用 readLocalChatMsgs(自动补.png——TT /api/chats/get 严格校验 avatar_url, 裸stem会返回空数组=读不到;
+    // 内部已兼容两端返回形态)。此前裸 fetch 用未补.png 的 avatar → 本地有内容也"读不到"。
     if (avatar) {
-        try {
-            const r = await fetch('/api/chats/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar, file_name: stem }) });
-            // ⚠️ 两端返回形态不同: ST={chat:[...]}, TT=数组([header,...msgs]) —— 都要兼容
-            if (r.ok) {
-                const j = await r.json();
-                if (Array.isArray(j)) msgs = j.filter((m) => m && m.mes !== undefined);
-                else if (j && Array.isArray(j.chat)) msgs = j.chat;
-            }
-        } catch { }
+        try { const m0 = await readLocalChatMsgsWithRetry(avatar, fileName, 5); if (Array.isArray(m0) && m0.length) msgs = m0; } catch { }
     }
-    if (!msgs) { // 仅云端 → 先试基础文件
+    if (!msgs || !msgs.length) { // 仅云端 → 先试基础文件
         const c = await Gitee.getText(`sync/${charName}/chats/${fileName}`).catch(() => null);
-        if (c) msgs = parseJsonlMessages(c.content);
+        if (c) { const m1 = parseJsonlMessages(c.content); if (m1.length) msgs = m1; }
     }
-    if (!msgs) { // 0.12.28: 大聊天是分段存储(.p001+manifest, 基础.jsonl不存在)→用分段感知的 getCloudChat 读
-        try { const c = await getCloudChat(`sync/${charName}/chats/${fileName}`); if (c && c.content) msgs = parseJsonlMessages(c.content); } catch { }
+    if (!msgs || !msgs.length) { // 大聊天是分段存储(.p001+manifest, 基础.jsonl不存在)→用分段感知的 getCloudChat 读
+        try { const c = await getCloudChat(`sync/${charName}/chats/${fileName}`); if (c && c.content) { const m2 = parseJsonlMessages(c.content); if (m2.length) msgs = m2; } } catch { }
     }
-    if (!msgs) { // 0.12.28: 最后兜底——本地备选读法(部分环境 /api/chats/get 形态不同)
-        try { msgs = await readLocalChatMsgs(avatar, fileName); } catch { }
-        if (!Array.isArray(msgs) || !msgs.length) msgs = null;
-    }
-    if (!msgs) return null;
+    if (!msgs || !msgs.length) return null;
     // 返回全部楼层(截断单楼超长文本防内存爆) —— 弹窗里 上一楼/下一楼/跳转 用；默认楼层=最新一层非 user
     const floors = msgs.map((m) => ({ is_user: !!(m && m.is_user), name: String((m && m.name) || ''), mes: String((m && m.mes) || '').slice(0, 20000) }));
     let defIdx = floors.length - 1;
@@ -3708,6 +3697,18 @@ async function readLocalChatMsgs(avatar, fileName) {
         return data.filter((m) => m && typeof m === 'object' && m.mes !== undefined && Object.keys(m).length > 0);
     } catch (e) { console.warn('[chat-sync] 读本地聊天失败(按无本地处理)', fileName, e); return []; }
 }
+// 0.12.29: TT 后端 /api/chats/get 对同一文件会闪发空数组(索引/缓存竞态, 真机实测一好一坏交替)——空结果短重试
+async function readLocalChatMsgsWithRetry(avatar, fileName, tries) {
+    const n = Math.max(1, tries || 2);
+    let last = [];
+    for (let i = 0; i < n; i++) {
+        const m = await readLocalChatMsgs(avatar, fileName);
+        if (Array.isArray(m) && m.length) return m;
+        last = m;
+        if (i < n - 1) await new Promise((r) => setTimeout(r, 800 * Math.pow(2, i))); // 递增退避: TT坏缓存窗口约数秒, 密集重试会全落在窗口内
+    }
+    return last;
+}
 
 // 纯逻辑判定（与 test-import-merge.js 单测一致）：
 // identical/local_superset → {action:'skip'}；cloud_superset → {action:'fastforward', merged, added}；diverged → {action:'diverged'}
@@ -5087,7 +5088,7 @@ function wirePanelEvents() {
         if (pane.dataset.cur !== fileName) return; // 已切到别的行, 丢弃过期结果
         if (!d || !d.floors || !d.floors.length) {
             const r2 = window.__clnRows.find((x) => x.fileName === fileName);
-            pane.innerHTML = `<div class="cs-cln-ptitle"><b>${escapeHtml(fileName)}</b><br><small>最新修改时间：${escapeHtml(r2 ? r2.lastTime : '?')}</small></div><div class="cs-cln-ptext">（读不到内容：可能仅云端且下载失败）</div>`;
+            pane.innerHTML = `<div class="cs-cln-ptitle"><b>${escapeHtml(fileName)}</b><br><small>最新修改时间：${escapeHtml(r2 ? r2.lastTime : '?')}</small></div><div class="cs-cln-ptext">（读取失败或该聊天为空——酒馆后端偶发返回空，稍等几秒再点一次通常可恢复）</div>`;
             return;
         }
         window.__clnPreview = { fileName, floors: d.floors, idx: d.defIdx, defIdx: d.defIdx };
@@ -6596,7 +6597,7 @@ ext: {
             const r = slice[i];
             if ((i + 1) % 10 === 0) res.innerHTML = '🔎 扫描中 ' + (i + 1) + '/' + rows.length + '…';
             try {
-                const msgs = await readLocalChatMsgs(av, r.fileName);
+                const msgs = await readLocalChatMsgsWithRetry(av, r.fileName, 2);
                 const floors = [];
                 let snippet = '';
                 (Array.isArray(msgs) ? msgs : []).forEach((m, idx) => {
