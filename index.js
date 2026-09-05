@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.34'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.35'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1801,7 +1801,10 @@ async function getCleanerPreviewFull(charName, fileName) {
         try {
             const m0 = await readLocalChatMsgsWithRetry(avatar, fileName, 40, (i, n) => {
                 const pp = document.getElementById('cs_cln_preview');
-                if (pp) pp.innerHTML = '<div class="cs-cln-ptext">⏳ 酒馆后端索引预热中（老库首次打开偶发，会自动重试到成功）… 已重试 ' + i + '/' + n + '</div>';
+                if (!pp) return;
+                // 0.12.36: 面板已显示同文件内容(并发读取先成功)→不覆盖, 后台静默重试
+                if (pp.dataset.cur === fileName && pp.querySelector('.cs-cln-fbody')) return;
+                pp.innerHTML = '<div class="cs-cln-ptext">⏳ 酒馆后端索引预热中（老库首次打开偶发，会自动重试到成功）… 已重试 ' + i + '/' + n + '</div>';
             }, 4000);
             if (Array.isArray(m0) && m0.length) msgs = m0;
         } catch { }
@@ -5087,6 +5090,8 @@ function wirePanelEvents() {
     async function __clnShowPreview(fileName) {
         const pane = document.getElementById('cs_cln_preview');
         if (!pane) return;
+        if (window.__clnPreviewInflight === fileName) return; // 0.12.36: 同文件已在读取中(双击/竞态)→跳过
+        window.__clnPreviewInflight = fileName;
         // 0.12.35 双向联动: 弹窗里预览谁, 外面清理器列表就持久标记谁(关掉弹窗也能看出当前是哪条)
         try {
             const outerBox = document.getElementById('cs_cln_listbox');
@@ -5115,9 +5120,12 @@ function wirePanelEvents() {
         pane.innerHTML = '<div class="cs-cln-ptext">读取中…</div>';
         const d = await getCleanerPreviewFull(window.__clnChar, fileName).catch(() => null);
         if (pane.dataset.cur !== fileName) return; // 已切到别的行, 丢弃过期结果
+        if (window.__clnPreviewInflight === fileName) window.__clnPreviewInflight = null;
+        if (pane.querySelector('.cs-cln-fbody') && window.__clnPreview && window.__clnPreview.fileName === fileName) return; // 并发先行者已渲染本文件
         if (!d || !d.floors || !d.floors.length) {
+            if (window.__clnPreviewInflight === fileName) window.__clnPreviewInflight = null;
             const r2 = window.__clnRows.find((x) => x.fileName === fileName);
-            pane.innerHTML = `<div class="cs-cln-ptitle"><b>${escapeHtml(fileName)}</b><br><small>最新修改时间：${escapeHtml(r2 ? r2.lastTime : '?')}</small></div><div class="cs-cln-ptext">（读取失败或该聊天为空——酒馆后端偶发返回空，会自动重试；若长时间未恢复，点下面按钮手动重试）</div>
+            pane.innerHTML = `<div class="cs-cln-ptitle"><b>${escapeHtml(fileName)}</b><br><small>latest: ${escapeHtml(r2 ? r2.lastTime : '?')}</small></div><div class="cs-cln-ptext">（读取失败或该聊天为空——酒馆后端偶发返回空，会自动重试；若长时间未恢复，点下面按钮手动重试）</div>
             <button class="cs-btn" id="cs_cln_preview_retry" type="button" style="margin-top:6px">↻ 重试读取</button>`;
             return;
         }
