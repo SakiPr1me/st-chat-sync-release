@@ -2,7 +2,7 @@
   "name": "st-chat-sync",
   "display_name": "🌐 一键云同步（角色/聊天/世界书/配置）",
   "description": "一键云同步：角色卡/聊天/世界书/预设/正则/人设，多端自动同步恢复（Git 私有仓库）。",
-  "version": "0.12.28",
+  "version": "0.12.29",
   "author": "SakiPr1me",
   "js": "index.js"
 }
