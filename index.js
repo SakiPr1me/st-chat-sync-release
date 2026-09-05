@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.30'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.31'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4328,7 +4328,7 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_push_sel" type="button" class="cs-btn">📤 上传选中角色</button>
                             <button id="${id}_pull_sel" type="button" class="cs-btn">📥 导入选中角色</button>
                             <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn" title="删除选中的文件">🗑 删除选中文件</button>
-                            <span id="${id}_del_hint" class="cs-hint cs-del-hint" style="color:var(--SmartThemeQuoteColor,#f0a35e);font-size:.78em;font-weight:600;white-space:nowrap">当前为本地视图，将删除本地</span>
+
 <span style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
@@ -4362,7 +4362,7 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_wb_push" type="button" class="cs-btn">📤 上传选中世界书</button>
                             <button id="${id}_wb_pull" type="button" class="cs-btn">📥 导入选中世界书</button>
                             <button id="${id}_wb_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的全局世界书(本地视图删本地/云端视图删云端)">🗑 删除选中世界书</button>
-                            <span id="${id}_wb_del_hint" class="cs-hint cs-del-hint" style="color:var(--SmartThemeQuoteColor,#f0a35e);font-size:.78em;font-weight:600;white-space:nowrap">当前为本地视图，将删除本地</span>
+
 <span style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
@@ -4432,7 +4432,7 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_cfg_push" type="button" class="cs-btn">📤 上传选中</button>
                             <button id="${id}_cfg_pull" type="button" class="cs-btn">📥 导入选中</button>
                             <button id="${id}_cfg_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的配置项(本地视图删本地/云端视图删云端)">🗑 删除选中</button>
-                            <span id="${id}_cfg_del_hint" class="cs-hint cs-del-hint" style="color:var(--SmartThemeQuoteColor,#f0a35e);font-size:.78em;font-weight:600;white-space:nowrap">当前为本地视图，将删除本地</span>
+
                             <button id="${id}_cfg_updall" type="button" class="cs-btn" style="display:none" title="按顺序更新选中的拓展(仅本地视图, 多个可连点, 最后刷新页面一次生效)">⬆ 更新选中</button>
                             <span id="${id}_cfg_filter" style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
@@ -4511,14 +4511,10 @@ function wirePanelEvents() {
                 list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接」自查（网络/仓库/token），修好后再点「云端角色」</p>`;
                 return;
             }
-            if (src) src.textContent = '当前为云端视图，将删除云端';
-            const dh3 = document.getElementById('cs_del_hint');
-            if (dh3) dh3.textContent = '当前为云端视图，将删除云端';
+            if (src) src.textContent = '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端';
         } else {
             names = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group')).map((x) => x.name);
-            if (src) src.textContent = '当前为本地视图，将删除本地';
-            const dh4 = document.getElementById('cs_del_hint');
-            if (dh4) dh4.textContent = '当前为本地视图，将删除本地';
+            if (src) src.textContent = '当前为本地视图，将上传本地选中 ｜ 🗑 删除本地';
         }
         const delBtn = $('cs_del_sel');
         if (delBtn) delBtn.title = mode === 'cloud' ? '删除云端选中角色（整条：卡+世界书+聊天）' : '删除本地选中角色（卡+全部聊天）';
@@ -6307,8 +6303,6 @@ ext: {
         if (st2) st2.style.color = '';
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
         if (tgt) tgt.textContent = (mode === 'cloud' ? '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端' : '当前为本地视图，将上传本地选中 ｜ 🗑 删除本地');
-        const dh = document.getElementById('cs_cfg_del_hint');
-        if (dh) dh.textContent = mode === 'cloud' ? '当前为云端视图，将删除云端' : '当前为本地视图，将删除本地';
         list.innerHTML = names.length
             ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n, mode) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}${__cfgTypeTag(drv, n)}${__cfgUpdTag(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
@@ -6843,13 +6837,9 @@ ext: {
                 return;
             }
             if (tgt) tgt.textContent = '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端';
-            const dhw = document.getElementById('cs_wb_del_hint');
-            if (dhw) dhw.textContent = '当前为云端视图，将删除云端';
         } else {
             names = listGlobalWorldbookNames();
             if (tgt) tgt.textContent = '当前为本地视图（已跳过绑定卡世界书），将上传本地选中 ｜ 🗑 删除本地';
-            const dhw2 = document.getElementById('cs_wb_del_hint');
-            if (dhw2) dhw2.textContent = '当前为本地视图，将删除本地';
         }
         list.innerHTML = names.length
             ? names.map((n) => {
