@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.35'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.36'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7253,7 +7253,7 @@ const CHAT_SYNC_CSS = `
 #chat_sync_settings input[type='checkbox'], #cs_float_win input[type='checkbox'], #cs_quick_float input[type='checkbox'], .cs-cln-modal input[type='checkbox'] { accent-color:var(--SmartThemeQuoteColor,#f0a35e); }
 
 /* 0.12.35: 弹窗当前预览行 → 外面列表持久标记(橙色淡底) */
-.cs-cln-row.cs-cln-current { background: rgba(240, 163, 94, 0.22) !important; outline: 1px solid var(--SmartThemeQuoteColor, #f0a35e); border-radius: 4px; }
+.cs-cln-row.cs-cln-current { background: rgba(128, 128, 128, 0.16); border-radius: 4px; }
 /* 0.12.28: 手机端嵌套滚动(touch-action 声明纵向平移由本容器处理, 防止滑动被外层抽走) */
 .cs-roles, .cs-cln-fbody, #cs_cln_mlist, #cs_cln_preview { touch-action: pan-y; -webkit-overflow-scrolling: touch; }
 `;
