@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.27'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.28'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1807,9 +1807,16 @@ async function getCleanerPreviewFull(charName, fileName) {
             }
         } catch { }
     }
-    if (!msgs) { // 仅云端 → 下载
+    if (!msgs) { // 仅云端 → 先试基础文件
         const c = await Gitee.getText(`sync/${charName}/chats/${fileName}`).catch(() => null);
         if (c) msgs = parseJsonlMessages(c.content);
+    }
+    if (!msgs) { // 0.12.28: 大聊天是分段存储(.p001+manifest, 基础.jsonl不存在)→用分段感知的 getCloudChat 读
+        try { const c = await getCloudChat(`sync/${charName}/chats/${fileName}`); if (c && c.content) msgs = parseJsonlMessages(c.content); } catch { }
+    }
+    if (!msgs) { // 0.12.28: 最后兜底——本地备选读法(部分环境 /api/chats/get 形态不同)
+        try { msgs = await readLocalChatMsgs(avatar, fileName); } catch { }
+        if (!Array.isArray(msgs) || !msgs.length) msgs = null;
     }
     if (!msgs) return null;
     // 返回全部楼层(截断单楼超长文本防内存爆) —— 弹窗里 上一楼/下一楼/跳转 用；默认楼层=最新一层非 user
@@ -4386,6 +4393,7 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_cln_del" type="button" class="cs-btn cs-danger-btn" title="删除勾选的聊天：本地+云端同名一起删">🗑 删除选中（本地+云端同名同删）</button>
                             <input type="text" id="cs_search_cln" class="text_pole" placeholder="🔍搜索…" style="width:150px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cln_listbox" title="按聊天名快速过滤">
                             <input type="text" id="cs_search_content" class="text_pole" placeholder="🔎搜内容…" style="width:130px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" title="扫该角色全部本地聊天文件内容，列出命中聊天+楼层+片段">
+                            <span class="cs-hint" style="margin-left:2px">🗑 删除=本地+云端同名一起删</span>
                         </div>
                         <p id="${id}_cln_status" class="cs-hint" style="margin-top:4px"></p>
                         <div id="${id}_cln_content_results" class="cs-hint" style="margin-top:4px"></div>
@@ -4945,9 +4953,10 @@ function wirePanelEvents() {
         return `<div class="cs-role-item cs-cln-row" data-file="${escapeHtml(r.fileName)}">
             <input type="checkbox" value="${escapeHtml(r.fileName)}" name="cs_cln_sel">
             ${whereTag[r.where] || ''}
-            <span class="cs-cln-fname" title="${escapeHtml(r.fileName)} 楼${r.mesCount ?? '?'}">${escapeHtml(r.fileName)} <small>楼${r.mesCount ?? '?'}</small></span>
+            <span class="cs-cln-fname" title="${escapeHtml(r.fileName)}">${escapeHtml(r.fileName)}</span>
+            <b style="color:var(--SmartThemeQuoteColor,#f0a35e);font-size:.82em;flex:none" title="楼层数">楼${r.mesCount ?? '?'}</b>
             <b class="cs-cln-size">${escapeHtml(String(r.size || '?'))}</b>
-            <small class="cs-cln-date">最新修改时间：${escapeHtml(r.lastTime || '?')}</small>
+            <small class="cs-cln-date">latest: ${escapeHtml(r.lastTime || '?')}</small>
         </div>`;
     }
     function __filterClnRows() {
@@ -5039,7 +5048,7 @@ function wirePanelEvents() {
         </div>`;
         // nav 为预览框固定头部(flex:none), 标题+正文放独立滚动区 fbody —— 导航物理贴顶, 不依赖 sticky
         pane.innerHTML = nav
-            + `<div class="cs-cln-fbody" id="cs_cln_fbody"><div class="cs-cln-ptitle"><b>${escapeHtml(pv.fileName)}</b><br><small>最新修改时间：${escapeHtml(r ? r.lastTime : '?')} ｜ 大小 <b class="cs-cln-size">${escapeHtml(String(r ? r.size : '?'))}</b> ｜ 共 ${pv.floors.length} 楼</small></div>`
+            + `<div class="cs-cln-fbody" id="cs_cln_fbody"><div class="cs-cln-ptitle"><b>${escapeHtml(pv.fileName)}</b><br><small>latest: ${escapeHtml(r ? r.lastTime : '?')} ｜ 大小 <b class="cs-cln-size">${escapeHtml(String(r ? r.size : '?'))}</b> ｜ 共 ${pv.floors.length} 楼</small></div>`
             + `<div class="cs-cln-ptext cs-cln-fl ${f.is_user ? 'cs-cln-fl-user' : 'cs-cln-fl-ai'}">${__fmtPrevText(previewAfterContent(f.mes).slice(0, 6000)) || '（这层楼没有文字内容）'}</div></div>`;
         pane.innerHTML += '<button class="cs-top-fab" type="button">↑ 回顶部</button>';
         const fbody = pane.querySelector('#cs_cln_fbody');
@@ -5113,7 +5122,7 @@ function wirePanelEvents() {
         document.getElementById('cs_cln_m_selall').addEventListener('click', () => document.querySelectorAll('#cs_cln_modal input[name="cs_cln_msel"]').forEach((c) => { c.checked = true; }));
         document.getElementById('cs_cln_m_clr').addEventListener('click', () => document.querySelectorAll('#cs_cln_modal input[name="cs_cln_msel"]').forEach((c) => { c.checked = false; }));
         const list = document.getElementById('cs_cln_mlist');
-        list.innerHTML = shown.map((r) => `<div class="cs-role-item cs-cln-mrow" data-file="${escapeHtml(r.fileName)}" title="${escapeHtml(r.fileName)} ｜ 最新修改时间：${escapeHtml(r.lastTime || '?')}">
+        list.innerHTML = shown.map((r) => `<div class="cs-role-item cs-cln-mrow" data-file="${escapeHtml(r.fileName)}" title="${escapeHtml(r.fileName)} ｜ latest: ${escapeHtml(r.lastTime || '?')}">
             <input type="checkbox" value="${escapeHtml(r.fileName)}" name="cs_cln_msel">
             <span class="cs-cln-fname">${escapeHtml(r.fileName)}</span>
             <b class="cs-cln-size">${escapeHtml(String(r.size || '?'))}</b>
@@ -6289,7 +6298,7 @@ ext: {
         if (st2 && st2.textContent.startsWith('正在切换至')) { st2.textContent = ''; }
         if (st2) st2.style.color = '';
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
-        if (tgt) tgt.textContent = mode === 'cloud' ? '当前为云端视图，将导入云端选中' : '当前为本地视图，将上传本地选中';
+        if (tgt) tgt.textContent = (mode === 'cloud' ? '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端' : '当前为本地视图，将上传本地选中 ｜ 🗑 删除本地');
         list.innerHTML = names.length
             ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n, mode) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}${__cfgTypeTag(drv, n)}${__cfgUpdTag(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
@@ -6602,18 +6611,58 @@ ext: {
         }
         if (!hits.length) { res.innerHTML = '🔎 未命中：' + slice.length + ' 个本地聊天里没有包含「' + kw + '」的内容'; return; }
         res.innerHTML = '<div style="opacity:.9;margin-bottom:2px">🔎 命中 ' + hits.length + '/' + slice.length + ' 个聊天（含「' + kw + '」；点卡片定位到列表）：</div>' +
-            hits.map((h) => '<div class="cs-cln-cres" data-file="' + escapeHtml(h.file) + '" style="cursor:pointer;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;margin-bottom:4px;background:rgba(255,255,255,0.04)">' +
+            hits.map((h) => '<div class="cs-cln-cres" data-file="' + escapeHtml(h.file) + '" data-floors="' + h.floors.slice(0, 40).join(',') + '" data-kw="' + escapeHtml(kw) + '" style="cursor:pointer;padding:3px 6px;border:1px solid var(--SmartThemeBorderColor);border-radius:6px;margin-bottom:4px;background:rgba(255,255,255,0.04)">' +
                 '<b style="font-size:.82em">' + escapeHtml(h.name) + '</b> <span style="font-size:.75em;color:var(--SmartThemeQuoteColor,#f0a35e)">' + h.floors.slice(0, 20).join(',') + (h.floors.length > 20 ? '…' : '') + '</span>' +
                 '<div style="font-size:.72em;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(h.snippet) + '</div></div>').join('');
     };
-    // 点结果卡片 → 列表定位该聊天行并高亮
+    // 点结果卡片 → 列表定位该聊天行并高亮 + 打开预览弹窗直达命中楼层 + 关键词高亮(0.12.28)
+    const __clnHighlightKw = (root, kw) => {
+        if (!root || !kw) return;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        const targets = [];
+        let n;
+        while ((n = walker.nextNode())) {
+            const t = n.nodeValue;
+            if (t && t.toLowerCase().includes(kw)) targets.push(n);
+        }
+        targets.forEach((node) => {
+            const frag = document.createDocumentFragment();
+            let rest = node.nodeValue;
+            let li = rest.toLowerCase().indexOf(kw);
+            if (li < 0) { return; }
+            while (li >= 0) {
+                frag.appendChild(document.createTextNode(rest.slice(0, li)));
+                const mk = document.createElement('mark');
+                mk.style.cssText = 'background:#f0a35e;color:#111;border-radius:2px';
+                mk.textContent = rest.slice(li, li + kw.length);
+                frag.appendChild(mk);
+                rest = rest.slice(li + kw.length);
+                li = rest.toLowerCase().indexOf(kw);
+            }
+            frag.appendChild(document.createTextNode(rest));
+            node.parentNode.replaceChild(frag, node);
+        });
+    };
     document.addEventListener('click', (e) => {
         const cr = e.target && e.target.closest ? e.target.closest('.cs-cln-cres') : null;
         if (!cr) return;
         const file = cr.dataset.file;
+        const kw = (cr.dataset.kw || '').toLowerCase();
+        const floors = (cr.dataset.floors || '').split(',').map(Number).filter((x) => x >= 1);
         const box = document.getElementById('cs_cln_listbox');
         const row = box && [...box.querySelectorAll('.cs-role-item')].find((x) => (x.dataset.file || '') === file);
         if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.style.background = 'rgba(240,163,94,.35)'; setTimeout(() => { row.style.background = ''; }, 1600); }
+        // 打开弹窗并直达命中楼层(0.12.28)
+        (async () => {
+            __clnOpenModal();
+            await __clnShowPreview(file);
+            const pv = window.__clnPreview;
+            if (pv && pv.fileName === file && floors.length) {
+                pv.idx = Math.min(Math.max(floors[0] - 1, 0), pv.floors.length - 1);
+                __clnRenderFloor();
+            }
+            if (kw) setTimeout(() => __clnHighlightKw(document.querySelector('#cs_cln_fbody .cs-cln-ptext'), kw), 60);
+        })().catch((ex) => console.warn('[chat-sync] 定位楼层失败', ex));
     });
     // 切换角色/视图时清空内容结果
     document.addEventListener('change', (e) => {
@@ -6783,10 +6832,10 @@ ext: {
                 list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接」自查（网络/仓库/token）</p>`;
                 return;
             }
-            if (tgt) tgt.textContent = '当前为云端视图，将导入云端选中'; 
+            if (tgt) tgt.textContent = '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端'; 
         } else {
             names = listGlobalWorldbookNames();
-            if (tgt) tgt.textContent = '当前为本地视图（已跳过绑定卡世界书），将上传本地选中';
+            if (tgt) tgt.textContent = '当前为本地视图（已跳过绑定卡世界书），将上传本地选中 ｜ 🗑 删除本地';
         }
         list.innerHTML = names.length
             ? names.map((n) => {
@@ -7159,6 +7208,9 @@ const CHAT_SYNC_CSS = `
 #chat_sync_settings select, #cs_float_win select, #cs_quick_float select, .cs-cln-modal select { color-scheme:dark; }
 #chat_sync_settings select option, #cs_float_win select option, #cs_quick_float select option, .cs-cln-modal select option { background:var(--SmartThemeBlurTintColor,rgba(0,0,0,0.08)); color:var(--SmartThemeBodyColor, inherit); }
 #chat_sync_settings input[type='checkbox'], #cs_float_win input[type='checkbox'], #cs_quick_float input[type='checkbox'], .cs-cln-modal input[type='checkbox'] { accent-color:var(--SmartThemeQuoteColor,#f0a35e); }
+
+/* 0.12.28: 手机端嵌套滚动(touch-action 声明纵向平移由本容器处理, 防止滑动被外层抽走) */
+.cs-roles, .cs-cln-fbody, #cs_cln_mlist, #cs_cln_preview { touch-action: pan-y; -webkit-overflow-scrolling: touch; }
 `;
 function injectSettingsCss() {
     if (document.getElementById('chat-sync-settings-style')) return;
