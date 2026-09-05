@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.31'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.32'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1798,7 +1798,13 @@ async function getCleanerPreviewFull(charName, fileName) {
     // 0.12.29 本地读取复用 readLocalChatMsgs(自动补.png——TT /api/chats/get 严格校验 avatar_url, 裸stem会返回空数组=读不到;
     // 内部已兼容两端返回形态)。此前裸 fetch 用未补.png 的 avatar → 本地有内容也"读不到"。
     if (avatar) {
-        try { const m0 = await readLocalChatMsgsWithRetry(avatar, fileName, 5); if (Array.isArray(m0) && m0.length) msgs = m0; } catch { }
+        try {
+            const m0 = await readLocalChatMsgsWithRetry(avatar, fileName, 40, (i, n) => {
+                const pp = document.getElementById('cs_cln_preview');
+                if (pp) pp.innerHTML = '<div class="cs-cln-ptext">⏳ 酒馆后端索引预热中（老库首次打开偶发，会自动重试到成功）… 已重试 ' + i + '/' + n + '</div>';
+            }, 4000);
+            if (Array.isArray(m0) && m0.length) msgs = m0;
+        } catch { }
     }
     if (!msgs || !msgs.length) { // 仅云端 → 先试基础文件
         const c = await Gitee.getText(`sync/${charName}/chats/${fileName}`).catch(() => null);
@@ -3698,14 +3704,15 @@ async function readLocalChatMsgs(avatar, fileName) {
     } catch (e) { console.warn('[chat-sync] 读本地聊天失败(按无本地处理)', fileName, e); return []; }
 }
 // 0.12.29: TT 后端 /api/chats/get 对同一文件会闪发空数组(索引/缓存竞态, 真机实测一好一坏交替)——空结果短重试
-async function readLocalChatMsgsWithRetry(avatar, fileName, tries) {
+async function readLocalChatMsgsWithRetry(avatar, fileName, tries, onTry, delayMs) {
     const n = Math.max(1, tries || 2);
     let last = [];
     for (let i = 0; i < n; i++) {
+        if (i > 0 && typeof onTry === 'function') { try { onTry(i, n); } catch { } }
         const m = await readLocalChatMsgs(avatar, fileName);
         if (Array.isArray(m) && m.length) return m;
         last = m;
-        if (i < n - 1) await new Promise((r) => setTimeout(r, 800 * Math.pow(2, i))); // 递增退避: TT坏缓存窗口约数秒, 密集重试会全落在窗口内
+        if (i < n - 1) await new Promise((r) => setTimeout(r, delayMs || Math.min(1500 * Math.pow(1.7, i), 8000)));
     }
     return last;
 }
@@ -5080,6 +5087,16 @@ function wirePanelEvents() {
     async function __clnShowPreview(fileName) {
         const pane = document.getElementById('cs_cln_preview');
         if (!pane) return;
+        pane.dataset.retryFile = fileName;
+        if (!pane.dataset.retryBound) {
+            pane.dataset.retryBound = '1';
+            pane.addEventListener('click', (e) => {
+                if (e.target && e.target.id === 'cs_cln_preview_retry') {
+                    const f = pane.dataset.retryFile;
+                    if (f) { pane.dataset.cur = ''; __clnShowPreview(f); }
+                }
+            });
+        }
         const r = window.__clnRows.find((x) => x.fileName === fileName);
         pane.dataset.cur = fileName;
         document.querySelectorAll('#cs_cln_modal .cs-cln-mrow').forEach((el) => el.classList.toggle('cs-cln-active', el.dataset.file === fileName));
@@ -5091,7 +5108,8 @@ function wirePanelEvents() {
         if (pane.dataset.cur !== fileName) return; // 已切到别的行, 丢弃过期结果
         if (!d || !d.floors || !d.floors.length) {
             const r2 = window.__clnRows.find((x) => x.fileName === fileName);
-            pane.innerHTML = `<div class="cs-cln-ptitle"><b>${escapeHtml(fileName)}</b><br><small>最新修改时间：${escapeHtml(r2 ? r2.lastTime : '?')}</small></div><div class="cs-cln-ptext">（读取失败或该聊天为空——酒馆后端偶发返回空，稍等几秒再点一次通常可恢复）</div>`;
+            pane.innerHTML = `<div class="cs-cln-ptitle"><b>${escapeHtml(fileName)}</b><br><small>最新修改时间：${escapeHtml(r2 ? r2.lastTime : '?')}</small></div><div class="cs-cln-ptext">（读取失败或该聊天为空——酒馆后端偶发返回空，会自动重试；若长时间未恢复，点下面按钮手动重试）</div>
+            <button class="cs-btn" id="cs_cln_preview_retry" type="button" style="margin-top:6px">↻ 重试读取</button>`;
             return;
         }
         window.__clnPreview = { fileName, floors: d.floors, idx: d.defIdx, defIdx: d.defIdx };
@@ -6600,7 +6618,7 @@ ext: {
             const r = slice[i];
             if ((i + 1) % 10 === 0) res.innerHTML = '🔎 扫描中 ' + (i + 1) + '/' + rows.length + '…';
             try {
-                const msgs = await readLocalChatMsgsWithRetry(av, r.fileName, 2);
+                const msgs = await readLocalChatMsgsWithRetry(av, r.fileName, 3);
                 const floors = [];
                 let snippet = '';
                 (Array.isArray(msgs) ? msgs : []).forEach((m, idx) => {
