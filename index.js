@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.32'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.33'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5185,15 +5185,18 @@ function wirePanelEvents() {
             finally { __csReleaseBusy(); }
             __clnCloseModal(); await __renderCleanerList();
         });
-        __clnShowPreview(shown[0].fileName); // 默认预览第一条
+        const pane0 = document.getElementById('cs_cln_preview');
+        if (pane0) pane0.innerHTML = '<div class="cs-cln-ptext" style="opacity:.8">👈 点击左侧聊天名，直接查看内容</div>'; // 0.12.33: 不再自动预览第一条(打开瞬间读=空窗期, 会卡重试), 由用户点选即时加载
     }
     // 主列表：点行(非勾选框)打开预览弹窗 + 主列表拖拽划选（同一套防双击）
     (function bindClnList() {
         const box2 = $('cs_cln_listbox'); if (!box2 || box2.getAttribute('data-clndragbound')) return;
         box2.setAttribute('data-clndragbound', '1');
+        // 0.12.33: 点行 = 打开弹窗并直接预览"点击的那一行"(不再只开弹窗看第一条)
+        const __clnOpenAndPreview = (fileName) => { __clnOpenModal(); __clnShowPreview(fileName); };
         box2.addEventListener('click', (e) => {
             if (e.target instanceof HTMLInputElement) return;
-            const row = e.target.closest('.cs-cln-row'); if (row) __clnOpenModal();
+            const row = e.target.closest('.cs-cln-row'); if (row) __clnOpenAndPreview(row.dataset.file);
         });
         let dragging = false, dragMoved = false, startX = 0, startY = 0;
         const toggled = new Set();
