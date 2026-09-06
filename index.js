@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.37'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.38'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2008,17 +2008,17 @@ async function resolveCfgImportConflict(categoryLabel, name, batchMode) {
     if (batchMode && batchMode.applyAll) return batchMode.decision;
     const choice = await Popup.show.confirm(
         `⚠️ 本地和云端的${categoryLabel}「${escapeHtml(name)}」内容不一样`,
-        `同一个名字，但内容有差异（已做内容指纹比对，不会无脑覆盖）。<br><br><b>「另存副本」</b>＝把云端这份用新名字存进来（如「${escapeHtml(name)} (云端)」），两份都保留，谁都不丢。<br>处理多个冲突时选「统统」，本次就不会再逐个问了。`,
+        `同一个名字，但内容有差异。<br><small>「另存副本」＝两份都保留（云端这份存成新名字）。</small>`,
         {
             defaultResult: CFG_IMPORT_COPY,
             okButton: false,
             cancelButton: false,
             customButtons: [
-                { text: '✅ 统统替换（本次全部用云端覆盖本地）', result: CFG_IMPORT_ALL_OVERWRITE, classes: ['popup-button-ok'] },
-                { text: '✅ 统统另存副本（本次全部两份都留）', result: CFG_IMPORT_ALL_COPY, classes: ['popup-button-ok'] },
-                { text: '替换（仅这个，用云端覆盖本地）', result: CFG_IMPORT_OVERWRITE, classes: ['popup-button-cancel'] },
-                { text: '另存副本（仅这个，两份都留）', result: CFG_IMPORT_COPY, classes: ['popup-button-cancel'] },
-                { text: '✕ 跳过（不处理这个，两边都不动）', result: CFG_IMPORT_CANCEL, classes: ['popup-button-cancel'] },
+                { text: '✅ 统统替换', result: CFG_IMPORT_ALL_OVERWRITE, classes: ['popup-button-ok'] },
+                { text: '✅ 统统另存副本', result: CFG_IMPORT_ALL_COPY, classes: ['popup-button-ok'] },
+                { text: '替换', result: CFG_IMPORT_OVERWRITE, classes: ['popup-button-cancel'] },
+                { text: '另存副本', result: CFG_IMPORT_COPY, classes: ['popup-button-cancel'] },
+                { text: '跳过', result: CFG_IMPORT_CANCEL, classes: ['popup-button-cancel'] },
             ],
         },
     );
@@ -2888,17 +2888,17 @@ function resolveUploadConflict(localMsgs, cloudMsgs, fileName, batchMode = null)
         const baseMsg = `聊天「${escapeHtml(fileName)}」：${desc}。<br>你想怎么处理它？`;
         const choice = await Popup.show.confirm(
             '⚠️ 发现冲突（本地和云端不一样）',
-            `${baseMsg}<br><br><b>「另行保存」会把有分歧的一方另存成一条新记录，两边都保留，谁都不丢，你之后自己决定用哪个。</b><br>处理多个冲突时，选「全部」就不会再逐个问了。`,
+            `${baseMsg}<br><small>「另行保存」＝两边都保留。</small>`,
             {
                 defaultResult: CONFLICT_SAVE_ELSEWHERE,
                 okButton: false,
                 cancelButton: false,
                 customButtons: [
-                    { text: '✅ 全部按「覆盖」（全部用本地，云端作废）', result: ALL_OVER, classes: ['popup-button-ok'] },
-                    { text: '✅ 全部按「另行保存」（全部两边都留、谁都不丢）', result: ALL_SAVE, classes: ['popup-button-ok'] },
-                    { text: '覆盖（仅这个聊天）', result: CONFLICT_OVERWRITE, classes: ['popup-button-cancel'] },
-                    { text: '另行保存（仅这个聊天，两个都留）', result: CONFLICT_SAVE_ELSEWHERE, classes: ['popup-button-cancel'] },
-                    { text: '✕ 跳过（本次不处理这个聊天）', result: CONFLICT_CANCEL, classes: ['popup-button-cancel'] },
+                    { text: '✅ 全部覆盖', result: ALL_OVER, classes: ['popup-button-ok'] },
+                    { text: '✅ 全部另行保存', result: ALL_SAVE, classes: ['popup-button-ok'] },
+                    { text: '覆盖', result: CONFLICT_OVERWRITE, classes: ['popup-button-cancel'] },
+                    { text: '另行保存', result: CONFLICT_SAVE_ELSEWHERE, classes: ['popup-button-cancel'] },
+                    { text: '跳过', result: CONFLICT_CANCEL, classes: ['popup-button-cancel'] },
                 ],
             },
         );
