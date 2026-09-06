@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.36'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.37'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7256,6 +7256,11 @@ const CHAT_SYNC_CSS = `
 .cs-cln-row.cs-cln-current { background: rgba(128, 128, 128, 0.16); border-radius: 4px; }
 /* 0.12.28: 手机端嵌套滚动(touch-action 声明纵向平移由本容器处理, 防止滑动被外层抽走) */
 .cs-roles, .cs-cln-fbody, #cs_cln_mlist, #cs_cln_preview { touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+
+/* 0.12.40: 手机窄屏下多按钮弹窗(分支抉择等)换行不截断 */
+.popup .popup-controls { flex-wrap: wrap; row-gap: 8px; column-gap: 10px; }
+.popup .popup-controls .menu_button { white-space: normal; text-align: center; min-width: 0; }
+.popup { max-width: 94vw; max-height: 92vh; overflow-y: auto; }
 `;
 function injectSettingsCss() {
     if (document.getElementById('chat-sync-settings-style')) return;
