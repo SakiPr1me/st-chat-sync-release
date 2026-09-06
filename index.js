@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.38'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.39'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2007,7 +2007,7 @@ const CFG_IMPORT_OVERWRITE = 3201, CFG_IMPORT_COPY = 3202, CFG_IMPORT_CANCEL = 3
 async function resolveCfgImportConflict(categoryLabel, name, batchMode) {
     if (batchMode && batchMode.applyAll) return batchMode.decision;
     const choice = await Popup.show.confirm(
-        `⚠️ 本地和云端的${categoryLabel}「${escapeHtml(name)}」内容不一样`,
+        `⚠️ 导入中发现冲突：本地和云端的${categoryLabel}「${escapeHtml(name)}」内容不一样`,
         `同一个名字，但内容有差异。<br><small>「另存副本」＝两份都保留（云端这份存成新名字）。</small>`,
         {
             defaultResult: CFG_IMPORT_COPY,
@@ -2887,7 +2887,7 @@ function resolveUploadConflict(localMsgs, cloudMsgs, fileName, batchMode = null)
             : `本地比云端多 ${diff.localTail.length} 层新内容`;
         const baseMsg = `聊天「${escapeHtml(fileName)}」：${desc}。<br>你想怎么处理它？`;
         const choice = await Popup.show.confirm(
-            '⚠️ 发现冲突（本地和云端不一样）',
+            '⚠️ 上传中发现冲突（本地和云端不一样）',
             `${baseMsg}<br><small>「另行保存」＝两边都保留。</small>`,
             {
                 defaultResult: CONFLICT_SAVE_ELSEWHERE,
