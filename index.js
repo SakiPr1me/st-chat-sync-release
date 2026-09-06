@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.39'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.40'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3614,7 +3614,7 @@ async function syncOpenChat(charName) {
             // CUSTOM1 = 用云端(本地另存为分支); CUSTOM2 = 用本地(覆盖云端); default CUSTOM1
             const CHOOSE_CLOUD = 1001, CHOOSE_LOCAL = 1002;
             const choice = await Popup.show.confirm(
-                '⚠️ 聊天分叉冲突',
+                '⚠️ 同步中发现聊天分叉',
                 '这个聊天在云端和本地各走了不同分支（公共 ' + diff.common + ' 层后：本地另有 ' + diff.localTail.length + ' 层，云端另有 ' + diff.cloudTail.length + ' 层）。',
                 {
                     defaultResult: CHOOSE_CLOUD,
