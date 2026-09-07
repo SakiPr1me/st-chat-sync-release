@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.66'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.67'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1215,11 +1215,17 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                                 try { eventSource.emit(event_types.MESSAGE_EDITED, mi - 1); } catch { }
                             }
                         } else {
-                            // ST 1.14 兜底: 重载当前聊天楼层(磁盘已写新楼, 重载即显示)
-                            try { await reloadCurrentChat(); } catch (e2) { console.warn('[chat-sync] reloadCurrentChat 兜底失败', e2); }
+                            // ST 1.14 兜底: reloadCurrentChat 实测会清空楼层却不重建(11楼→0)——用 ctx().addOneMessage 逐楼即时渲染(真机验证+1可显示)
+                            const c2 = ctx();
+                            const canOne = !!(c2 && typeof c2.addOneMessage === 'function');
+                            if (canOne) {
+                                for (const m of newOnes) { try { await c2.addOneMessage(m, true); } catch (e2) { console.warn('[chat-sync] addOneMessage 渲染失败', e2); } }
+                            } else {
+                                try { await reloadCurrentChat(); } catch (e2) { console.warn('[chat-sync] reloadCurrentChat 兜底失败', e2); }
+                            }
                         }
                         try { scrollChatToBottom({ waitForFrame: true }); } catch (e3) { }
-                        console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${thOk ? '酒馆助手' : (canRedisplay ? 'redisplay+EDITED' : 'reloadCurrentChat')}${isFullRebuild ? ',全量重建' : ''})`);
+                        console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${thOk ? '酒馆助手' : (canRedisplay ? 'redisplay+EDITED' : 'addOneMessage')}${isFullRebuild ? ',全量重建' : ''})`);
                     }
                 }
             } catch (e) { console.warn('[chat-sync] 补楼刷新失败(忽略)', e); }
@@ -1455,6 +1461,8 @@ async function pullCurrentChat() {
                 if (cIdx !== undefined && ctx().characters?.[cIdx]) {
                     ctx().characters[cIdx].chat = filenameNoExt;
                     await reloadCurrentChat();
+                    // 0.12.67 双保险: ST1.14 的 reload 可能清楼不重建, 用 displayPastChats 重绘内存楼层兜底
+                    try { if (typeof displayPastChats === 'function') await displayPastChats(); } catch (e3) { console.warn('[chat-sync] displayPastChats 兜底失败', e3); }
                 }
             } else {
                 await loadImportedChat(result[0], ctx().characterId);
