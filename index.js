@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.44'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.45'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -43,10 +43,8 @@ const DEFAULT_SETTINGS = {
     autoSync: false,          // 自动同步（备份上传）总开关（默认关）
     autoSyncOnOpen: false,    // 【一次性】打开角色时自动拉取一次（独立，不归自动总开关；默认关）
     autoSyncOnSwitch: false,  // 【自动】切换角色/聊天时自动上传备份（受自动总开关管；默认关）
-    autoSyncLive: false,      // 双端实时：定时轮询（默认关）
     autoSyncOnSend: false,    // 0.12.44 事件节点: 用户发送消息后自动上传当前聊天
     autoSyncOnReply: false,   // 0.12.44 事件节点: AI回复完(20秒内无重roll/截断)自动上传当前聊天
-    autoSyncInterval: 600,    // 轮询秒数（默认 600s = 10 分钟）
     syncScope: 'chat',        // 自动上传范围：'chat'=仅当前聊天 / 'char'=仅当前角色 / 'all'=全部聊天（默认仅当前聊天）
     lastCloudSha: {},         // {云端路径: sha} 记忆
     lastLocalMTime: {},       // {云端路径: 上次同步时本地聊天文件mtime} 增量粗筛
@@ -70,14 +68,12 @@ for (const k of Object.keys(DEFAULT_SETTINGS)) {
 }
 // v2 迁移：旧版本自动同步默认是开的（autoSyncOnOpen/autoSyncOnClose 默认 true），
 // 且"关闭页面推送"已废弃。升级到 v2 时按新默认全关重置一次，避免旧值残留。
-// (v3: 已移除"自动同步总开关"，定时由 autoSyncLive 自控；autoSync 字段仅作历史兼容保留)
+// (v3: 已移除"自动同步总开关"；0.12.45 定时轮询整块下线, autoSync 字段仅作历史兼容保留)
 if (!settings.uiV2) {
     settings.autoSync = false;
     settings.autoSyncOnOpen = false;   // 即时触发：默认关
     settings.autoSyncOnSwitch = false; // 切换上传：默认关
     delete settings.autoSyncOnClose;   // 已废弃
-    settings.autoSyncLive = false;
-    settings.autoSyncInterval = 600;
     settings.syncScope = 'chat';       // 默认仅当前聊天
     settings.uiV2 = true;
 }
@@ -3623,6 +3619,7 @@ function serializeChatJsonl(headerObj, messages) {
 // 当前打开聊天做冲突检测 + 楼层级快速同步（按「公共前缀/余段」判定包含或分叉）。
 // 仅对「当前打开且已绑 syncMap 的聊天」做（saveChat 只写当前打开那个文件；新楼层也只在此产生）。
 // 返回 { action, addedCloudCount, diverged } 或 null。
+// 原双端实时轮询使用, 0.12.45 轮询下线后无调用者(留给未来楼层级合并参考)
 async function syncOpenChat(charName) {
     try {
         const chatFile = String(ctx().chatId || '').replace(/\.jsonl$/i, '') + '.jsonl';
@@ -4540,9 +4537,7 @@ window.__csManualCheck = async function (btn) {
                         </div>
                         <div class="cs-sep"></div>
                         <div class="cs-group-title">• 定时备份上传</div>
-                        <label class="checkbox_label"><input id="${id}_chk_live" type="checkbox" ${settings.autoSyncLive ? 'checked' : ''}> 定时轮询（勾选开启，取消关闭）</label>
                         <div style="margin-top:4px">
-                            <label style="display:inline-flex;align-items:center">间隔 <input id="${id}_interval" type="number" min="10" step="5" value="${Number(settings.autoSyncInterval) || 600}" style="width:60px;margin-left:4px"> 秒</label>
                         </div>
                         <div style="margin-top:6px">
                             <div class="cs-hint" style="margin-bottom:3px">自动上传范围：</div>
@@ -7154,19 +7149,6 @@ ext: {
         } finally { __csReleaseBusy(); }
     });
     $('cs_chk_open')?.addEventListener('change', (e) => { settings.autoSyncOnOpen = e.target.checked; saveSettingsDebounced(); });
-    $('cs_chk_live')?.addEventListener('change', (e) => {
-        settings.autoSyncLive = e.target.checked;
-        saveSettingsDebounced();
-        if (shouldAuto() && settings.autoSyncLive) startPolling(); else stopPolling();
-        if (e.target.checked) toastr.info('双端实时同步已开启（每 ' + (Number(settings.autoSyncInterval) || 30) + ' 秒检查一次）');
-    });
-    $('cs_interval')?.addEventListener('change', (e) => {
-        const v = Math.max(10, Number(e.target.value) || 30);
-        settings.autoSyncInterval = v;
-        saveSettingsDebounced();
-        stopPolling();
-        if (shouldAuto() && settings.autoSyncLive) startPolling();
-    });
     // 自动同步范围：仅当前聊天 / 仅当前角色 / 全部聊天
     document.querySelectorAll('input[name="cs_scope"]').forEach((el) => {
         el.addEventListener('change', () => {
@@ -7342,73 +7324,8 @@ function injectSettingsCss() {
 }
 
 // ===================== 自动同步触发 =====================
-// 是否具备自动能力（已配置连接即可；具体行为由各开关 autoSyncLive/autoSyncOnOpen/autoSyncOnSwitch 独立控制）
+// 是否具备自动能力（已配置连接即可；具体行为由各开关 autoSyncOnOpen/autoSyncOnSwitch/autoSyncOnSend/autoSyncOnReply 独立控制）
 function shouldAuto() { return settings.token; }
-
-// ---- 双端实时轮询 ----
-let pollTimer = null;
-let pollBusy = false;
-
-// 一轮轮询：比较当前角色本地/云端的聊天，有差异则同步
-async function syncPollTick() {
-    if (pollBusy) return;             // 防重入（一轮未完成不开始下一轮）
-    if (!shouldAuto() || !settings.autoSyncLive) return;
-    const charName = currentCharName();
-    if (!charName) return;
-    pollBusy = true;
-    try {
-        // 1) 当前打开的聊天做「楼层级合并」——这是新消息产生的地方，多端并发也收敛不丢。
-        //    （已有 syncMap 映射才行；否则自动改走整包拉取。）
-        const mergedRes = await syncOpenChat(charName);
-        // 2) 其余聊天保持文件级增量（先拉后推，粗筛避免无谓往返）
-        const chatItems = await getCharChatFileNames(charName);
-        await pollChatDelta(charName, chatItems, mergedRes ? false : true);
-    } catch (e) {
-        // 静默：轮询失败不打断用户
-        if (pollCount % 10 === 0) console.warn('[chat-sync] 轮询失败', e && e.message);
-    } finally {
-        pollBusy = false;
-    }
-}
-
-let pollCount = 0;
-async function pollChatDelta(charName, chatItems, skipCurrentFile = false) {
-    pollCount++;
-    const base = `sync/${charName}/chats`;
-    const curChat = String(ctx().chatId || '').replace(/\.jsonl$/i, '') + '.jsonl';
-    // 一次目录列表拿全部 sha(分段聊天以 manifest sha 为指纹)，不再逐文件下载比对
-    const shaMap = await cloudShaMap(base);
-    for (const item of chatItems) {
-        // 当前打开的聊天已由 syncOpenChat 做楼层级合并，文件级这里跳过，避免重复/双写
-        if (skipCurrentFile && String(item.file_name).toLowerCase() === String(curChat).toLowerCase()) continue;
-        const safeName = item.file_name.replace(/[\\/\\\\]/g, '_');
-        const p = `${base}/${safeName}`;
-        // 云端被改过（sha 变了）→ 拉取
-        try {
-            const cloudSha = shaMap.get(manifestPathOf(p)) || shaMap.get(p);
-            const remembered = settings.lastCloudSha[p];
-            if (cloudSha && remembered && cloudSha !== remembered) {
-                await pullCharacterChats(charName);
-                return; // 拉完重绘后本轮即可结束
-            }
-        } catch { /* 单文件失败忽略 */ }
-        // 本端 mtime 变了 → 推送
-        const lastMT = settings.lastLocalMTime[p];
-        if (item.mtime !== undefined && lastMT !== undefined && lastMT !== item.mtime) {
-            await pushAuto();
-            return;
-        }
-    }
-}
-
-function startPolling() {
-    if (pollTimer) return;
-    const interval = Math.max(10, Number(settings.autoSyncInterval) || 30) * 1000;
-    pollTimer = setInterval(syncPollTick, interval);
-}
-function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
 
 // 实时更新面板里的"当前角色/绑定世界书"显示 + 切换"当前角色操作"vs"云端导入"入口（按是否打开角色）
 function updateCurrentCharDisplay() {
@@ -7485,17 +7402,6 @@ eventSource.on(event_types.CHAT_CHANGED, () => {
     setTimeout(() => {
         pushAuto().catch((e) => console.warn('[chat-sync] 切换自动推送失败', e));
     }, 200);
-});
-
-// 页面关闭时：只停轮询（不做推送——关闭页面插件无法可靠上传，改为“切换角色/聊天时自动上传备份”负责）
-window.addEventListener('beforeunload', () => {
-    stopPolling();
-});
-
-// 根据设置启停轮询
-eventSource.on(event_types.SETTINGS_UPDATED, () => {
-    if (shouldAuto() && settings.autoSyncLive) startPolling();
-    else stopPolling();
 });
 
 // ===================== 斜杠命令 =====================
@@ -7828,8 +7734,6 @@ jQuery(() => {
     }, 1500);
     // 已配置则自动静默连接
     autoConnectIfConfigured();
-    // 若已开启双端实时，页面加载后启动轮询（兜底 SETTINGS_UPDATED）
-    if (shouldAuto() && settings.autoSyncLive) startPolling();
     // 延迟注册 /chat-sync 命令（绕开 ST 1.18 循环依赖）
     registerSlashCommand();
     console.log('[st-chat-sync] v0.2 角色级多端同步插件加载完成，面板已挂载');
