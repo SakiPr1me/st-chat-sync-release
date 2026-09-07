@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.72'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.73'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4151,25 +4151,21 @@ function __refreshCurRepoLine() {
         const arr = Array.isArray(settings.connSlots) ? settings.connSlots : [];
         const cur = `${settings.owner}/${settings.repo}`;
         const curKey = String(settings.server || '') + '|' + cur;
-        // 0.12.59 槽位切换改自定义列表(原生 select 弹出层 hover 时 Chromium 会把其他选项对比度降低→看不清):
-        // 每行平台·仓库 + 当前项橙底高亮 + 行尾🗑删除, 悬停/选中样式完全可控
-        const items = arr.map((x, i) => {
+        // 0.12.73 槽位改回下拉式(用户要求), 放大字号与删除按钮; 原生 select 弹出层已配 color-scheme:dark + option 深底浅字
+        const opts = arr.map((x, i) => {
             const nm = (String(x.platform || '').includes('github') ? 'GitHub' : (String(x.platform || '').includes('gitlab.com') ? 'GitLab' : 'Gitee')) + ' · ' + x.repo;
             const key = String(x.platform || '') + '|' + x.repo;
-            return `<div class="cs-slot-item ${key === curKey ? 'cs-slot-cur' : ''}" data-idx="${i}" title="点击切换到此槽位"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(nm)}</span><span class="cs-slot-del" data-idx="${i}" title="删除此槽位">🗑</span></div>`;
+            return `<option value="${i}" ${key === curKey ? 'selected' : ''}>${escapeHtml(nm)}</option>`;
         }).join('');
         slot2.innerHTML = `<b>📦 槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}` +
-            (arr.length ? `<div style="margin-top:4px">
-                <div id="cs_slot_list" class="cs-roles" style="max-height:116px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:6px;padding:3px;user-select:none">${items}</div>
-            </div>` : '<div style="font-size:.72em;opacity:.7;margin-top:2px">保存配置后自动存为槽位，点击即可切换</div>');
-        const sl = document.getElementById('cs_slot_list');
-        if (sl) sl.addEventListener('click', (ev) => {
-            const t = ev.target.closest('[data-idx]');
-            if (!t) return;
-            const idx = Number(t.getAttribute('data-idx'));
-            if (ev.target.closest('.cs-slot-del')) { window.__csDeleteSlot(idx); return; }
-            window.__csApplySlot(idx);
-        });
+            (arr.length ? `<div style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:nowrap">
+                <select id="cs_slot_sel" style="flex:1;min-width:0;font-size:.95em;padding:6px 10px">${opts}</select>
+                <button type="button" id="cs_slot_del" class="cs-btn" style="padding:7px 14px;font-size:.9em;flex:none" title="删除当前选中的槽位">🗑 删除</button>
+            </div>` : '<div style="font-size:.8em;opacity:.7;margin-top:2px">保存配置后自动存为槽位，可下拉切换</div>');
+        const ss2 = document.getElementById('cs_slot_sel');
+        if (ss2) ss2.addEventListener('change', () => window.__csApplySlot(Number(ss2.value)));
+        const sd2 = document.getElementById('cs_slot_del');
+        if (sd2) sd2.addEventListener('click', () => window.__csDeleteSlot(Number((document.getElementById('cs_slot_sel') || {}).value)));
     }
     __fillCloudUsage();
     try {
