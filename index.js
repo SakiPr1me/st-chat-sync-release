@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.67'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.68'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1199,33 +1199,27 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                     const isFullRebuild = (merged === cloudMsgs);
                     const merged_info = mergeOpenChatTail(c.chat, newOnes, isFullRebuild);
                     if (merged_info && merged_info.appended > 0) {
-                        const TH = window.TavernHelper;
-                        const thOk = !!(TH && typeof TH.refreshOneMessage === 'function');
-                        // 0.12.66: redisplayChat 需 ST≥1.15, 1.14 是降级空函数——无助手且无真 redisplayChat 时用 reloadCurrentChat 重载楼层(可靠即时显示)
-                        const canRedisplay = (typeof __stCompat.redisplayChat === 'function');
-                        if (thOk) {
-                            // 有酒馆助手: 数据/落盘已完成, 只需逐楼 refreshOneMessage 重渲染(其管线【含 Regex 美化】)
-                            for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) {
-                                try { await TH.refreshOneMessage(mi); } catch (e2) { console.warn('[chat-sync] refreshOneMessage 失败', mi, e2); }
-                            }
-                        } else if (canRedisplay) {
-                            // 无酒馆助手(ST≥1.15): 局部重绘 + 逐新楼 MESSAGE_EDITED 强制正则扩展重放
-                            await redisplayChat({ startIndex: merged_info.startIndex, fade: false });
-                            for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) {
-                                try { eventSource.emit(event_types.MESSAGE_EDITED, mi - 1); } catch { }
-                            }
+                        // 0.12.68 新楼即时显示: 新楼必须先【创建 DOM】才可见——addOneMessage 是 ST/TT 官方渲染管道(真机验证+1可显示);
+                        // refreshOneMessage/redisplayChat 只能"重渲染已存在的楼", 不会为新楼创建 DOM → 内存有楼 DOM 不出现(用户实报)
+                        const c2 = ctx();
+                        const canOne = !!(c2 && typeof c2.addOneMessage === 'function');
+                        if (canOne) {
+                            for (const m of newOnes) { try { await c2.addOneMessage(m, true); } catch (e2) { console.warn('[chat-sync] addOneMessage 渲染失败', e2); } }
                         } else {
-                            // ST 1.14 兜底: reloadCurrentChat 实测会清空楼层却不重建(11楼→0)——用 ctx().addOneMessage 逐楼即时渲染(真机验证+1可显示)
-                            const c2 = ctx();
-                            const canOne = !!(c2 && typeof c2.addOneMessage === 'function');
-                            if (canOne) {
-                                for (const m of newOnes) { try { await c2.addOneMessage(m, true); } catch (e2) { console.warn('[chat-sync] addOneMessage 渲染失败', e2); } }
+                            const TH = window.TavernHelper;
+                            const thOk = !!(TH && typeof TH.refreshOneMessage === 'function');
+                            const canRedisplay = (typeof __stCompat.redisplayChat === 'function');
+                            if (thOk) {
+                                for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) { try { await TH.refreshOneMessage(mi); } catch (e2) { console.warn('[chat-sync] refreshOneMessage 失败', mi, e2); } }
+                            } else if (canRedisplay) {
+                                await redisplayChat({ startIndex: merged_info.startIndex, fade: false });
+                                for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) { try { eventSource.emit(event_types.MESSAGE_EDITED, mi - 1); } catch { } }
                             } else {
                                 try { await reloadCurrentChat(); } catch (e2) { console.warn('[chat-sync] reloadCurrentChat 兜底失败', e2); }
                             }
                         }
                         try { scrollChatToBottom({ waitForFrame: true }); } catch (e3) { }
-                        console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${thOk ? '酒馆助手' : (canRedisplay ? 'redisplay+EDITED' : 'addOneMessage')}${isFullRebuild ? ',全量重建' : ''})`);
+                        console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${canOne ? 'addOneMessage' : '后备通道'}${isFullRebuild ? ',全量重建' : ''})`);
                     }
                 }
             } catch (e) { console.warn('[chat-sync] 补楼刷新失败(忽略)', e); }
