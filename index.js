@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.65'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.66'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1201,24 +1201,29 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                     if (merged_info && merged_info.appended > 0) {
                         const TH = window.TavernHelper;
                         const thOk = !!(TH && typeof TH.refreshOneMessage === 'function');
+                        // 0.12.66: redisplayChat 需 ST≥1.15, 1.14 是降级空函数——无助手且无真 redisplayChat 时用 reloadCurrentChat 重载楼层(可靠即时显示)
+                        const canRedisplay = (typeof __stCompat.redisplayChat === 'function');
                         if (thOk) {
                             // 有酒馆助手: 数据/落盘已完成, 只需逐楼 refreshOneMessage 重渲染(其管线【含 Regex 美化】)
                             for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) {
                                 try { await TH.refreshOneMessage(mi); } catch (e2) { console.warn('[chat-sync] refreshOneMessage 失败', mi, e2); }
                             }
-                        } else {
-                            // 无酒馆助手: 局部重绘 + 逐新楼 MESSAGE_EDITED 强制正则扩展重放
+                        } else if (canRedisplay) {
+                            // 无酒馆助手(ST≥1.15): 局部重绘 + 逐新楼 MESSAGE_EDITED 强制正则扩展重放
                             await redisplayChat({ startIndex: merged_info.startIndex, fade: false });
                             for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) {
                                 try { eventSource.emit(event_types.MESSAGE_EDITED, mi - 1); } catch { }
                             }
+                        } else {
+                            // ST 1.14 兜底: 重载当前聊天楼层(磁盘已写新楼, 重载即显示)
+                            try { await reloadCurrentChat(); } catch (e2) { console.warn('[chat-sync] reloadCurrentChat 兜底失败', e2); }
                         }
-                        scrollChatToBottom({ waitForFrame: true });
-                        console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(美化:${thOk ? '酒馆助手' : 'redisplay+EDITED'}${isFullRebuild ? ',全量重建' : ''})`);
+                        try { scrollChatToBottom({ waitForFrame: true }); } catch (e3) { }
+                        console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${thOk ? '酒馆助手' : (canRedisplay ? 'redisplay+EDITED' : 'reloadCurrentChat')}${isFullRebuild ? ',全量重建' : ''})`);
                     }
                 }
             } catch (e) { console.warn('[chat-sync] 补楼刷新失败(忽略)', e); }
-            return { added: newOnes.length };
+            return { added: newOnes.length, localCount: localMsgs.length }; // 0.12.66 带补回前本地楼数(提示用)
         }
         console.warn('[chat-sync] 拉取补楼写回失败', knownLocal, res.status);
         return null;
@@ -1420,7 +1425,7 @@ async function pullCurrentChat() {
         const merged = await pullMergeCloudSuperset(avatar, localName, cloud, p);
         hideBusy(); setStatus('');
         if (merged && merged.blocked) { toastr.warning('检测到可能正在生成，已暂停自动补楼（等生成结束再导入一次即可）'); return; }
-        if (merged) { toastr.success(`已从云端补回当前聊天 ${merged.added} 楼 ✅`); return; }
+        if (merged) { const nowN = Array.isArray(ctx().chat) ? ctx().chat.filter((m) => m && typeof m === 'object' && m.mes !== undefined).length : 0; toastr.success(`已从云端补回当前聊天 ${merged.added} 楼 ✅（补回前本地 ${merged.localCount ?? 0} 楼 → 当前 ${nowN} 楼）`); return; }
         toastr.info('当前聊天已是最新');
         return;
     }
