@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.73'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.74'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4344,6 +4344,14 @@ window.__csManualCheck = async function (btn) {
         // 0.12.71 修复悬挂 else: 旧代码 if(newer){...} 后紧跟 const+if(oldUB)，后续 else-if 全挂在 if(oldUB) 上，
         //   #cs_upd_slot 有按钮时 latest/stale/local-higher 分支被跳过 → 按钮显示与 title 矛盾/空
         const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
+        // 0.12.74 检测到可更新(newer) → 直接自动更新并刷新(用户要求: 点检查更新发现新版应自动更新, 不必再点一次)
+        if (state === 'newer') {
+            btn.textContent = '⬆ 发现 v' + remoteVer + '，自动更新中…';
+            btn.title = '本机 v' + PLUGIN_VERSION + ' / 云端 v' + remoteVer;
+            delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; delete btn.dataset.done; delete btn.dataset.result; delete btn.dataset.busy;
+            __csDoSelfUpdate(btn, remoteVer); // 内部更新成功 → __csDoReload → 自动刷新
+            return;
+        }
         let updateable = true;
         // 0.12.72 归并: 只要与云端版本不一致(不论云端更高还是本地更高)统一"⬆ 点击更新至 vX"; 仅真"已是最新"不可点; stale(无法确认)仍给更新入口
         if (state === 'latest') { txt = '✅ 已是最新'; cls = 'same'; updateable = false; }
