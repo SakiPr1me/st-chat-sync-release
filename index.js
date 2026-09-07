@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.61'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.62'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -361,7 +361,10 @@ function ctx() { return getContext(); }
 function currentCharName() {
     const c = ctx();
     if (c.groupId) return null; // 群聊暂不支持角色级整包
-    if (c.characterId === undefined || c.characterId < 0) return null;
+    if (c.characterId === undefined || c.characterId < 0) {
+        // 0.12.62 ST1.14-web 兜底: 官方 ST 部分状态下 characterId 未就绪但 name1 已有当前角色名
+        return c.name1 || null;
+    }
     return c.characters[c.characterId]?.name;
 }
 
@@ -460,10 +463,15 @@ function blobToBase64(blob) {
     });
 }
 
-// 当前聊天文件名
+// 当前聊天文件名（0.12.62 多来源: ctx().chatId 仅 TT 有值; 官方 ST(web) 用 chat_metadata.chat 或全局 currentChatFile）
 function currentChatFileName() {
-    const id = ctx().chatId || 'chat';
-    return String(id).replace(/\.jsonl$/, '') + '.jsonl';
+    try {
+        const cid = ctx() && ctx().chatId;
+        if (cid) return String(cid).replace(/\.jsonl$/i, '') + '.jsonl';
+    } catch { }
+    try { if (chat_metadata && chat_metadata.chat) return String(chat_metadata.chat).replace(/\.jsonl$/i, '') + '.jsonl'; } catch { }
+    try { if (typeof currentChatFile !== 'undefined' && currentChatFile) return String(currentChatFile).replace(/\.jsonl$/i, '') + '.jsonl'; } catch { }
+    return 'chat.jsonl';
 }
 
 // ===================== 聊天云端分段存储（2026-08-23 用户拍板：规避单文件100MB上限 + 变更段增量上传） =====================
@@ -789,13 +797,15 @@ async function getCharChatFileNames(charName) {
 // 按角色名解析 avatar（批量操作任意角色时不依赖「当前打开的 characterId」）
 function getAvatarFor(charName) {
     const c = ctx();
+    // 0.12.62 ST1.14-web: 传空时退回当前 name1（官方 ST 的 characterId 可能未就绪）
+    const target = charName || (c && c.name1) || '';
     if (c.characters && Array.isArray(c.characters)) {
         // 优先按姓名精确匹配
-        const hit = c.characters.find((x) => x && x.name === charName && x.avatar);
+        const hit = c.characters.find((x) => x && x.name === target && x.avatar);
         if (hit) return String(hit.avatar).replace(/\.png$/i, '') + '.png';
         // 若传入的正好是当前角色，退回 characterId
         const cur = c.characters?.[c.characterId];
-        if (cur && cur.name === charName && cur.avatar) return String(cur.avatar).replace(/\.png$/i, '') + '.png';
+        if (cur && cur.name === target && cur.avatar) return String(cur.avatar).replace(/\.png$/i, '') + '.png';
     }
     return '';
 }
@@ -806,7 +816,7 @@ function getAvatarFor(charName) {
 // 按原字段 json 化，尽量保真（不再丢 chat_metadata / swipe_info / disable_date / bookmark 等）。
 async function getChatContent(fileName, charName) {
     const avatar = getAvatarFor(charName || '');
-    const name = charName || (ctx().characters?.[ctx().characterId]?.name) || '';
+    const name = charName || (ctx().characters?.[ctx().characterId]?.name) || (ctx().name1) || ''; // 0.12.62 末尾 name1 兜底(ST1.14-web characterId 可能未就绪)
     const r = await fetch('/api/chats/get', {
         method: 'POST',
         headers: getRequestHeaders(),
