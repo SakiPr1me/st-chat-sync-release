@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.64'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.65'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1441,7 +1441,21 @@ async function pullCurrentChat() {
         settings.lastCloudSha[p] = cloud.sha;
         saveSettingsDebounced();
         hideBusy(); setStatus('');
-        toastr.success('已从云端拉取当前聊天 ✅');
+        // 0.12.64d: 导入后直接加载进当前楼层(用户: 显示成功但楼层没出现, 要刷新才见)——复用 importCharFromCloud 的楼层加载
+        const isTtPull = Boolean(window.__TAURITAVERN__ || window.__TAURITAVERN_MAIN_READY__);
+        try {
+            if (!isTtPull) {
+                const filenameNoExt = String(result[0]).replace(/\.jsonl$/i, '');
+                const cIdx = ctx().characterId;
+                if (cIdx !== undefined && ctx().characters?.[cIdx]) {
+                    ctx().characters[cIdx].chat = filenameNoExt;
+                    await reloadCurrentChat();
+                }
+            } else {
+                await loadImportedChat(result[0], ctx().characterId);
+            }
+        } catch (e) { console.warn('[chat-sync] 导入后加载楼层失败', e); }
+        toastr.success('已从云端拉取当前聊天 ✅（已加载到当前楼层）');
     } else {
         hideBusy(); setStatus('');
         toastr.error('当前聊天导入失败');
