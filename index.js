@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.60'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.61'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7681,12 +7681,18 @@ function __csUpdateFloat() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('cs_float_pos') || 'null'); } catch (e) { }
     const W = 46, HEAD = 40, ITEM = 38;
+    // 0.12.61 恢复记忆位置必须钳制到当前视口(否则大屏/横屏保存的位置在手机小视口直接搬到屏幕外): 拖拽/缩放有钳制, 唯独初始恢复漏了
+    let initPos = null;
+    if (saved && Number.isFinite(Number(saved.x)) && Number.isFinite(Number(saved.y))) {
+        const maxX = window.innerWidth - W - 2, maxY = window.innerHeight - HEAD - 2;
+        initPos = { x: Math.min(Math.max(Number(saved.x), 2), Math.max(maxX, 2)), y: Math.min(Math.max(Number(saved.y), 2), Math.max(maxY, 2)) };
+    }
     const $box = $(`<div id="${id}" style="
         position:fixed;z-index:9600;width:${W}px;overflow:hidden;
         border:1px solid var(--SmartThemeBorderColor);border-radius:14px;
         background:rgba(128,128,128,0.32);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
         box-shadow:0 3px 10px rgba(0,0,0,.3);user-select:none;
-        ${saved ? `left:${saved.x}px;top:${saved.y}px;right:auto;bottom:auto` : 'right:16px;bottom:150px'}
+        ${initPos ? `left:${initPos.x}px;top:${initPos.y}px;right:auto;bottom:auto` : 'right:16px;bottom:150px'}
     "></div>`).appendTo('body');
     $box.append(`<div class="csf-head" style="height:${HEAD}px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:grab;font-size:15px;color:var(--SmartThemeBodyColor,#eee);border-bottom:1px solid rgba(255,255,255,.08)">
         <span style="font-size:17px;line-height:1">🌐</span>
@@ -7720,6 +7726,15 @@ function __csUpdateFloat() {
         const h = on ? rowCount * ITEM : 0;
         $items.css({ height: h + 'px', transition: 'height .22s ease' });
         $box.css('box-shadow', on ? '0 6px 18px rgba(0,0,0,.4)' : '0 3px 10px rgba(0,0,0,.3)');
+        // 0.12.61 展开后底部超出可视区域→向上收(手机端常见: 球贴底, 菜单全展开时尾部够不着)
+        if (on) {
+            const top = parseInt($box.css('top') || '', 10);
+            if (Number.isFinite(top)) {
+                const bh = HEAD + h;
+                const maxTop = window.innerHeight - bh - 2;
+                if (top + bh > window.innerHeight - 2 && maxTop > 2) $box.css('top', Math.max(maxTop, 2) + 'px');
+            }
+        }
     }
     setExpanded(false);
     $box.find('.csf-head').on('click.csf', function () { setExpanded(!expanded); });
