@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.70'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.71'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4345,11 +4345,17 @@ window.__csManualCheck = async function (btn) {
     try {
         const remoteVer = await __csFetchRemoteVer();
         const state = __csTriageVer(PLUGIN_VERSION, remoteVer, __csRemoteAuthoritative);
-        if (state === 'newer') { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; } const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
-        else if (state === 'latest') { txt = '✅ 已是最新'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
-        else if (state === 'stale') { txt = '🔄 无法连到权威源（镜像回显 v' + remoteVer + '）·再点直接更新到最新'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
-        else if (__csRemoteAuthoritative) { txt = '🫧 本机比云端发布高（开发版/未推送？）·再点强制更新'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
-        else { txt = '⚠️ 版本源异常（镜像仅 v' + remoteVer + '）·再点直接更新到最新'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        // 0.12.71 修复悬挂 else: 旧代码 if(newer){...} 后紧跟 const+if(oldUB)，后续 else-if 全挂在 if(oldUB) 上，
+        //   #cs_upd_slot 有按钮时 latest/stale/local-higher 分支被跳过 → 按钮显示与 title 矛盾/空
+        const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
+        let updateable = true;
+        if (state === 'newer') { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; }
+        else if (state === 'latest') { txt = '✅ 已是最新'; cls = 'same'; updateable = false; }
+        else if (state === 'stale') { txt = '🔄 无法连到权威源（镜像 v' + remoteVer + '）·点此直接更新到最新'; cls = 'same'; }
+        else if (__csRemoteAuthoritative) { txt = '⬆ 本机 v' + PLUGIN_VERSION + ' 高于仓库 v' + remoteVer + '（开发版？）·点此强制更新'; cls = 'same'; }
+        else { txt = '⚠️ 版本源异常（镜像 v' + remoteVer + '）·点此直接更新到最新'; cls = 'same'; }
+        if (updateable) { btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        else { delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
         title2 = '本机 v' + PLUGIN_VERSION + ' / 云端发布 v' + remoteVer + ((state === 'stale' || (state === 'local-higher' && !__csRemoteAuthoritative)) ? '\n⚠ Gitee 权威源本次未连通，仅镜像/CDN 回声——版本可能滞后。再点一次＝直接执行官方更新（无需令牌/检测）' : '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）');
     } catch (e) {
         txt = '❌ 检测失败';
