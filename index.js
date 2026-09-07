@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.43'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.44'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -44,6 +44,8 @@ const DEFAULT_SETTINGS = {
     autoSyncOnOpen: false,    // 【一次性】打开角色时自动拉取一次（独立，不归自动总开关；默认关）
     autoSyncOnSwitch: false,  // 【自动】切换角色/聊天时自动上传备份（受自动总开关管；默认关）
     autoSyncLive: false,      // 双端实时：定时轮询（默认关）
+    autoSyncOnSend: false,    // 0.12.44 事件节点: 用户发送消息后自动上传当前聊天
+    autoSyncOnReply: false,   // 0.12.44 事件节点: AI回复完(20秒内无重roll/截断)自动上传当前聊天
     autoSyncInterval: 600,    // 轮询秒数（默认 600s = 10 分钟）
     syncScope: 'chat',        // 自动上传范围：'chat'=仅当前聊天 / 'char'=仅当前角色 / 'all'=全部聊天（默认仅当前聊天）
     lastCloudSha: {},         // {云端路径: sha} 记忆
@@ -4533,6 +4535,8 @@ window.__csManualCheck = async function (btn) {
                         <div style="display:flex;flex-direction:column;gap:6px">
                             <label class="checkbox_label"><input id="${id}_chk_open" type="checkbox" ${settings.autoSyncOnOpen ? 'checked' : ''}> 打开角色时自动拉取一次当前聊天</label>
                             <label class="checkbox_label"><input id="${id}_chk_switch" type="checkbox" ${settings.autoSyncOnSwitch ? 'checked' : ''}> 切换角色/聊天（含新聊天）时自动上传</label>
+                            <label class="checkbox_label"><input id="${id}_chk_send" type="checkbox" ${settings.autoSyncOnSend ? 'checked' : ''}> 发送消息后自动上传当前聊天</label>
+                            <label class="checkbox_label"><input id="${id}_chk_reply" type="checkbox" ${settings.autoSyncOnReply ? 'checked' : ''}> AI回复完（20秒内没有重roll）自动上传当前聊天</label>
                         </div>
                         <div class="cs-sep"></div>
                         <div class="cs-group-title">• 定时备份上传</div>
@@ -7175,6 +7179,8 @@ ext: {
     });
     // 切换角色/聊天自动推送开关
     $('cs_chk_switch')?.addEventListener('change', (e) => { settings.autoSyncOnSwitch = e.target.checked; saveSettingsDebounced(); });
+    $('cs_chk_send')?.addEventListener('change', (e) => { settings.autoSyncOnSend = e.target.checked; saveSettingsDebounced(); });
+    $('cs_chk_reply')?.addEventListener('change', (e) => { settings.autoSyncOnReply = e.target.checked; saveSettingsDebounced(); });
 }
 
 // 挂到扩展设置面板（幂等：已存在则直接渲染，不重复创建）
@@ -7438,8 +7444,21 @@ function __genEnd() {
     __clearGenWatchdog();
 }
 eventSource.on(event_types.GENERATION_STARTED, __genStart);
-eventSource.on(event_types.GENERATION_ENDED, __genEnd);
+// 0.12.44 事件节点: 新一轮生成开始 → 作废上一轮挂起的"回复完上传"(重roll/截断不误传)
+eventSource.on(event_types.GENERATION_STARTED, () => { if (window.__csAutoReplyT) { clearTimeout(window.__csAutoReplyT); window.__csAutoReplyT = null; } });
+eventSource.on(event_types.GENERATION_ENDED, () => {
+    __genEnd();
+    if (!shouldAuto() || !settings.autoSyncOnReply || !currentCharName()) return;
+    if (window.__csAutoReplyT) clearTimeout(window.__csAutoReplyT);
+    // 挂起20秒: 期间若又重roll(新的STARTED)则取消; 20秒内没有 → 上传当前聊天
+    window.__csAutoReplyT = setTimeout(() => { window.__csAutoReplyT = null; pushAuto().catch((e) => console.warn('[chat-sync] 回复完自动上传失败', e)); }, 20000);
+});
 eventSource.on(event_types.GENERATION_STOPPED, __genEnd);
+// 0.12.44 事件节点: 用户发送消息后上传当前聊天
+eventSource.on(event_types.MESSAGE_SENT, () => {
+    if (!shouldAuto() || !settings.autoSyncOnSend || !currentCharName()) return;
+    pushAuto().catch((e) => console.warn('[chat-sync] 发送后自动上传失败', e));
+});
 
 // 打开角色（聊天切换）时：自动拉取 + 更新当前角色显示
 eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, () => {
