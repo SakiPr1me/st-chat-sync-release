@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.46'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.47'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4523,14 +4523,17 @@ window.__csManualCheck = async function (btn) {
                     <details class="cs-fold">
                     <summary><i class="fa-solid fa-gear cs-ico" aria-hidden="true"></i>自动同步/备份</summary>
                     <div class="cs-body">
-                        <div class="cs-group-title">• 即时触发（不依赖开关）</div>
+                        <div class="cs-group-title">· 自动拉取当前聊天</div>
                         <div style="display:flex;flex-direction:column;gap:6px">
-                            <label class="checkbox_label"><input id="${id}_chk_open" type="checkbox" ${settings.autoSyncOnOpen ? 'checked' : ''}> 打开角色时自动拉取一次当前聊天</label>
-                            <label class="checkbox_label"><input id="${id}_chk_switch" type="checkbox" ${settings.autoSyncOnSwitch ? 'checked' : ''}> 切换角色/聊天（含新聊天）时自动上传</label>
-                            <label class="checkbox_label"><input id="${id}_chk_send" type="checkbox" ${settings.autoSyncOnSend ? 'checked' : ''}> 发送消息后自动上传当前聊天</label>
-                            <label class="checkbox_label"><input id="${id}_chk_reply" type="checkbox" ${settings.autoSyncOnReply ? 'checked' : ''}> AI回复完（20秒内没有重roll）自动上传当前聊天</label>
+                            <label class="checkbox_label"><input id="${id}_chk_open" type="checkbox" ${settings.autoSyncOnOpen ? 'checked' : ''}> 打开角色时自动拉取一次</label>
                         </div>
                         <div class="cs-sep"></div>
+                        <div class="cs-group-title">· 自动上传当前聊天</div>
+                        <div style="display:flex;flex-direction:column;gap:6px">
+                            <label class="checkbox_label"><input id="${id}_chk_switch" type="checkbox" ${settings.autoSyncOnSwitch ? 'checked' : ''}> 切换角色/聊天（含新聊天）时</label>
+                            <label class="checkbox_label"><input id="${id}_chk_send" type="checkbox" ${settings.autoSyncOnSend ? 'checked' : ''}> 用户发送消息后</label>
+                            <label class="checkbox_label"><input id="${id}_chk_reply" type="checkbox" ${settings.autoSyncOnReply ? 'checked' : ''}> AI回复完（20秒内没有重roll）</label>
+                        </div>
                         <p id="${id}_status" class="cs-hint" style="margin-top:6px"></p>
                     </div>
                     </details>
