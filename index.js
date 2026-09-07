@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.74'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.75'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -519,10 +519,46 @@ function diffChatManifestParts(newParts, cloudManifest) {
     return { uploadIdx, removeFiles };
 }
 // ── 异步存取（推/拉路径统一走这里，对上层透明：仍是"整条聊天的 jsonl 文本"） ──
+// 0.12.75: crypto.subtle 仅安全上下文(HTTPS/localhost)可用——云酒馆是 http://IP 非安全上下文 → crypto.subtle 为 undefined,
+//   角色卡上传报 "Cannot read properties of undefined (reading 'digest')"(用户实报, 预设/主题不走指纹所以能传)。
+//   纯 JS SHA-1(输出与 crypto.subtle.digest('SHA-1') 逐字节一致, 已断言验证) 作为降级, 推/拉指纹比对两端同函数无偏差。
+function __csSha1Hex(bytes) {
+    const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const len = b.length, ml = len * 8;
+    const padLen = (((len + 8) >> 6) + 1) << 6;
+    const msg = new Uint8Array(padLen); msg.set(b); msg[len] = 0x80;
+    for (let i = 0; i < 8; i++) msg[padLen - 1 - i] = (ml / Math.pow(2, 8 * i)) & 0xff;
+    let h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
+    for (let i = 0; i < padLen; i += 64) {
+        const w = new Array(80);
+        for (let j = 0; j < 16; j++) w[j] = ((msg[i + j * 4] << 24) | (msg[i + j * 4 + 1] << 16) | (msg[i + j * 4 + 2] << 8) | msg[i + j * 4 + 3]) >>> 0;
+        for (let j = 16; j < 80; j++) { const n = w[j - 3] ^ w[j - 8] ^ w[j - 14] ^ w[j - 16]; w[j] = ((n << 1) | (n >>> 31)) >>> 0; }
+        let a = h0, b2 = h1, c = h2, d = h3, e = h4;
+        for (let j = 0; j < 80; j++) {
+            let f, k;
+            if (j < 20) { f = (b2 & c) | (~b2 & d); k = 0x5A827999; }
+            else if (j < 40) { f = b2 ^ c ^ d; k = 0x6ED9EBA1; }
+            else if (j < 60) { f = (b2 & c) | (b2 & d) | (c & d); k = 0x8F1BBCDC; }
+            else { f = b2 ^ c ^ d; k = 0xCA62C1D6; }
+            const t = (((a << 5) | (a >>> 27)) + f + e + k + w[j]) >>> 0;
+            e = d; d = c; c = ((b2 << 30) | (b2 >>> 2)) >>> 0; b2 = a; a = t;
+        }
+        h0 = (h0 + a) >>> 0; h1 = (h1 + b2) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
+    }
+    return [h0, h1, h2, h3, h4].map((x) => x.toString(16).padStart(8, '0')).join('');
+}
+async function sha1Bytes(bytes) {
+    try {
+        if (typeof crypto !== 'undefined' && crypto.subtle && typeof crypto.subtle.digest === 'function') {
+            const d = await crypto.subtle.digest('SHA-1', bytes);
+            return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+        }
+    } catch (e) { }
+    return __csSha1Hex(bytes); // http 非安全上下文降级
+}
 async function sha1Text(text) {
     const bytes = new TextEncoder().encode(String(text));
-    const digest = await crypto.subtle.digest('SHA-1', bytes);
-    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    return await sha1Bytes(bytes); // 已是 hex, 直接返回
 }
 // 读云端一条聊天 → {content:整条jsonl文本, sha:manifest sha(分段)/文件sha(legacy)} 或 null
 async function getCloudChat(chatPath) {
@@ -732,8 +768,7 @@ async function gitBlobSha(bytes) {
     const header = new TextEncoder().encode(`blob ${bytes.length}\0`);
     const merged = new Uint8Array(header.length + bytes.length);
     merged.set(header, 0); merged.set(bytes, header.length);
-    const digest = await crypto.subtle.digest('SHA-1', merged);
-    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    return await sha1Bytes(merged); // 0.12.75: crypto.subtle 降级(非安全上下文 http 用纯 JS SHA-1, 输出一致)
 }
 async function exportCharacter(charName, worldName) {
     const base = `sync/${charName}`;
