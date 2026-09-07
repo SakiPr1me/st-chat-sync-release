@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.40'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.41'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -325,7 +325,13 @@ const Gitee = {
             await this.glCommit([{ action: 'delete', file_path: path }], message);
             return;
         }
-        const r = await this.req(path, { method: 'DELETE', body: JSON.stringify({ sha, message, access_token: settings.token }), noRetry: true });
+        // ⚠️ 0.12.43: Gitee v5 contents 的 DELETE 必须把 sha/message 放查询参数——放 JSON body 会被忽略且返回 200(=静默假删除, 文件根本没删; 历代'删除选中'因此一直在假成功)
+        const baseUrl = this.url(path);
+        const sep = baseUrl.includes('?') ? '&' : '?';
+        const url = `${baseUrl}${sep}access_token=${encodeURIComponent(settings.token)}&sha=${encodeURIComponent(String(sha || ''))}&message=${encodeURIComponent(message || 'delete')}&_=${Date.now()}`;
+        const r = await fetch(url, { method: 'DELETE', headers: this.auth(), cache: 'no-store' });
+        if (r.status === 404) return; // 已删=幂等成功
+        if (!r.ok) throw this.errOf(r, path);
     },
     // 版本历史（防丢恢复）；GitLab 接口不同 → 返回空
     async history(path) {
@@ -1829,37 +1835,86 @@ async function deleteChatsBothSides(charName, fileNames) {
     const avatar = getAvatarFor(charName);
     const base = `sync/${charName}/chats/`;
     const ok = [], fail = []; const failReasons = [];
-    // 读云端清单(有则最后重传)
+    const affectedStems = []; // 0.12.42: 记录所有被删文件名 → 最终按它精确剔除清单
+    // 读云端清单(最后按剔除后重传) + 云端目录一次(供分段/基础文件定位删除)
     const listPath = `sync/${charName}/chat-list.json`;
     let listObj = null;
     const lc = await Gitee.getText(listPath).catch(() => null);
     if (lc) { try { listObj = JSON.parse(lc.content || '{}'); } catch { listObj = null; } }
+    const cloudEntries = await Gitee.listEntries(base).catch(() => []);
     for (const fn of fileNames) {
         try {
-            // 正在打开的聊天跳过(实测: API 删掉后酒馆自动保存又把内存版写回磁盘 → 恢复旧保护, 提示先切走)
-            if (charName === (currentCharName() || '') && currentChatFileName() === fn) { fail.push(fn); failReasons.push({ name: fn, reason: '正在打开，先切换到别的聊天再删' }); continue; }
-            // 其余本地删: 优先官方前端入口 deleteCharacterChatByName(与酒馆自带聊天管理同款); 找不到角色索引才回退裸接口
-            const cIdxQa = getContext().characters.findIndex((x) => x && x.name === charName);
-            if (cIdxQa >= 0 && typeof deleteCharacterChatByName === 'function') {
-                await deleteCharacterChatByName(cIdxQa, String(fn).replace(/\.jsonl$/i, '')).catch(() => { });
-                const stillLocal = await (async () => {
-                    try {
-                        const rr = await fetch('/api/chats/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar || charName + '.png', file_name: String(fn).replace(/\.jsonl$/i, '') }) });
-                        const jj = await rr.json();
-                        return Array.isArray(jj) && jj.length > 0;
-                    } catch { return false; }
-                })();
-                if (stillLocal) { fail.push(fn); failReasons.push({ name: fn, reason: '本地删除未生效' }); continue; }
-            } else {
-                const r = await fetch('/api/chats/delete', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar, chatfile: fn }) });
-                if (!r.ok && r.status !== 400) { fail.push(fn); failReasons.push({ name: fn, reason: '本地删除 HTTP ' + r.status }); continue; }
+            const stem = String(fn).replace(/\.jsonl$/i, '');
+            // 仅云端行不删本地(避免 File not found 噪音); 本地/双端才走本地删除
+            const rowInfo = (window.__clnRows || []).find((x) => x.fileName === fn);
+            const isCloudOnly = rowInfo && rowInfo.where === 'cloud';
+            if (!isCloudOnly) {
+                // 正在打开的聊天跳过(实测: API 删掉后酒馆自动保存又把内存版写回磁盘 → 提示先切走)
+                if (charName === (currentCharName() || '') && currentChatFileName() === fn) { fail.push(fn); failReasons.push({ name: fn, reason: '正在打开，先切换到别的聊天再删' }); continue; }
+                const cIdxQa = getContext().characters.findIndex((x) => x && x.name === charName);
+                if (cIdxQa >= 0 && typeof deleteCharacterChatByName === 'function') {
+                    await deleteCharacterChatByName(cIdxQa, stem).catch(() => { });
+                    const stillLocal = await (async () => {
+                        try {
+                            const rr = await fetch('/api/chats/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar || charName + '.png', file_name: stem }) });
+                            const jj = await rr.json();
+                            return Array.isArray(jj) && jj.length > 0;
+                        } catch { return false; }
+                    })();
+                    if (stillLocal) { fail.push(fn); failReasons.push({ name: fn, reason: '本地删除未生效' }); continue; }
+                } else {
+                    const r = await fetch('/api/chats/delete', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar, chatfile: fn }) });
+                    if (!r.ok && r.status !== 400) { fail.push(fn); failReasons.push({ name: fn, reason: '本地删除 HTTP ' + r.status }); continue; }
+                }
             }
+            // ═══ 云端删除(0.12.41 补: 此前只删本地不删云→删不干净/还能拉取/再删报File not found) ═══
+            // 分段+manifest+meta(如存在)
+            await __cleanupSegmentFiles(base + fn, null);
+            // 基础文件本身(可能不存在→幂等跳过)
+            const baseFile = await Gitee.getText(base + fn).catch(() => null);
+            if (baseFile && baseFile.sha) await Gitee.deleteFile(base + fn, baseFile.sha, 'delete chat ' + fn);
+            // 兜底: 目录里任何以该 stem 开头还残留的 .jsonl/.manifest/.meta 全清(覆盖文件名大小写/漂移)
+            for (const e of cloudEntries) {
+                if (e.type !== 'file') continue;
+                if (e.name === fn || e.name.startsWith(stem + '.p') || e.name === stem + '.manifest.json' || e.name === stem + '.meta.json') {
+                    try { await Gitee.deleteFile(e.path, e.sha, 'clean orphan ' + e.name); } catch { }
+                }
+            }
+            // 清单剔除 + 同步记忆/云sha记忆清理
+            if (listObj && Array.isArray(listObj.files)) {
+                listObj.files = listObj.files.filter((nm) => nm !== fn && !nm.startsWith(stem + '.p') && nm !== stem + '.manifest.json' && nm !== stem + '.meta.json');
+            }
+            let changed = false;
+            const sm = syncMapFor(charName);
+            for (const k of Object.keys(sm)) {
+                const kn = String(k).split('/').pop() || '';
+                if (kn === fn || kn.startsWith(stem + '.p') || kn === stem + '.manifest.json' || kn === stem + '.meta.json') { delete sm[k]; changed = true; }
+            }
+            for (const k of Object.keys(settings.lastCloudSha || {})) {
+                if (k === base + fn || k.startsWith(base + stem + '.p') || k === base + stem + '.manifest.json' || k === base + stem + '.meta.json') { delete settings.lastCloudSha[k]; changed = true; }
+            }
+            if (changed) saveSettingsDebounced();
+            affectedStems.push(stem);
             ok.push(fn);
         } catch (e) { fail.push(fn); failReasons.push({ name: fn, reason: (e && e.message) || String(e) }); }
     }
-    // 清单重传（保持云端 chat-list.json 与实际一致）
-    if (listObj && ok.length) {
-        try { const sha = (await Gitee.getText(listPath))?.sha; await Gitee.putText(listPath, JSON.stringify(listObj, null, 2), sha, 'update chat list after clean'); } catch (e) { console.warn('[chat-sync] 清单重传失败', e); }
+    // 清单重传(剔除后) —— 云端元数据与实际一致: 重读最新 + 按受影响名过滤 + 带sha重写
+    if (ok.length && affectedStems.length) {
+        try {
+            const lc2 = await Gitee.getText(listPath).catch(() => null);
+            let lo2 = null;
+            if (lc2) { try { lo2 = JSON.parse(lc2.content || '{}'); } catch { lo2 = null; } }
+            if (lo2 && Array.isArray(lo2.files)) {
+                const isHit = (nm) => affectedStems.some((st) => nm === st + '.jsonl' || nm.startsWith(st + '.p') || nm === st + '.manifest.json' || nm === st + '.meta.json');
+                const before = lo2.files.length;
+                lo2.files = lo2.files.filter((nm) => !isHit(nm));
+                if (lo2.files.length !== before) {
+                    const sha2 = (await Gitee.getText(listPath).catch(() => null))?.sha;
+                    await Gitee.putText(listPath, JSON.stringify(lo2, null, 2), sha2, 'update chat list after clean');
+                    console.log('[chat-sync] chat-list 已剔除', before - lo2.files.length, '条');
+                } else { console.log('[chat-sync] chat-list 无变更', before, '条'); }
+            } else { console.warn('[chat-sync] chat-list 缺失/损坏, 未剔除:', String(lc2 && lc2.content || '').slice(0, 60)); }
+        } catch (e) { console.warn('[chat-sync] 清单重传失败', e); }
     }
     saveSettingsDebounced();
     return { ok: ok.length, fail: fail.length, okNames: ok, failReasons };
@@ -7753,6 +7808,7 @@ jQuery(() => {
 
 // ===================== 调试出口（真机 CDP 验证用） =====================
 window.__stChatSyncDebug = {
+    Gitee,
     importCharFromCloud,
     pullCurrentCharacter,
     pushCurrentCharacter,
@@ -7765,6 +7821,7 @@ window.__stChatSyncDebug = {
     pushSelectedCharacters,
     importSelectedCharacters,
     deleteCharFromCloud,
+    deleteChatsBothSides,
     exportChats,
     backupConfigToCloud,
     restoreConfigFromCloud,
