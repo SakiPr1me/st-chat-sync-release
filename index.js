@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.42'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.43'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -943,6 +943,10 @@ function csReallyGenerating() {
     } catch { return __csGenerating; }
 }
 async function pushAuto() {
+    // 0.12.43: 自动推送最小间隔20s(用户实报'每说一句就弹冲突'——TT fork 会把每次消息/写盘都触发 CHAT_CHANGED 类事件, 连发导致冲突框叠框)
+    const now = Date.now();
+    if (now - (window.__csLastAutoPush || 0) < 20000) return;
+    window.__csLastAutoPush = now;
     const charName = currentCharName();
     if (!charName) return;
     // 生成正文中暂缓自动上传（用户正在让 AI 写，聊天文件是半写入状态）
@@ -1345,7 +1349,11 @@ async function pushCurrentChat() {
     const cloudMsgs = cloud ? parseJsonlMessages(cloud.content || '') : [];
     let decision = 'new';
     if (cloud) {
-        decision = await resolveUploadConflict(localMsgs, cloudMsgs, localName, null);
+        // 0.12.43: 冲突弹窗互斥——已有冲突框在处理时, 新的自动跳过(新框会顶掉旧框, 旧框被解析为'取消'→误报'已取消上传')
+        if (window.__csConflictBusy) { toastr.info('正在处理另一个冲突中，本次跳过（稍后会自动再试）'); return; }
+        window.__csConflictBusy = true;
+        try { decision = await resolveUploadConflict(localMsgs, cloudMsgs, localName, null); }
+        finally { window.__csConflictBusy = false; }
         if (decision === 'skip') { toastr.info(`当前聊天「${localName}」已是最新（或云端更新，无需上传）`); return; }
         if (decision === 'cancel') { toastr.info('已取消上传'); return; }
     }
