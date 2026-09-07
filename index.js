@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.68'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.70'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1195,31 +1195,39 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                 const curFile = currentChatFileName();
                 const c = ctx();
                 if (!c.groupId && curFile && curFile === knownLocal && Array.isArray(c.chat)) {
-                    // fullRebuild: 中间楼缺失按云端全量重建内存(否则只追加尾部会与磁盘不一致)
+                    // fullRebuild: 中间楼缺失按云端全量重建内存(否则只追加尾部会与磁盘不一致); 0.12.69 全量重建必须传云端全部消息,
+                    //   旧代码传 newOnes(仅缺失楼)导致本地原有楼被清空(复现: 删1楼后内存 2→1 楼)
                     const isFullRebuild = (merged === cloudMsgs);
-                    const merged_info = mergeOpenChatTail(c.chat, newOnes, isFullRebuild);
+                    const merged_info = mergeOpenChatTail(c.chat, isFullRebuild ? cloudMsgs : newOnes, isFullRebuild);
                     if (merged_info && merged_info.appended > 0) {
-                        // 0.12.68 新楼即时显示: 新楼必须先【创建 DOM】才可见——addOneMessage 是 ST/TT 官方渲染管道(真机验证+1可显示);
-                        // refreshOneMessage/redisplayChat 只能"重渲染已存在的楼", 不会为新楼创建 DOM → 内存有楼 DOM 不出现(用户实报)
-                        const c2 = ctx();
-                        const canOne = !!(c2 && typeof c2.addOneMessage === 'function');
-                        if (canOne) {
-                            for (const m of newOnes) { try { await c2.addOneMessage(m, true); } catch (e2) { console.warn('[chat-sync] addOneMessage 渲染失败', e2); } }
+                        if (isFullRebuild) {
+                            // 0.12.70 全量重建(中间删楼): 内存已按云端重建——addOneMessage 只适合"追加新楼", 整体重建必须重绘整个楼层
+                            if (typeof displayPastChats === 'function') { try { await displayPastChats(); } catch (e2) { console.warn('[chat-sync] displayPastChats 重绘失败', e2); } }
+                            else if (typeof __stCompat.redisplayChat === 'function') { try { await redisplayChat({ fade: false }); } catch (e2) { console.warn('[chat-sync] redisplay 重绘失败', e2); } }
+                            else { try { await reloadCurrentChat(); } catch (e2) { console.warn('[chat-sync] reload 兜底失败', e2); } }
+                            for (let mi = 1; mi < (c.chat || []).length; mi++) { try { eventSource.emit(event_types.MESSAGE_EDITED, mi - 1); } catch { } }
                         } else {
-                            const TH = window.TavernHelper;
-                            const thOk = !!(TH && typeof TH.refreshOneMessage === 'function');
-                            const canRedisplay = (typeof __stCompat.redisplayChat === 'function');
-                            if (thOk) {
-                                for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) { try { await TH.refreshOneMessage(mi); } catch (e2) { console.warn('[chat-sync] refreshOneMessage 失败', mi, e2); } }
-                            } else if (canRedisplay) {
-                                await redisplayChat({ startIndex: merged_info.startIndex, fade: false });
-                                for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) { try { eventSource.emit(event_types.MESSAGE_EDITED, mi - 1); } catch { } }
+                            // 0.12.68 追加新楼: 新楼必须先【创建 DOM】才可见——addOneMessage 官方管道(真机验证+1可显示)
+                            const c2 = ctx();
+                            const canOne = !!(c2 && typeof c2.addOneMessage === 'function');
+                            if (canOne) {
+                                for (const m of newOnes) { try { await c2.addOneMessage(m, true); } catch (e2) { console.warn('[chat-sync] addOneMessage 渲染失败', e2); } }
                             } else {
-                                try { await reloadCurrentChat(); } catch (e2) { console.warn('[chat-sync] reloadCurrentChat 兜底失败', e2); }
+                                const TH = window.TavernHelper;
+                                const thOk = !!(TH && typeof TH.refreshOneMessage === 'function');
+                                const canRedisplay = (typeof __stCompat.redisplayChat === 'function');
+                                if (thOk) {
+                                    for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) { try { await TH.refreshOneMessage(mi); } catch (e2) { console.warn('[chat-sync] refreshOneMessage 失败', mi, e2); } }
+                                } else if (canRedisplay) {
+                                    await redisplayChat({ startIndex: merged_info.startIndex, fade: false });
+                                    for (let mi = merged_info.startIndex; mi < c.chat.length; mi++) { try { eventSource.emit(event_types.MESSAGE_EDITED, mi - 1); } catch { } }
+                                } else {
+                                    try { await reloadCurrentChat(); } catch (e2) { console.warn('[chat-sync] reloadCurrentChat 兜底失败', e2); }
+                                }
                             }
                         }
                         try { scrollChatToBottom({ waitForFrame: true }); } catch (e3) { }
-                        console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${canOne ? 'addOneMessage' : '后备通道'}${isFullRebuild ? ',全量重建' : ''})`);
+                        console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${isFullRebuild ? '全量重绘' : 'addOneMessage'}${isFullRebuild ? ',全量重建' : ''})`);
                     }
                 }
             } catch (e) { console.warn('[chat-sync] 补楼刷新失败(忽略)', e); }
@@ -1421,6 +1429,8 @@ async function pullCurrentChat() {
     }
     if (!cloud) { hideBusy(); setStatus(''); toastr.info('云端没有该聊天（可能没同步过）；请先同步或从云端导入'); return; }
     if (localHas) {
+        // 0.12.69: 先把内存(可能刚删楼/改过)落盘——否则删楼后立刻拉取会读到旧文件, 误判"当前聊天已是最新"
+        try { if (typeof c.saveChat === 'function') await c.saveChat(); } catch (e) { console.warn('[chat-sync] pull前保存失败', e); }
         // 本地已有 → 内容级判断云端比本地多则补回，否则已最新
         const merged = await pullMergeCloudSuperset(avatar, localName, cloud, p);
         hideBusy(); setStatus('');
