@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.62'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.64'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -800,12 +800,13 @@ function getAvatarFor(charName) {
     // 0.12.62 ST1.14-web: 传空时退回当前 name1（官方 ST 的 characterId 可能未就绪）
     const target = charName || (c && c.name1) || '';
     if (c.characters && Array.isArray(c.characters)) {
-        // 优先按姓名精确匹配
-        const hit = c.characters.find((x) => x && x.name === target && x.avatar);
-        if (hit) return String(hit.avatar).replace(/\.png$/i, '') + '.png';
-        // 若传入的正好是当前角色，退回 characterId
+        // 0.12.63 先按当前 characterId 精确匹配——同名角色存在多个实例(如两个"祝惊安": 祝惊安.png/祝惊安1.png),
+        // find 只取第一个同名, 但当前聊天可能属于另一个同名实例(不同头像目录), 取错头像→读聊天为空
         const cur = c.characters?.[c.characterId];
         if (cur && cur.name === target && cur.avatar) return String(cur.avatar).replace(/\.png$/i, '') + '.png';
+        // 非当前角色或当前未就绪时, 回退按姓名匹配第一个
+        const hit = c.characters.find((x) => x && x.name === target && x.avatar);
+        if (hit) return String(hit.avatar).replace(/\.png$/i, '') + '.png';
     }
     return '';
 }
@@ -1383,6 +1384,7 @@ async function pushCurrentChat() {
         settings.lastCloudSha[p] = newSha || settings.lastCloudSha[p]; // 分段时=manifest sha
         setLocalName(charName, p, localName);
         saveSettingsDebounced();
+    hideBusy(); // 0.12.64: 内部成功路径也清浮层(自动上传 pushAuto 不走按钮 handler)
     setStatus('');
     toastr.success(`已同步当前聊天「${localName}」✅`);
     } finally { __csReleaseBusy(); }
@@ -1411,11 +1413,11 @@ async function pullCurrentChat() {
     } else {
         cloud = await getCloudChat(p);
     }
-    if (!cloud) { setStatus(''); toastr.info('云端没有该聊天（可能没同步过）；请先同步或从云端导入'); return; }
+    if (!cloud) { hideBusy(); setStatus(''); toastr.info('云端没有该聊天（可能没同步过）；请先同步或从云端导入'); return; }
     if (localHas) {
         // 本地已有 → 内容级判断云端比本地多则补回，否则已最新
         const merged = await pullMergeCloudSuperset(avatar, localName, cloud, p);
-        setStatus('');
+        hideBusy(); setStatus('');
         if (merged && merged.blocked) { toastr.warning('检测到可能正在生成，已暂停自动补楼（等生成结束再导入一次即可）'); return; }
         if (merged) { toastr.success(`已从云端补回当前聊天 ${merged.added} 楼 ✅`); return; }
         toastr.info('当前聊天已是最新');
@@ -1437,10 +1439,10 @@ async function pullCurrentChat() {
         setLocalName(charName, p, result[0]);
         settings.lastCloudSha[p] = cloud.sha;
         saveSettingsDebounced();
-        setStatus('');
+        hideBusy(); setStatus('');
         toastr.success('已从云端拉取当前聊天 ✅');
     } else {
-        setStatus('');
+        hideBusy(); setStatus('');
         toastr.error('当前聊天导入失败');
     }
     } finally { __csReleaseBusy(); }
@@ -2946,10 +2948,15 @@ function resolveUploadConflict(localMsgs, cloudMsgs, fileName, batchMode = null)
     if (!diff) return Promise.resolve('skip');
     if (diff.relation === 'identical') return Promise.resolve('skip');
     if (diff.relation === 'cloud_superset') return Promise.resolve('skip');
-    // 真正有差异（local_superset / diverged）才轮到抉择；
+    if (diff.relation === 'local_superset') {
+        // 0.12.64: 本地单纯比云端多(云端没有任何新内容) → 直接覆盖上传, 不再弹窗打扰用户
+        if (batchMode && batchMode.applyAll) return Promise.resolve(batchMode.decision ?? 'overwrite');
+        return Promise.resolve('overwrite');
+    }
+    // 真正分叉(diverged: 两边都有新内容)才轮到用户抉择；
     // 若已通过「全部X」定好统一决策，直接沿用，不再弹窗
     if (batchMode && batchMode.applyAll) return Promise.resolve(batchMode.decision ?? 'overwrite');
-    // 本地更新（local_superset / diverged）→ 让用户抉择（弹窗）
+    // 分叉（diverged）→ 让用户抉择（弹窗）
     return (async () => {
         const ALL_OVER = 3101, ALL_SAVE = 3102;   // 应用于本次全部
         const isDiverged = diff.relation === 'diverged';
@@ -4197,7 +4204,7 @@ async function __csFetchRemoteVer() {
         try {
             const headers = {};
             if (url.includes('api.github.com')) { headers['Accept'] = 'application/vnd.github+json'; if (settings.token && sv.includes('github')) headers['Authorization'] = 'Bearer ' + settings.token; }
-            else if (url.includes('gitee.com/api')) { headers['Authorization'] = 'token ' + (settings.token && (sv === '' || sv.includes('gitee')) ? settings.token : '2bf7029efdcafba86f4ed28968f85f25'); }
+            else if (url.includes('gitee.com/api')) { if (settings.token && (sv === '' || sv.includes('gitee'))) headers['Authorization'] = 'token ' + settings.token; } // 0.12.64 公开仓匿名即可读, 不再用硬编码token(失效会致权威源失败→误判)
             const r = await fetch(url, { cache: 'no-store', headers, signal: AbortSignal.timeout(6000) });
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const text = await r.text();
@@ -4308,10 +4315,10 @@ window.__csManualCheck = async function (btn) {
         const state = __csTriageVer(PLUGIN_VERSION, remoteVer, __csRemoteAuthoritative);
         if (state === 'newer') { txt = '⬆ 点击更新至 v' + remoteVer; cls = 'newer'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; } const oldUB = document.querySelector('#cs_upd_slot .cs-upd-btn'); if (oldUB) oldUB.remove();
         else if (state === 'latest') { txt = '✅ 已是最新'; cls = 'same'; delete btn.dataset.forceUpdate; delete btn.dataset.forceUpdVer; }
-        else if (state === 'stale') { txt = '🔄 疑似最新（无权威源确认，可再点强制更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
-        else if (__csRemoteAuthoritative) { txt = '🫧 本机高于远端（开发版/未推送？可再点更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
-        else { txt = '⚠ 更新源降级（仅CDN旧回声 v' + remoteVer + '，可再点强制更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
-        title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + ((state === 'stale' || (state === 'local-higher' && !__csRemoteAuthoritative)) ? '\n⚠ Gitee 权威源本次失败，仅镜像/CDN 回声——可能滞后（镜像若未同步会显示旧版）。再点一次＝直接执行官方更新（无需令牌/检测）' : '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）');
+        else if (state === 'stale') { txt = '🔄 无法连到权威源（镜像回显 v' + remoteVer + '）·再点直接更新到最新'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        else if (__csRemoteAuthoritative) { txt = '🫧 本机比云端发布高（开发版/未推送？）·再点强制更新'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        else { txt = '⚠️ 版本源异常（镜像仅 v' + remoteVer + '）·再点直接更新到最新'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
+        title2 = '本机 v' + PLUGIN_VERSION + ' / 云端发布 v' + remoteVer + ((state === 'stale' || (state === 'local-higher' && !__csRemoteAuthoritative)) ? '\n⚠ Gitee 权威源本次未连通，仅镜像/CDN 回声——版本可能滞后。再点一次＝直接执行官方更新（无需令牌/检测）' : '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）');
     } catch (e) {
         txt = '❌ 检测失败';
         title2 = String(e).slice(0, 80) + '\n（再点一次按钮＝直接执行官方更新，无需令牌/检测）';
@@ -4962,24 +4969,28 @@ function wirePanelEvents() {
         const st = $('cs_status'); if (st) st.textContent = '同步当前聊天中…';
         try { await pushCurrentChat(); if (st) st.textContent = '完成'; }
         catch (e) { toastr.error('同步失败：' + e.message); if (st) st.textContent = '同步失败'; }
+        finally { hideBusy(); } // 0.12.64: 取消/跳过/成功都必须清浮层, 否则"上传中请稍后"残留
     });
     $('cs_pull_chat')?.addEventListener('click', async () => {
         showBusy(0, 0, '导入当前聊天…');
         const st = $('cs_status'); if (st) st.textContent = '拉取当前聊天中…';
         try { await pullCurrentChat(); if (st) st.textContent = '完成'; }
         catch (e) { toastr.error('拉取失败：' + e.message); if (st) st.textContent = '拉取失败'; }
+        finally { hideBusy(); }
     });
     $('cs_push_char')?.addEventListener('click', async () => {
         showBusy(0, 0, '上传角色全部聊天…');
         const st = $('cs_status'); if (st) st.textContent = '同步中…';
         try { await pushCurrentCharacter(); if (st) st.textContent = '完成'; }
         catch (e) { toastr.error('同步失败：' + e.message); if (st) st.textContent = '同步失败'; }
+        finally { hideBusy(); }
     });
     $('cs_pull_char')?.addEventListener('click', async () => {
         showBusy(0, 0, '导入角色全部聊天…');
         const st = $('cs_status'); if (st) st.textContent = '拉取中…';
         try { await pullCurrentCharacter(); if (st) st.textContent = '完成'; }
         catch (e) { toastr.error('拉取失败：' + e.message); if (st) st.textContent = '拉取失败'; }
+        finally { hideBusy(); }
     });
     $('cs_push_all')?.addEventListener('click', async () => {
         try { await pushAllCharacters(true, 'save_elsewhere'); } // 免二次确认; 分叉聊天统一「另行保存」零丢失
