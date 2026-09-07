@@ -875,8 +875,8 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
         const cloudMsgs = parseJsonlMessages(cloud.content || '');
         // 优先用锁外预扫的决策; 未预扫则用 batchGuard(批内不弹窗, 一律照 'overwrite' 覆盖) —— 并行阶段绝不现场弹多个窗
         const decision = preDecisions ? (preDecisions.get(plan.localName) ?? 'skip') : await resolveUploadConflict(localMsgs, cloudMsgs, plan.localName, batchGuard);
-        if (decision === 'skip' || decision === 'cancel') {
-            if (decision === 'skip' && !plan.mapped) setLocalName(charName, p, plan.localName);
+        if (decision === 'skip' || String(decision).startsWith('skip_cloud') || decision === 'cancel') {
+            if ((decision === 'skip' || String(decision).startsWith('skip_cloud')) && !plan.mapped) setLocalName(charName, p, plan.localName);
             skipped.push(plan.localName);
             return null;
         }
@@ -1366,7 +1366,8 @@ async function pushCurrentChat() {
         window.__csConflictBusy = true;
         try { decision = await resolveUploadConflict(localMsgs, cloudMsgs, localName, null); }
         finally { window.__csConflictBusy = false; }
-        if (decision === 'skip') { toastr.info(`当前聊天「${localName}」已是最新（或云端更新，无需上传）`); return; }
+        if (decision === 'skip') { toastr.info(`当前聊天「${localName}」已是最新，无需上传`); return; }
+        if (String(decision).startsWith('skip_cloud')) { const dn = Number(String(decision).split(':')[1] || 0); toastr.info(`检测到云端比本地多 ${dn} 层，本次上传已取消——需要云端新楼请点「导入当前聊天」拉回`); return; }
         if (decision === 'cancel') { toastr.info('已取消上传'); return; }
     }
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中，本次跳过，稍后再试'); return; }
@@ -2947,7 +2948,7 @@ function resolveUploadConflict(localMsgs, cloudMsgs, fileName, batchMode = null)
     const diff = classifyChatDiff(localMsgs || [], cloudMsgs || []);
     if (!diff) return Promise.resolve('skip');
     if (diff.relation === 'identical') return Promise.resolve('skip');
-    if (diff.relation === 'cloud_superset') return Promise.resolve('skip');
+    if (diff.relation === 'cloud_superset') return Promise.resolve('skip_cloud:' + ((diff.cloudTail && diff.cloudTail.length) || 0)); // 0.12.64c: 云端比本地多→上传取消并带层数, 上传方提示"用导入拉回"
     if (diff.relation === 'local_superset') {
         // 0.12.64: 本地单纯比云端多(云端没有任何新内容) → 直接覆盖上传, 不再弹窗打扰用户
         if (batchMode && batchMode.applyAll) return Promise.resolve(batchMode.decision ?? 'overwrite');
