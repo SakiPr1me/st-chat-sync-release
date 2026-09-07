@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.41'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.42'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6273,11 +6273,13 @@ ext: {
             },
             async del(items, mode) {
                 if (mode === 'local') return deleteSelectedUserPersonas(items.map(x => x.value || x));
-                // 云删: 逐个 Gitee.deleteFile
+                // 云删(0.12.42修: 人设=头像原图 + .meta.json 两个文件, 此前只删了原图, meta 残留=同款删不干净; 顺带清 lastCloudSha)
                 for (const item of items) {
                     const f = item;
-                    const c = await Gitee.getText(`config-sync/user/personas/${f}`);
-                    if (c) await Gitee.deleteFile(`config-sync/user/personas/${f}`, c.sha, `delete persona ${f}`);
+                    for (const p of [`config-sync/user/personas/${f}`, `config-sync/user/personas/${f}.meta.json`]) {
+                        const c = await Gitee.getText(p);
+                        if (c && c.sha) { await Gitee.deleteFile(p, c.sha, `delete persona ${f}`); if (settings.lastCloudSha) delete settings.lastCloudSha[p]; }
+                    }
                 }
             },
         },
