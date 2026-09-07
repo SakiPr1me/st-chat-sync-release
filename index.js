@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.45'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.46'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -45,7 +45,6 @@ const DEFAULT_SETTINGS = {
     autoSyncOnSwitch: false,  // 【自动】切换角色/聊天时自动上传备份（受自动总开关管；默认关）
     autoSyncOnSend: false,    // 0.12.44 事件节点: 用户发送消息后自动上传当前聊天
     autoSyncOnReply: false,   // 0.12.44 事件节点: AI回复完(20秒内无重roll/截断)自动上传当前聊天
-    syncScope: 'chat',        // 自动上传范围：'chat'=仅当前聊天 / 'char'=仅当前角色 / 'all'=全部聊天（默认仅当前聊天）
     lastCloudSha: {},         // {云端路径: sha} 记忆
     lastLocalMTime: {},       // {云端路径: 上次同步时本地聊天文件mtime} 增量粗筛
     syncMap: {},              // {角色名: {云路径: 本地导入后的真实文件名}} 稳定身份映射，让跨端同步收敛不复制
@@ -74,7 +73,6 @@ if (!settings.uiV2) {
     settings.autoSyncOnOpen = false;   // 即时触发：默认关
     settings.autoSyncOnSwitch = false; // 切换上传：默认关
     delete settings.autoSyncOnClose;   // 已废弃
-    settings.syncScope = 'chat';       // 默认仅当前聊天
     settings.uiV2 = true;
 }
 
@@ -920,14 +918,12 @@ async function exportChats(charName, chatItems, preDecisions = null) {
 }
 
 // 自动同步范围分流：'chat'→只同步当前聊天；'all'→同步角色全部聊天
-function syncScopeIsChat() { return settings.syncScope === 'chat'; }
 async function pullAuto() {
     // 正在生成正文（用户已开始 roll）→ 放弃自动拉取，避免拉取写盘与生成写盘撞车覆盖新内容
     if (csReallyGenerating()) return;
     const charName = currentCharName();
     if (!charName) return;
-    if (syncScopeIsChat()) await pullCurrentChat();
-    else await pullCurrentCharacter();
+    await pullCurrentChat(); // 0.12.46 已移除'自动上传范围', 拉取固定当前聊天
 }
 let __csGenerating = false; // 是否正在生成正文（生成中暂缓自动上传，避免备份到半成品楼层）
 // ⚠️ 2026-08-24 QA 实证: 打开带静默提示词的角色会触发 generation_started 但永不 ended(上游怪癖, ST/TT 都中)
@@ -949,8 +945,7 @@ async function pushAuto() {
     if (!charName) return;
     // 生成正文中暂缓自动上传（用户正在让 AI 写，聊天文件是半写入状态）
     if (csReallyGenerating()) return;
-    if (syncScopeIsChat()) await pushCurrentChat();
-    else await pushCurrentCharacter();
+    await pushCurrentChat(); // 0.12.46 已移除'自动上传范围', 上传固定当前聊天
 }
 
 // 同步当前角色：卡 + (世界书) + 全部聊天（增量）
@@ -4536,16 +4531,6 @@ window.__csManualCheck = async function (btn) {
                             <label class="checkbox_label"><input id="${id}_chk_reply" type="checkbox" ${settings.autoSyncOnReply ? 'checked' : ''}> AI回复完（20秒内没有重roll）自动上传当前聊天</label>
                         </div>
                         <div class="cs-sep"></div>
-                        <div class="cs-group-title">• 定时备份上传</div>
-                        <div style="margin-top:4px">
-                        </div>
-                        <div style="margin-top:6px">
-                            <div class="cs-hint" style="margin-bottom:3px">自动上传范围：</div>
-                            <label class="checkbox_label" style="display:block"><input type="radio" name="${id}_scope" value="chat" ${settings.syncScope === 'chat' ? 'checked' : ''}> 仅当前聊天</label>
-                            <label class="checkbox_label" style="display:block"><input type="radio" name="${id}_scope" value="char" ${settings.syncScope === 'char' ? 'checked' : ''}> 仅当前角色</label>
-                            <label class="checkbox_label" style="display:block"><input type="radio" name="${id}_scope" value="all" ${settings.syncScope !== 'chat' && settings.syncScope !== 'char' ? 'checked' : ''}> 全部聊天</label>
-                        </div>
-                        <p class="cs-hint">自动只做上传备份，不做自动下载。均为增量。</p>
                         <p id="${id}_status" class="cs-hint" style="margin-top:6px"></p>
                     </div>
                     </details>
@@ -7149,16 +7134,6 @@ ext: {
         } finally { __csReleaseBusy(); }
     });
     $('cs_chk_open')?.addEventListener('change', (e) => { settings.autoSyncOnOpen = e.target.checked; saveSettingsDebounced(); });
-    // 自动同步范围：仅当前聊天 / 仅当前角色 / 全部聊天
-    document.querySelectorAll('input[name="cs_scope"]').forEach((el) => {
-        el.addEventListener('change', () => {
-            const checked = document.querySelector('input[name="cs_scope"]:checked');
-            settings.syncScope = checked ? checked.value : 'all';
-            saveSettingsDebounced();
-            const map = { chat: '仅当前聊天', char: '仅当前角色', all: '全部聊天' };
-            toastr.success('自动同步范围已设为：' + (map[settings.syncScope] || settings.syncScope));
-        });
-    });
     // 切换角色/聊天自动推送开关
     $('cs_chk_switch')?.addEventListener('change', (e) => { settings.autoSyncOnSwitch = e.target.checked; saveSettingsDebounced(); });
     $('cs_chk_send')?.addEventListener('change', (e) => { settings.autoSyncOnSend = e.target.checked; saveSettingsDebounced(); });
