@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.47'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.48'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4324,7 +4324,10 @@ window.__csManualCheck = async function (btn) {
                         <input id="${id}_repoinput" class="text_pole" style="width:100%;box-sizing:border-box" placeholder="如 satosaki/chat-sync 或 chat-sync" value="${escapeHtml(settings.owner && settings.repo ? settings.owner + '/' + settings.repo : '')}">
                         <div class="cs-sep"></div>
                         <label class="cs-label" for="${id}_token">私人令牌 token（Gitee→头像→设置→私人令牌，全选，永久；GitHub→Settings→Developer settings→Personal access tokens(classic)→no Expiration+勾选repo；GitLab→https://gitlab.com/-/user_settings/personal_access_tokens→Generate token→Expiration改到一年后→权限全选→Generate token→复制→Done）</label>
-                        <input id="${id}_token" type="password" class="text_pole" style="width:100%;box-sizing:border-box" placeholder="粘贴你的私人令牌" value="${escapeHtml(settings.token)}">
+                        <div style="display:flex;gap:4px;align-items:center">
+                            <input id="${id}_token" type="password" class="text_pole" style="flex:1;min-width:0;box-sizing:border-box" placeholder="粘贴你的私人令牌" value="${escapeHtml(settings.token)}" autocomplete="off">
+                            <button id="${id}_token_eye" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="点击查看/隐藏令牌（检查有没有复制漏/多）">👁</button>
+                        </div>
                         <div class="cs-row" style="margin-top:8px">
                             <button id="${id}_test" type="button" class="cs-btn">连接</button>
                             <button id="${id}_save" type="button" class="cs-btn cs-primary">保存配置</button>
@@ -4777,6 +4780,16 @@ function wirePanelEvents() {
     $('cs_platform')?.addEventListener('change', () => {
         settings.server = String($('cs_platform').value || '').trim();
         saveSettingsDebounced();
+    });
+    // 0.12.48 令牌👁显示/隐藏(用户反馈: 常有人复制错口令看不出问题)
+    $('cs_token_eye')?.addEventListener('click', () => {
+        const inp = document.getElementById('cs_token');
+        const eye = document.getElementById('cs_token_eye');
+        if (!inp || !eye) return;
+        const show = inp.type !== 'text';
+        inp.type = show ? 'text' : 'password';
+        eye.textContent = show ? '🙈' : '👁';
+        eye.title = show ? '点击隐藏令牌' : '点击查看令牌';
     });
     $('cs_save')?.addEventListener('click', async () => {
         const repoInput = $('cs_repoinput').value.trim();
