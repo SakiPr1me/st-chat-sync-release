@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.48'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.60'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -86,12 +86,20 @@ const b64Decode = (s) => {
     catch { try { return atob(clean); } catch { return ''; } }
 };
 
+// 0.12.55 默认平台统一: settings.server 为空时按 owner 消解(Gitee 选项本就存空值)——owner 非空=老 Gitee 用户(
+// 或保存过 Gitee), owner 也为空=未配置→默认 GitHub(与面板下拉 selected 判定完全同构; 修"显示 GitHub 却发去 Gitee"的 401)
+function __csBase() {
+    const v = String(settings.server || '').trim();
+    if (v) return v.replace(/\/$/, '');
+    return (String(settings.owner || '').trim() ? 'https://gitee.com/api/v5' : 'https://api.github.com');
+}
+
 const Gitee = {
-    get base() { return (settings.server || 'https://gitee.com/api/v5').replace(/\/$/, ''); },
+    get base() { return __csBase(); },
     // 双平台: Gitee v5 与 GitHub Contents API 同构(路径/PUT/DELETE/响应 sha 均一致)。
     // 差异仅: GitHub 需 Authorization 头(GET 查询参数不认) + vnd Accept; Gitee 两种认证都认 → 统一发头。
-    isGithub() { return String(settings.server || '').includes('github'); },
-    isGitlab() { return String(settings.server || '').includes('gitlab.com'); },
+    isGithub() { return __csBase().includes('github'); },
+    isGitlab() { return __csBase().includes('gitlab.com'); },
     // GitLab Contents API: /api/v4/projects/<url编码的owner/仓库>/repository/contents/<path> (与 GitHub 路由不同)
     glPath(raw) {
         const base = (settings.server || '').replace(/\/$/, '');
@@ -117,7 +125,7 @@ const Gitee = {
     // （Gitee 对连续请求会限流 429，快速连点多个"云端"按钮时偶发失败——重试+明确提示是"获取不下来"的解药）
     errOf(r, path) {
         const n = r && r.status;
-        if (n === 401) return new Error('云端令牌没通过(HTTP 401)——令牌可能没填、被重置、过期或复制漏了。到上方「设置」里重新粘贴/换一个新令牌再试');
+        if (n === 401) return new Error('云端令牌没通过(HTTP 401)——令牌可能没填、被重置、过期或复制漏了。到上方「设置」里重新粘贴/换一个新令牌再试；若另一台设备连同一个仓库正常，多半是两端令牌不一致(多/少字符或带空格)，整段删掉重贴一次');
         if (n === 403) return new Error('云端拒绝访问(HTTP 403)——令牌权限不够(创建时可能没勾仓库读写)。重新生成一个带读写权限的令牌, 并确认仓库是你自己的');
         if (n === 429) return new Error('云端接口限流(HTTP 429)——刚才请求太密，稍等 5 秒再点一次就行');
         if (n === 503 || n === 502 || n === 504) return new Error('云端服务器繁忙(HTTP ' + n + ')，稍候几秒再试');
@@ -4002,7 +4010,7 @@ function parseRepoInput(input) {
 // 用 token 拿当前 Gitee 用户名；失败返回 ''
 async function fetchLogin(token) {
     try {
-        const base = (settings.server || 'https://gitee.com/api/v5').replace(/\/$/, '');
+        const base = __csBase();
         const isGh = base.includes('github');
         const isGl = base.includes('gitlab.com');
         const r = await fetch(`${base}/user?${isGl ? 'private_token' : 'access_token'}=${encodeURIComponent(token)}`, { headers: isGl ? { 'PRIVATE-TOKEN': token } : ({ 'Authorization': (isGh ? 'Bearer ' : 'token ') + token, ...(isGh ? { 'Accept': 'application/vnd.github+json' } : {}) }) });
@@ -4010,6 +4018,15 @@ async function fetchLogin(token) {
         const u = await r.json();
         return u.login || u.username || '';
     } catch { return ''; }
+}
+
+// 0.12.54 令牌类型识别: 按令牌前缀判断属于哪个平台(GitHub ghp_/github_pat_, GitLab glpat-, Gitee 无固定前缀)
+// 用途: 连接测试检测"令牌与云平台不匹配"(如把 GitHub 令牌填进 Gitee→恒 401), 自动校正平台
+function __csTokenType(tok) {
+    const t = String(tok || '').trim();
+    if (/^ghp_/i.test(t) || /^github_pat_/i.test(t)) return 'github';
+    if (/^glpat-/i.test(t)) return 'gitlab';
+    return '';
 }
 
 // 完整解析：给定 token + 仓库输入，返回可用的 {owner, repo}
@@ -4031,7 +4048,7 @@ function __fmtBytes(n) {
 }
 async function __cloudUsage() {
     if (!settings.owner || !settings.repo || !settings.token) return null;
-    const base = (settings.server || 'https://gitee.com/api/v5').replace(/\/$/, '');
+    const base = __csBase();
     const isGh = base.includes('github');
     const isGl = base.includes('gitlab.com');
     let tree = [];
@@ -4085,20 +4102,25 @@ function __refreshCurRepoLine() {
         const arr = Array.isArray(settings.connSlots) ? settings.connSlots : [];
         const cur = `${settings.owner}/${settings.repo}`;
         const curKey = String(settings.server || '') + '|' + cur;
-        const opts = arr.map((x, i) => {
+        // 0.12.59 槽位切换改自定义列表(原生 select 弹出层 hover 时 Chromium 会把其他选项对比度降低→看不清):
+        // 每行平台·仓库 + 当前项橙底高亮 + 行尾🗑删除, 悬停/选中样式完全可控
+        const items = arr.map((x, i) => {
             const nm = (String(x.platform || '').includes('github') ? 'GitHub' : (String(x.platform || '').includes('gitlab.com') ? 'GitLab' : 'Gitee')) + ' · ' + x.repo;
             const key = String(x.platform || '') + '|' + x.repo;
-            return `<option value="${i}" ${key === curKey ? 'selected' : ''}>${escapeHtml(nm)}</option>`;
+            return `<div class="cs-slot-item ${key === curKey ? 'cs-slot-cur' : ''}" data-idx="${i}" title="点击切换到此槽位"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(nm)}</span><span class="cs-slot-del" data-idx="${i}" title="删除此槽位">🗑</span></div>`;
         }).join('');
         slot2.innerHTML = `<b>📦 槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}` +
-            (arr.length ? `<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;align-items:center">
-                <select id="cs_slot_sel" style="flex:1;min-width:0;font-size:.8em;padding:2px 4px">${opts}</select>
-                <button type="button" id="cs_slot_del" class="cs-btn" style="padding:1px 8px;font-size:.72em">🗑 删除</button>
-            </div>` : '<div style="font-size:.72em;opacity:.7;margin-top:2px">保存配置后自动存为槽位，可一秒切换</div>');
-        const ss2 = document.getElementById('cs_slot_sel');
-        if (ss2) ss2.addEventListener('change', () => window.__csApplySlot(Number(ss2.value)));
-        const sd2 = document.getElementById('cs_slot_del');
-        if (sd2) sd2.addEventListener('click', () => window.__csDeleteSlot(Number((document.getElementById('cs_slot_sel') || {}).value)));
+            (arr.length ? `<div style="margin-top:4px">
+                <div id="cs_slot_list" class="cs-roles" style="max-height:116px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:6px;padding:3px;user-select:none">${items}</div>
+            </div>` : '<div style="font-size:.72em;opacity:.7;margin-top:2px">保存配置后自动存为槽位，点击即可切换</div>');
+        const sl = document.getElementById('cs_slot_list');
+        if (sl) sl.addEventListener('click', (ev) => {
+            const t = ev.target.closest('[data-idx]');
+            if (!t) return;
+            const idx = Number(t.getAttribute('data-idx'));
+            if (ev.target.closest('.cs-slot-del')) { window.__csDeleteSlot(idx); return; }
+            window.__csApplySlot(idx);
+        });
     }
     __fillCloudUsage();
     try {
@@ -4175,7 +4197,7 @@ async function __csFetchRemoteVer() {
                 v = (j && typeof j.content === 'string') ? JSON.parse(__b64ToText(j.content)).version : j.version;
             } catch { throw new Error('parse'); }
             v = String(v || '').trim();
-            if (v) { found.push(v); if (url.includes('api.')) foundApi = true; } // api.github.com / gitee.com/api 即权威
+            if (v) { found.push(v); if (url.includes('gitee.com/api')) foundApi = true; } // 0.12.60 权威仅认 Gitee 主仓 API; GitHub 镜像(api.github.com)滞后会误导"本机高于远端", 只能作候选
         } catch (e) { lastErr = e; }
     }
     if (!found.length) throw lastErr || new Error('所有更新源均失败');
@@ -4279,7 +4301,7 @@ window.__csManualCheck = async function (btn) {
         else if (state === 'stale') { txt = '🔄 疑似最新（无权威源确认，可再点强制更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
         else if (__csRemoteAuthoritative) { txt = '🫧 本机高于远端（开发版/未推送？可再点更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
         else { txt = '⚠ 更新源降级（仅CDN旧回声 v' + remoteVer + '，可再点强制更新）'; cls = 'same'; btn.dataset.forceUpdate = '1'; btn.dataset.forceUpdVer = remoteVer; }
-        title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + ((state === 'stale' || (state === 'local-higher' && !__csRemoteAuthoritative)) ? '\n⚠ 权威源(Gitee/GitHub API)本次均失败，仅 CDN 回声——可能滞后。再点一次＝直接执行官方更新（无需令牌/检测）' : '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）');
+        title2 = '本机 v' + PLUGIN_VERSION + ' / 更新源 v' + remoteVer + ((state === 'stale' || (state === 'local-higher' && !__csRemoteAuthoritative)) ? '\n⚠ Gitee 权威源本次失败，仅镜像/CDN 回声——可能滞后（镜像若未同步会显示旧版）。再点一次＝直接执行官方更新（无需令牌/检测）' : '\n（更新源：' + PLUGIN_REPO_MANIFEST_API + '）');
     } catch (e) {
         txt = '❌ 检测失败';
         title2 = String(e).slice(0, 80) + '\n（再点一次按钮＝直接执行官方更新，无需令牌/检测）';
@@ -4316,7 +4338,7 @@ window.__csManualCheck = async function (btn) {
                         <label class="cs-label" for="${id}_platform">云平台：</label>
                         <select id="${id}_platform" class="text_pole" style="width:100%;box-sizing:border-box">
                             <option value="https://api.github.com" ${(!settings.server && !settings.owner) || String(settings.server || '').includes('github') ? 'selected' : ''}>GitHub（需能访问外网·单仓库建议&lt;1GB，上限约100GB，默认）</option>
-                            <option value="" ${(!settings.server && settings.owner) || (settings.server && !String(settings.server).includes('github') && !String(settings.server).includes('gitlab.com')) ? 'selected' : ''}>Gitee（国内直连·单仓库约500MB）</option>
+                            <option value="https://gitee.com/api/v5" ${String(settings.server || '').includes('gitee') || (!settings.server && settings.owner) ? 'selected' : ''}>Gitee（国内直连·单仓库约500MB）</option>
                             <option value="https://gitlab.com/api/v4" ${String(settings.server || '').includes('gitlab.com') ? 'selected' : ''}>GitLab（需能访问外网·单仓库10GiB）</option>
                         </select>
                         <div class="cs-sep"></div>
@@ -4327,6 +4349,8 @@ window.__csManualCheck = async function (btn) {
                         <div style="display:flex;gap:4px;align-items:center">
                             <input id="${id}_token" type="password" class="text_pole" style="flex:1;min-width:0;box-sizing:border-box" placeholder="粘贴你的私人令牌" value="${escapeHtml(settings.token)}" autocomplete="off">
                             <button id="${id}_token_eye" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="点击查看/隐藏令牌（检查有没有复制漏/多）">👁</button>
+                            <button id="${id}_token_copy" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="复制当前令牌到剪贴板">📋</button>
+                            <button id="${id}_token_help" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="获取口令图文指引（含各平台直达链接与最长有效期）">❓</button>
                         </div>
                         <div class="cs-row" style="margin-top:8px">
                             <button id="${id}_test" type="button" class="cs-btn">连接</button>
@@ -4791,6 +4815,51 @@ function wirePanelEvents() {
         eye.textContent = show ? '🙈' : '👁';
         eye.title = show ? '点击隐藏令牌' : '点击查看令牌';
     });
+    // 0.12.49 复制令牌 + 获取口令图文指引
+    $('cs_token_copy')?.addEventListener('click', async () => {
+        const v = (document.getElementById('cs_token') || {}).value || '';
+        if (!v) { toastr.warning('令牌是空的——先粘贴/填写令牌再复制'); return; }
+        try { await navigator.clipboard.writeText(v); toastr.success('✅ 令牌已复制；粘贴时注意别多/少空格'); }
+        catch (e) {
+            const ta = document.createElement('textarea');
+            ta.value = v; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); toastr.success('✅ 令牌已复制'); } catch (e2) { toastr.error('复制失败，请手动选中复制'); }
+            ta.remove();
+        }
+    });
+    $('cs_token_help')?.addEventListener('click', () => __csTokenGuide());
+    window.__csTokenGuide = function () {
+        try { if (window.__csTokenGuideOpen) return; } catch { }
+        const m = __csOpenMask(() => { try { window.__csTokenGuideOpen = false; } catch { } __csUnlockBgScroll(); });
+        m.id = 'cs_token_guide_modal';
+        // 平台按 settings.server 高亮当前（server 存 gitee/github/gitlab，未选默认 Gitee；仅输出「（当前）」，布尔不外露）
+        const cur = String(settings.server || '').toLowerCase();
+        const curKey = cur.includes('gitlab') ? 'gitlab' : cur.includes('github') ? 'github' : cur.includes('gitee') ? 'gitee' : '';
+        const row = (name, url, steps) => {
+            const key = url.includes('gitlab.com') ? 'gitlab' : url.includes('github.com') ? 'github' : 'gitee';
+            const isCur = curKey ? curKey === key : key === 'gitee';
+            return `<div style="border:1px solid var(--SmartThemeBorderColor,#333);border-radius:10px;padding:8px 10px;margin-bottom:8px">
+                <b>${name}</b>${isCur ? ' <small>（当前）</small>' : ''}：${steps}<br>
+                <a href="${url}" target="_blank" rel="noopener" style="color:var(--SmartThemeQuoteColor,#f0a35e)">👉 打开创建口令页面</a></div>`;
+        };
+        m.innerHTML = `<div style="position:relative;width:min(620px,94vw);max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);display:flex;flex-direction:column;background:var(--SmartThemeBlurTintColor,#1b1b1b);border:1px solid var(--SmartThemeBorderColor,#333);border-radius:12px;padding:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.5)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--SmartThemeBorderColor,#333)">
+                <b style="font-size:.95em">❓ 获取私人令牌（口令）</b>
+                <button id="__tg_close" style="padding:3px 14px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#555);background:rgba(255,255,255,0.05);color:var(--SmartThemeBodyColor,#eee);cursor:pointer;font-size:.9em">✕ 关闭</button>
+            </div>
+            <div style="flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;font-size:.86em;line-height:1.7">
+                <p style="opacity:.9">口令是你在平台账号里创建的一串密钥，插件用它读写你的云端仓库。<b>插件无法替你创建</b>——必须在平台网站登录后自己点一次生成。跟着下面做（三选一，和顶上「云平台」选的一致）：</p>
+                ${row('Gitee（国内直连）', 'https://gitee.com/personal_access_tokens/new', '<br>右上头像 → 设置 → 私人令牌 → 生成新令牌：<b>全选权限</b>，有效期选<b>永久</b>，生成后立即复制（只显示一次）')}
+                ${row('GitHub', 'https://github.com/settings/tokens/new', '<br>进页面后选 <b>Generate new token (classic)</b>：勾选 <b>repo</b> 权限，有效期选 <b>No expiration</b>，生成后复制（只显示一次）。<small>（别选 Fine-grained——还需逐个仓库授权，容易漏）</small>')}
+                ${row('GitLab', 'https://gitlab.com/-/user_settings/personal_access_tokens', '<br>Name 随意，Scopes 勾 <b>api</b>（或全选），有效期改到<b>最长（365天）</b>后重新生成，生成后复制（用完新口令后旧的作废）')}
+                <div style="border:1px dashed var(--SmartThemeBorderColor,#444);border-radius:8px;padding:8px 10px;opacity:.9">完成后把口令粘贴到上面「私人令牌」输入框 → 点「连接」验证 → 成功再点「保存配置」。</div>
+            </div>
+        </div>`;
+        __csLockBgScroll();
+        window.__csTokenGuideOpen = true;
+        m.addEventListener('click', (ev) => { ev.stopPropagation(); });
+        document.getElementById('__tg_close').addEventListener('click', () => { try { window.__csTokenGuideOpen = false; } catch { } __csCloseMask(m); __csUnlockBgScroll(); });
+    };
     $('cs_save')?.addEventListener('click', async () => {
         const repoInput = $('cs_repoinput').value.trim();
         const token = $('cs_token').value;
@@ -4813,16 +4882,33 @@ function wirePanelEvents() {
         const token = $('cs_token').value;
         const out = $('cs_testresult');
         out.textContent = '测试中…';
+        // 0.12.54 令牌类型识别 + 平台自动校正(根因: 把 GitHub 令牌填进 Gitee 平台 → 恒 401)
+        const __csOrigServer = settings.server || '';
         try {
+            const tokType = __csTokenType(token);
+            // 0.12.57 平台以界面「云平台」下拉当前值为准(所见即所得)——不因 settings.server 残留旧值/槽位切换后的值而误报
+            //   "你选了Gitee"(用户下拉明明GitHub)。下拉空(未配置)时才回退 __csBase() 推断(默认GitHub/老Gitee)。
+            const __platSel = ($('cs_platform') && $('cs_platform').value) || '';
+            let base = (__platSel || __csBase()).replace(/\/$/, '');
+            let isGh = base.includes('github');
+            let isGl = base.includes('gitlab.com');
+            let platformNote = '';
+            if (tokType === 'github' && !isGh) { settings.server = base = 'https://api.github.com'; isGh = true; isGl = false; platformNote = '⚠️ 令牌是 GitHub 的，但「云平台」当前是 Gitee——GitHub 令牌在 Gitee 上必然 401。已自动按 GitHub 连接。'; }
+            else if (tokType === 'gitlab' && !isGl) { settings.server = base = 'https://gitlab.com/api/v4'; isGl = true; isGh = false; platformNote = '⚠️ 令牌是 GitLab 的，但「云平台」当前不是 GitLab——已自动按 GitLab 连接。'; }
             const { owner, repo } = await resolveRepo(token, repoInput);
             if (!owner) throw new Error('无法识别用户名（检查令牌）');
             if (!repo) throw new Error('请填写仓库地址或仓库名');
-            const base = (settings.server || 'https://gitee.com/api/v5').replace(/\/$/, '');
-            const isGh = base.includes('github');
-            const isGl = base.includes('gitlab.com');
             const ah = isGl ? { 'PRIVATE-TOKEN': token } : ({ 'Authorization': (isGh ? 'Bearer ' : 'token ') + token, ...(isGh ? { 'Accept': 'application/vnd.github+json' } : {}) });
             const u = await fetch(`${base}/user${isGh ? '' : isGl ? '?private_token=' + encodeURIComponent(token) : '?access_token=' + encodeURIComponent(token)}`, { headers: ah });
-            if (!u.ok) throw new Error('令牌没通过(HTTP ' + u.status + ')——令牌可能没填、被重置、过期或复制漏了。去 Gitee/GitLab「个人访问令牌」重新生成一个, 再粘贴到这里保存');
+            if (!u.ok) {
+                const platName = isGh ? 'GitHub' : isGl ? 'GitLab' : 'Gitee';
+                const tokName = isGh ? 'token' : '私人令牌';
+                // 0.12.53 诊断: 401 时把实际请求细节带上(旧版/脏字符/平台判定一次看清)
+                const e = new Error(`令牌没通过(HTTP ${u.status})——${tokName}可能没填、被重置、过期或复制漏了。去 ${platName} 重新生成一个, 再粘贴到这里保存；若另一台设备连同一个仓库正常，多半是两边${tokName}不一致(多/少字符或带空格)，整段删掉重贴一次`);
+                e.csDiag = { url: u.url || '', status: u.status, statusText: u.statusText || '', server: String(settings.server || ''), tokenLen: token.length, tokenHead: token.slice(0, 4), tokenTail: token.slice(-4), body: '' };
+                try { e.csDiag.body = (await u.text()).slice(0, 200); } catch { }
+                throw e;
+            }
             const userData = await u.json();
             out.textContent = `✅ 连接成功：${userData.login || userData.username}（已识别为用户名）`;
             // 仓库可达性: Gitee/GitHub 用 contents 列举; GitLab 用 GET /projects/{proj} 探测
@@ -4832,7 +4918,11 @@ function wirePanelEvents() {
             out.textContent += rr.ok ? `｜仓库 ${owner}/${repo} 可访问` : '｜⚠️ 仓库不存在或没权限，请先建私有仓库';
             if (rr.ok && isGl) { try { const pj = await rr.json(); settings.gitlabBranch = pj.default_branch || 'main'; saveSettingsDebounced(); } catch { } }
             if (rr.ok) {
-                settings.owner = owner; settings.repo = repo; settings.token = token; settings.lastConnectAt = Date.now(); saveSettingsDebounced(); __refreshCurRepoLine();
+                settings.owner = owner; settings.repo = repo; settings.server = base; settings.token = token; settings.lastConnectAt = Date.now(); saveSettingsDebounced(); __refreshCurRepoLine();
+                // ↑ settings.server=base: 0.12.56 修——连接成功必须固化本次解析出的平台, 否则 owner 被写入后
+                //   __csBase() 的"owner 非空→老 Gitee"推断会把 GitHub 配置误判成 Gitee, 目录盘点全部 401
+                __csUpsertSlot(settings.server || '', `${settings.owner}/${settings.repo}`, settings.token); // 连接成功即入槽位(不必另点保存), 下次下拉一键切回
+                if (platformNote) { const _selp = document.getElementById('cs_platform'); if (_selp) _selp.value = base; out.textContent += '\n' + platformNote + ' 平台已自动切到 ' + (isGh ? 'GitHub' : 'GitLab') + ' 并保存，无需再改。'; }
                 // 目录盘点: 与"云端角色/云端预设/云端正则/云端人设"按钮用同一套读取方法, 直证各列表链路
                 const parts = ['角色(sync)', '预设(connections/openai)', '主题(themes)', '全局正则(regex)', '人设(personas)'];
                 const dirs = ['sync', 'config-sync/connections/openai', 'config-sync/themes', 'config-sync/regex', 'config-sync/user/personas'];
@@ -4846,10 +4936,15 @@ function wirePanelEvents() {
                         out.textContent += `\n${parts[i]}: ❌ ${(e2 && e2.message) || e2}`;
                     }
                 }
-                out.textContent += '\n（= 上面各「云端」按钮能看到的数量；某栏 ❌ 即该目录读取失败，其余正常可继续用）';
             }
         } catch (e) {
+            if (settings.server !== __csOrigServer) settings.server = __csOrigServer; // 校正失败→还原平台, 避免留下半切换状态
             out.textContent = '❌ 连接失败：' + e.message;
+            if (e && e.csDiag) {
+                const d = e.csDiag;
+                console.log('[chat-sync 连接诊断]', d);
+                out.textContent += `\n\n📋 诊断信息（复制发给开发者）：\n请求地址: ${d.url}\nHTTP ${d.status} ${d.statusText}\n平台判定: ${d.server}\n令牌长度: ${d.tokenLen}（首 ${d.tokenHead}… 尾 ${d.tokenTail}）\n响应: ${d.body}`;
+            }
         }
     });
     $('cs_push_chat')?.addEventListener('click', async () => {
@@ -6550,7 +6645,7 @@ ext: {
             settings.server = sl.platform || ''; settings.owner = o || ''; settings.repo = r || ''; settings.token = sl.token || '';
             settings.lastConnectAt = Date.now();
             saveSettingsDebounced();
-            const sel = document.getElementById('cs_platform'); if (sel) sel.value = settings.server;
+            const sel = document.getElementById('cs_platform'); if (sel) sel.value = __csBase(); // 0.12.57 老槽位 server='' 也能选中正确平台项
             const ri = document.getElementById('cs_repoinput'); if (ri) ri.value = settings.owner + '/' + settings.repo;
             const ti = document.getElementById('cs_token'); if (ti) ti.value = settings.token;
             __refreshCurRepoLine();
@@ -7294,6 +7389,12 @@ const CHAT_SYNC_CSS = `
 #chat_sync_settings .text_pole, #cs_float_win .text_pole, #cs_quick_float .text_pole, .cs-cln-modal .text_pole, #chat_sync_settings select, #cs_float_win select, #cs_quick_float select, .cs-cln-modal select, #chat_sync_settings input[type='text'], #cs_float_win input[type='text'], #cs_quick_float input[type='text'], .cs-cln-modal input[type='text'], #chat_sync_settings input[type='password'], #cs_float_win input[type='password'], #cs_quick_float input[type='password'], .cs-cln-modal input[type='password'], #chat_sync_settings textarea, #cs_float_win textarea, #cs_quick_float textarea, .cs-cln-modal textarea { background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor, inherit); border:1px solid var(--SmartThemeBorderColor); border-radius:8px; padding:3px 8px; }
 #chat_sync_settings select, #cs_float_win select, #cs_quick_float select, .cs-cln-modal select { color-scheme:dark; }
 #chat_sync_settings select option, #cs_float_win select option, #cs_quick_float select option, .cs-cln-modal select option { background:var(--SmartThemeBlurTintColor,rgba(0,0,0,0.08)); color:var(--SmartThemeBodyColor, inherit); }
+/* 0.12.59 槽位自定义列表(替代原生 select 弹出层: hover 对比度固定, 文字永远清楚) */
+.cs-slot-item { display:flex; align-items:center; gap:6px; padding:2px 6px; border-radius:4px; cursor:pointer; font-size:.78em; color:var(--SmartThemeBodyColor, inherit); }
+.cs-slot-item:hover { background:rgba(128,128,128,0.18); }
+.cs-slot-item.cs-slot-cur { background:rgba(240,163,94,0.16); color:var(--SmartThemeQuoteColor,#f0a35e); font-weight:600; }
+.cs-slot-del { cursor:pointer; opacity:.75; font-size:.85em; padding:0 2px; flex:none; }
+.cs-slot-del:hover { opacity:1; color:var(--SmartThemeQuoteColor,#f0a35e); }
 #chat_sync_settings input[type='checkbox'], #cs_float_win input[type='checkbox'], #cs_quick_float input[type='checkbox'], .cs-cln-modal input[type='checkbox'] { accent-color:var(--SmartThemeQuoteColor,#f0a35e); }
 
 /* 0.12.35: 弹窗当前预览行 → 外面列表持久标记(橙色淡底) */
@@ -7425,7 +7526,7 @@ async function registerSlashCommand() {
 async function autoConnectIfConfigured() {
     if (!settings.owner || !settings.repo || !settings.token) return;
     try {
-        const base = (settings.server || 'https://gitee.com/api/v5').replace(/\/$/, '');
+        const base = __csBase();
         const isGh = base.includes('github'), isGl = base.includes('gitlab.com');
         const url = `${base}/user${isGh ? '' : (isGl ? '?private_token=' : '?access_token=') + encodeURIComponent(settings.token)}`;
         const headers = isGl ? { 'PRIVATE-TOKEN': settings.token } : (isGh ? { 'Authorization': 'Bearer ' + settings.token, 'Accept': 'application/vnd.github+json' } : { 'Authorization': 'token ' + settings.token });
