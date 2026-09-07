@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.75'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.76'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1158,6 +1158,15 @@ async function importSelectedCharacters(charNames) {
     } finally { __csReleaseBusy(); }
 }
 
+// 0.12.76 楼层口径统一: 开场白=0楼, 不计入楼层数(用户定义)——楼层数 = 有 mes 的消息数 - 开场白(若第一条为角色开场)
+function __csFloorCount(msgs) {
+    const arr = Array.isArray(msgs) ? msgs.filter((m) => m && typeof m === 'object' && m.mes !== undefined) : [];
+    if (!arr.length) return 0;
+    const first = arr[0];
+    const hasGreeting = first && typeof first.mes === 'string' && first.mes.trim().length > 0 && first.is_user !== true;
+    return Math.max(0, arr.length - (hasGreeting ? 1 : 0));
+}
+
 // 把云端补回的新楼并入「当前打开聊天」的内存 chat 数组，返回 {startIndex, appended}（供 redisplayChat 局部重绘）
 //  - 跳过首行 header 对象（{user_name,character_name,create_date,...}），只处理消息体
 //  - 已在数组里的楼不重复追加（按 messageSignature 去重）
@@ -1266,7 +1275,7 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                     }
                 }
             } catch (e) { console.warn('[chat-sync] 补楼刷新失败(忽略)', e); }
-            return { added: newOnes.length, localCount: localMsgs.length }; // 0.12.66 带补回前本地楼数(提示用)
+            return { added: newOnes.length, localCount: __csFloorCount(localMsgs) }; // 0.12.76 localCount 用楼层口径(排除开场白)
         }
         console.warn('[chat-sync] 拉取补楼写回失败', knownLocal, res.status);
         return null;
@@ -1470,7 +1479,7 @@ async function pullCurrentChat() {
         const merged = await pullMergeCloudSuperset(avatar, localName, cloud, p);
         hideBusy(); setStatus('');
         if (merged && merged.blocked) { toastr.warning('检测到可能正在生成，已暂停自动补楼（等生成结束再导入一次即可）'); return; }
-        if (merged) { const nowN = Array.isArray(ctx().chat) ? ctx().chat.filter((m) => m && typeof m === 'object' && m.mes !== undefined).length : 0; toastr.success(`已从云端补回当前聊天 ${merged.added} 楼 ✅（补回前本地 ${merged.localCount ?? 0} 楼 → 当前 ${nowN} 楼）`); return; }
+        if (merged) { const nowN = __csFloorCount(ctx().chat); const localN = merged.localCount ?? 0; const addedN = Math.max(0, nowN - localN); toastr.success(`已从云端补回当前聊天 ${addedN} 楼 ✅（补回前本地 ${localN} 楼 → 当前 ${nowN} 楼）`); return; }
         toastr.info('当前聊天已是最新');
         return;
     }
@@ -5310,14 +5319,14 @@ function wirePanelEvents() {
         const who = f.is_user ? `${f.name || 'user'}（你）` : (f.name || 'AI');
         const nav = `<div class="cs-cln-fnav">
             <button class="cs-btn" id="cs_cln_f_prev" type="button"${pv.idx <= 0 ? ' disabled' : ''}>⬅ 上一楼</button>
-            <span class="cs-cln-fnum">第 ${pv.idx + 1} / ${pv.floors.length} 楼 · ${escapeHtml(who)}</span>
+            <span class="cs-cln-fnum">第 ${pv.idx} / ${__csFloorCount(pv.floors)} 楼 · ${escapeHtml(who)}</span>
             <button class="cs-btn" id="cs_cln_f_next" type="button"${pv.idx >= pv.floors.length - 1 ? ' disabled' : ''}>下一楼 ➡</button>
-            <input id="cs_cln_f_jump" type="number" min="1" max="${pv.floors.length}" placeholder="楼层号" style="width:64px" class="text_pole">
+            <input id="cs_cln_f_jump" type="number" min="0" max="${Math.max(0, __csFloorCount(pv.floors))}" placeholder="楼层号(开场白=0楼)" style="width:100px" class="text_pole">
             <button class="cs-btn" id="cs_cln_f_go" type="button">跳转</button>
         </div>`;
         // nav 为预览框固定头部(flex:none), 标题+正文放独立滚动区 fbody —— 导航物理贴顶, 不依赖 sticky
         pane.innerHTML = nav
-            + `<div class="cs-cln-fbody" id="cs_cln_fbody"><div class="cs-cln-ptitle"><b>${escapeHtml(pv.fileName)}</b><br><small>latest: ${escapeHtml(r ? r.lastTime : '?')} ｜ 大小 <b class="cs-cln-size">${escapeHtml(String(r ? r.size : '?'))}</b> ｜ 共 ${pv.floors.length} 楼</small></div>`
+            + `<div class="cs-cln-fbody" id="cs_cln_fbody"><div class="cs-cln-ptitle"><b>${escapeHtml(pv.fileName)}</b><br><small>latest: ${escapeHtml(r ? r.lastTime : '?')} ｜ 大小 <b class="cs-cln-size">${escapeHtml(String(r ? r.size : '?'))}</b> ｜ 共 ${__csFloorCount(pv.floors)} 楼</small></div>`
             + `<div class="cs-cln-ptext cs-cln-fl ${f.is_user ? 'cs-cln-fl-user' : 'cs-cln-fl-ai'}">${__fmtPrevText(previewAfterContent(f.mes).slice(0, 6000)) || '（这层楼没有文字内容）'}</div></div>`;
         pane.innerHTML += '<button class="cs-top-fab" type="button">↑ 回顶部</button>';
         const fbody = pane.querySelector('#cs_cln_fbody');
@@ -5337,7 +5346,7 @@ function wirePanelEvents() {
         document.getElementById('cs_cln_f_next')?.addEventListener('click', () => { if (pv.idx < pv.floors.length - 1) { pv.idx++; __clnRenderFloor(); } });
         const go = () => {
             const v = Number(document.getElementById('cs_cln_f_jump')?.value);
-            if (v >= 1 && v <= pv.floors.length) { pv.idx = v - 1; __clnRenderFloor(); }
+            if (v >= 0 && v <= __csFloorCount(pv.floors)) { pv.idx = v; __clnRenderFloor(); } // 0.12.76 楼号=消息索引(开场白=0楼)
         };
         document.getElementById('cs_cln_f_go')?.addEventListener('click', go);
         document.getElementById('cs_cln_f_jump')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
