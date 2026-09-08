@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.88'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.89'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4398,7 +4398,7 @@ async function __csDoSelfUpdate(btn, remoteVer) {
             const j = await r.json().catch(() => ({}));
             if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
             if (btn) btn.textContent = '✅ 已更新';
-            toastr.success('✅ 插件已更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
+            toastr.success('🌐 一键云同步：已更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
             window.__csDoReload(); // 协调刷新(多插件并发由最后完成者统一) + watchdog兜底必刷
             return;
         } catch (e2) { }
@@ -4421,7 +4421,7 @@ async function __csDoSelfUpdate(btn, remoteVer) {
             body: JSON.stringify({ url: REPO_URL, global: true }),
         });
         if (!ri.ok) throw new Error('HTTP ' + ri.status);
-        toastr.success('✅ 已通过重装方式更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
+        toastr.success('🌐 一键云同步：已通过重装方式更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
         window.__csDoReload();
         return;
     } catch (e3) { toastr.error('重装也失败：' + ((e3 && e3.message) || e3) + '。请手动到扩展管理删除后重装。'); }
@@ -8036,7 +8036,7 @@ jQuery(() => {
                     if (!j || !j.version) return;
                     if (__csCompareVer(j.version, PLUGIN_VERSION) > 0 && sessionStorage.getItem('cs_selfheal_' + j.version) !== '1') {
                         sessionStorage.setItem('cs_selfheal_' + j.version, '1');
-                        toastr.info('🔄 检测到磁盘已升级到 v' + j.version + '，自动刷新加载新版本…', null, { timeOut: 3000 });
+                        toastr.info('🔄 🌐 一键云同步：检测到磁盘已升级到 v' + j.version + '，自动刷新加载新版本…', null, { timeOut: 3000 });
                         setTimeout(() => { if (!window.__csReloadGuard) { window.__csReloadGuard = 1; location.reload(); } }, 800);
                     }
                 }).catch(() => { });
