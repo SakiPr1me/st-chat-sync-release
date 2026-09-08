@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.79'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.80'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1605,7 +1605,7 @@ function showBusy(page, total, msg) {
         __csBusyEl.style.cssText = 'position:fixed;top:14px;right:14px;z-index:99999;max-width:320px;' +
             'background:rgba(20,20,24,.82);color:#eee;padding:8px 14px;font-weight:600;font-size:13px;' +
             'text-align:left;border-radius:10px;border:1px solid rgba(255,255,255,.15);' +
-            'box-shadow:0 4px 16px rgba(0,0,0,.5);backdrop-filter:blur(6px);pointer-events:none;';
+            'box-shadow:0 4px 16px rgba(0,0,0,.5);pointer-events:none;';
         document.body.appendChild(__csBusyEl);
     }
     const label = msg || '同步';
@@ -7835,7 +7835,7 @@ function __csUpdateFloat() {
     const $box = $(`<div id="${id}" style="
         position:fixed;z-index:9600;width:${W}px;overflow:hidden;
         border:1px solid var(--SmartThemeBorderColor);border-radius:14px;
-        background:rgba(128,128,128,0.32);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+        background:rgba(128,128,128,0.32);
         box-shadow:0 3px 10px rgba(0,0,0,.3);user-select:none;
         ${initPos ? `left:${initPos.x}px;top:${initPos.y}px;right:auto;bottom:auto` : 'right:16px;bottom:150px'}
     "></div>`).appendTo('body');
