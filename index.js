@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.85'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.86'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7883,7 +7883,7 @@ function __csUpdateFloat() {
         }
     } catch (e) { }
     $box.append(`<div class="csf-head" style="height:${HEAD}px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:grab;font-size:15px;color:var(--SmartThemeBodyColor,#eee);transition:background .2s ease">
-        <span style="font-size:32px;line-height:1;cursor:pointer;filter:drop-shadow(0 1px 3px rgba(0,0,0,.35))">🌐</span>
+        <span style="font-size:24px;line-height:1;cursor:pointer;filter:drop-shadow(0 1px 3px rgba(0,0,0,.35))">🌐</span>
     </div>`);
     // 功能区(直接执行, 彩色, 在最前) + 面板区(打开对应同步页面, 橙) —— 中间分隔线
     const ACTION_DEFS = [
