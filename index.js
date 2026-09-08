@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.81'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.82'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7709,12 +7709,12 @@ async function autoConnectIfConfigured() {
 // 悬浮球: body 级 fixed, 每个页面都在; 点头部展开/收起; 拖拽(3px阈值+边界钳制+位置记忆); 窗口缩放钳回视口
 // 条目: 功能区(直接执行, 彩色, 最前, 分隔线) + 面板区(打开对应页面, 橙); 勾选控制见 settings.floatPages
 const CS_FLOAT_PAGES = [
-    { key: 'conn', ico: 'fa-plug', label: '连接配置', kw: '连接配置' },
-    { key: 'roles', ico: 'fa-comments', label: '当前聊天·角色', kw: '当前聊天 / 角色同步' },
-    { key: 'char', ico: 'fa-user', label: '角色卡', kw: '角色卡+绑定世界书+聊天同步' },
-    { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书同步' },
-    { key: 'cln', ico: 'fa-broom', label: '聊天清理器', kw: '聊天记录清理器' },
-    { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置同步' },
+    { key: 'conn', ico: '🔌', label: '连接配置', kw: '连接配置' },
+    { key: 'roles', ico: '💬', label: '当前聊天·角色', kw: '当前聊天 / 角色同步' },
+    { key: 'char', ico: '👤', label: '角色卡', kw: '角色卡+绑定世界书+聊天同步' },
+    { key: 'wb', ico: '📖', label: '世界书', kw: '独立全局世界书同步' },
+    { key: 'cln', ico: '🧹', label: '聊天清理器', kw: '聊天记录清理器' },
+    { key: 'cfg', ico: '🗄️', label: '酒馆配置', kw: '酒馆配置同步' },
 ];
 function csFloatPageEnabled(key) {
     const fp = settings.floatPages;
@@ -7858,8 +7858,8 @@ function __csUpdateFloat() {
     </div>`);
     // 功能区(直接执行, 彩色, 在最前) + 面板区(打开对应同步页面, 橙) —— 中间分隔线
     const ACTION_DEFS = [
-        { key: 'upload', ico: 'fa-cloud-arrow-up', label: '上传当前聊天', color: '#6fce6f', run: () => __csRunInstant('upload') },
-        { key: 'import', ico: 'fa-cloud-arrow-down', label: '导入云端至当前聊天', color: '#6fbcf6', run: () => __csRunInstant('import') },
+        { key: 'upload', ico: '⬆️', label: '上传当前聊天', color: '#6fce6f', run: () => __csRunInstant('upload') },
+        { key: 'import', ico: '⬇️', label: '导入云端至当前聊天', color: '#6fbcf6', run: () => __csRunInstant('import') },
     ].filter(a => ((a.key === 'upload' && showU) || (a.key === 'import' && showI)));
     const PAGE_DEFS = CS_FLOAT_PAGES.filter((d) => csFloatPageEnabled(d.key));
     const rowCount = ACTION_DEFS.length + PAGE_DEFS.length + (ACTION_DEFS.length ? 1 : 0);
@@ -7868,14 +7868,14 @@ function __csUpdateFloat() {
         $items.append(`<div class="csf-item csf-action" data-act="${def.key}" style="
             height:${ITEM}px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
             cursor:pointer;border-bottom:1px solid rgba(255,255,255,.07);position:relative
-        " title="${def.label}"><i class="fa-solid ${def.ico}" aria-hidden="true" style="font-size:15px;color:${def.color}"></i></div>`);
+        " title="${def.label}"><span aria-hidden="true" style="font-size:17px;line-height:1">${def.ico}</span></div>`);
     });
     if (ACTION_DEFS.length) $items.append(`<div class="csf-sep" style="height:5px;background:rgba(128,128,128,0.12);border-bottom:1px solid rgba(128,128,128,.25);cursor:default"></div>`);
     PAGE_DEFS.forEach(def => {
         $items.append(`<div class="csf-item" data-act="${def.key}" style="
             height:${ITEM}px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
             cursor:pointer;border-bottom:1px solid rgba(255,255,255,.07);position:relative
-        " title="打开「${def.label}」页面"><i class="fa-solid ${def.ico}" aria-hidden="true" style="font-size:15px;color:var(--SmartThemeQuoteColor)"></i></div>`);
+        " title="打开「${def.label}」页面"><span aria-hidden="true" style="font-size:17px;line-height:1">${def.ico}</span></div>`);
     });
     $items.find('.csf-item').on('mouseenter', function () { $(this).css('background', 'rgba(128,128,128,.22)'); });
     $items.find('.csf-item').on('mouseleave', function () { $(this).css('background', ''); });
