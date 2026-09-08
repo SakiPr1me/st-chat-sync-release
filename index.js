@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.78'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.79'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7689,6 +7689,11 @@ async function autoConnectIfConfigured() {
         try {
             const btn = document.getElementById('cs_cfg_tab_conn');
             if (btn && !btn.dataset.csWired && typeof window.__csWireNow === 'function') window.__csWireNow();
+            // 0.12.79 悬浮球也纳入自愈(学 st-kimi 悬浮条多次重建): 某些端 DOM 重建/切界面后球可能丢失——
+            //   body 级存在性检查, 不在则幂等重建(不存在的才建, 避免每5s重建闪烁)
+            if (typeof window.__csUpdateFloat === 'function' && !document.getElementById('cs_quick_float')) {
+                try { window.__csUpdateFloat(); } catch (e2) { }
+            }
         } catch { }
     };
     const onChange = () => { clearTimeout(timer); timer = setTimeout(check, 300); };
