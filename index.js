@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.86'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.87'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7869,7 +7869,7 @@ function __csUpdateFloat() {
         position:fixed;z-index:9600;width:${W}px;overflow:hidden;
         border:1px solid transparent;border-radius:50%;
         background:transparent;
-        box-shadow:none;user-select:none;
+        box-shadow:none;user-select:none;transition:background .2s ease,border-color .2s ease,box-shadow .2s ease,border-radius .2s ease,backdrop-filter .2s ease,-webkit-backdrop-filter .2s ease;
         left:${initPos.x}px;top:${initPos.y}px;right:auto;bottom:auto;
     "></div>`).appendTo('body');
     // 0.12.81 创建后实测校验: fixed 相对布局视口, 若浏览器布局视口比可视视口大(手机/缩放), 球仍可能不在屏幕内 → 用 rect 实测拉回可视区
@@ -7912,7 +7912,7 @@ function __csUpdateFloat() {
     function setExpanded(on) {
         expanded = on;
         const h = on ? rowCount * ITEM : 0;
-        $items.css({ height: h + 'px', transition: 'height .22s ease' });
+        $items.css({ height: h + 'px', opacity: on ? 1 : 0, transition: 'height .22s ease, opacity .18s ease' });
         // 0.12.85 折叠=纯漂浮emoji无背景; 展开才加毛玻璃sheet背景
         $box.css(on ? {
             'background': 'rgba(26,28,36,.85)',
