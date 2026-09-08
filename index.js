@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.80'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.81'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7827,18 +7827,32 @@ function __csUpdateFloat() {
     try { saved = JSON.parse(localStorage.getItem('cs_float_pos') || 'null'); } catch (e) { }
     const W = 46, HEAD = 40, ITEM = 38;
     // 0.12.61 恢复记忆位置必须钳制到当前视口(否则大屏/横屏保存的位置在手机小视口直接搬到屏幕外): 拖拽/缩放有钳制, 唯独初始恢复漏了
+    // 0.12.81 默认位置也统一用可视视口(visual viewport)坐标 JS 定位——手机/缩放场景下 CSS right/bottom 相对布局视口可能落在屏幕外(用户实报: 全新手机端无球)
     let initPos = null;
+    const maxX = window.innerWidth - W - 2, maxY = window.innerHeight - HEAD - 2;
     if (saved && Number.isFinite(Number(saved.x)) && Number.isFinite(Number(saved.y))) {
-        const maxX = window.innerWidth - W - 2, maxY = window.innerHeight - HEAD - 2;
         initPos = { x: Math.min(Math.max(Number(saved.x), 2), Math.max(maxX, 2)), y: Math.min(Math.max(Number(saved.y), 2), Math.max(maxY, 2)) };
+    } else {
+        // 默认: 可视区右侧内收 16px + 底部上方 150px(避开浏览器栏/底部栏), 全用 visual 坐标保证必在屏幕内
+        initPos = { x: Math.max(2, maxX), y: Math.max(2, window.innerHeight - 150) };
     }
     const $box = $(`<div id="${id}" style="
         position:fixed;z-index:9600;width:${W}px;overflow:hidden;
         border:1px solid var(--SmartThemeBorderColor);border-radius:14px;
         background:rgba(128,128,128,0.32);
         box-shadow:0 3px 10px rgba(0,0,0,.3);user-select:none;
-        ${initPos ? `left:${initPos.x}px;top:${initPos.y}px;right:auto;bottom:auto` : 'right:16px;bottom:150px'}
+        left:${initPos.x}px;top:${initPos.y}px;right:auto;bottom:auto;
     "></div>`).appendTo('body');
+    // 0.12.81 创建后实测校验: fixed 相对布局视口, 若浏览器布局视口比可视视口大(手机/缩放), 球仍可能不在屏幕内 → 用 rect 实测拉回可视区
+    try {
+        const rect = $box[0].getBoundingClientRect();
+        const vw = window.innerWidth, vh = window.innerHeight;
+        if (!rect || rect.left < 0 || rect.top < 0 || rect.left > vw - 20 || rect.top > vh - 20 || rect.left + W > vw || rect.top + HEAD > vh) {
+            const nx = Math.max(2, Math.min((rect && rect.left) || 0, vw - W - 2));
+            const ny = Math.max(2, Math.min((rect && rect.top) || 0, vh - HEAD - 2));
+            $box.css({ left: nx + 'px', top: ny + 'px', right: 'auto', bottom: 'auto' });
+        }
+    } catch (e) { }
     $box.append(`<div class="csf-head" style="height:${HEAD}px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:grab;font-size:15px;color:var(--SmartThemeBodyColor,#eee);border-bottom:1px solid rgba(255,255,255,.08)">
         <span style="font-size:17px;line-height:1">🌐</span>
     </div>`);
