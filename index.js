@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.76'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.77'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1167,6 +1167,27 @@ function __csFloorCount(msgs) {
     return Math.max(0, arr.length - (hasGreeting ? 1 : 0));
 }
 
+// 0.12.77 补回新楼即时正则美化(用户: 以前导入即时加载美化, 0.12.68 改 addOneMessage 后丢了)——
+//   ST 官方 messageFormatting 是正则美化执行者(渲染消息时跑全部正则脚本, 如 <tableEdit>/<scene> 转 HTML), kimi 同款手动覆写。
+//   不依赖 mesid/chat 索引偏移: 新楼都在 DOM 尾部, 与 addedMsgs 按顺序一一对应, 逐个覆写 .mes_text。
+async function __csBeautifyFloors(addedMsgs) {
+    try {
+        const msgs = Array.isArray(addedMsgs) ? addedMsgs.filter((m) => m && typeof m === 'object' && m.mes !== undefined) : [];
+        if (!msgs.length) return;
+        const fmt = (typeof __stCompat !== 'undefined' && __stCompat && typeof __stCompat.messageFormatting === 'function') ? __stCompat.messageFormatting : null;
+        if (!fmt) return;
+        const all = Array.from(document.querySelectorAll('.mes'));
+        if (all.length < msgs.length) return; // DOM 还没建全(极少), 跳过避免错位
+        const tail = all.slice(all.length - msgs.length);
+        msgs.forEach((m, k) => {
+            const el = tail[k];
+            const tEl = el && el.querySelector('.mes_text');
+            if (!tEl) return;
+            try { tEl.innerHTML = fmt(String(m.mes), m.name || '', !!m.is_system, !!m.is_user, Number(el.getAttribute('mesid')) || 0); } catch (e2) { }
+        });
+    } catch (e) { console.warn('[chat-sync] 补回楼美化失败(忽略)', e); }
+}
+
 // 把云端补回的新楼并入「当前打开聊天」的内存 chat 数组，返回 {startIndex, appended}（供 redisplayChat 局部重绘）
 //  - 跳过首行 header 对象（{user_name,character_name,create_date,...}），只处理消息体
 //  - 已在数组里的楼不重复追加（按 messageSignature 去重）
@@ -1270,6 +1291,8 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                                 }
                             }
                         }
+                        // 0.12.77 补入楼即时正则美化(全量重建=全部消息 / 追加=newOnes)——addOneMessage/displayPastChats 建 DOM 后补 messageFormatting
+                        try { await __csBeautifyFloors(isFullRebuild ? (c.chat || []).filter((m) => m && typeof m === 'object' && m.mes !== undefined) : newOnes); } catch (e2) { }
                         try { scrollChatToBottom({ waitForFrame: true }); } catch (e3) { }
                         console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${isFullRebuild ? '全量重绘' : 'addOneMessage'}${isFullRebuild ? ',全量重建' : ''})`);
                     }
