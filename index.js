@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.83'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.84'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7854,7 +7854,7 @@ function __csUpdateFloat() {
     if (!showU && !showI && !pagesOn) return;
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('cs_float_pos') || 'null'); } catch (e) { }
-    const W = 46, HEAD = 40, ITEM = 38;
+    const W = 48, HEAD = 48, ITEM = 38;
     // 0.12.61 恢复记忆位置必须钳制到当前视口(否则大屏/横屏保存的位置在手机小视口直接搬到屏幕外): 拖拽/缩放有钳制, 唯独初始恢复漏了
     // 0.12.81 默认位置也统一用可视视口(visual viewport)坐标 JS 定位——手机/缩放场景下 CSS right/bottom 相对布局视口可能落在屏幕外(用户实报: 全新手机端无球)
     let initPos = null;
@@ -7867,9 +7867,9 @@ function __csUpdateFloat() {
     }
     const $box = $(`<div id="${id}" style="
         position:fixed;z-index:9600;width:${W}px;overflow:hidden;
-        border:1px solid var(--SmartThemeBorderColor);border-radius:14px;
-        background:rgba(128,128,128,0.32);
-        box-shadow:0 3px 10px rgba(0,0,0,.3);user-select:none;
+        border:1px solid rgba(255,255,255,.16);border-radius:50%;
+        background:rgba(92,98,116,0.40);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+        box-shadow:0 5px 16px rgba(0,0,0,.35), inset 0 0 0 .5px rgba(255,255,255,.05);user-select:none;
         left:${initPos.x}px;top:${initPos.y}px;right:auto;bottom:auto;
     "></div>`).appendTo('body');
     // 0.12.81 创建后实测校验: fixed 相对布局视口, 若浏览器布局视口比可视视口大(手机/缩放), 球仍可能不在屏幕内 → 用 rect 实测拉回可视区
@@ -7882,8 +7882,8 @@ function __csUpdateFloat() {
             $box.css({ left: nx + 'px', top: ny + 'px', right: 'auto', bottom: 'auto' });
         }
     } catch (e) { }
-    $box.append(`<div class="csf-head" style="height:${HEAD}px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:grab;font-size:15px;color:var(--SmartThemeBodyColor,#eee);border-bottom:1px solid rgba(255,255,255,.08)">
-        <span style="font-size:17px;line-height:1">🌐</span>
+    $box.append(`<div class="csf-head" style="height:${HEAD}px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:grab;font-size:15px;color:var(--SmartThemeBodyColor,#eee);transition:background .2s ease">
+        <span style="font-size:20px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.3))">🌐</span>
     </div>`);
     // 功能区(直接执行, 彩色, 在最前) + 面板区(打开对应同步页面, 橙) —— 中间分隔线
     const ACTION_DEFS = [
@@ -7892,7 +7892,7 @@ function __csUpdateFloat() {
     ].filter(a => ((a.key === 'upload' && showU) || (a.key === 'import' && showI)));
     const PAGE_DEFS = CS_FLOAT_PAGES.filter((d) => csFloatPageEnabled(d.key));
     const rowCount = ACTION_DEFS.length + PAGE_DEFS.length + (ACTION_DEFS.length ? 1 : 0);
-    const $items = $(`<div class="csf-body" style="overflow:hidden;height:0;background:rgba(0,0,0,.16)"></div>`).appendTo($box);
+    const $items = $(`<div class="csf-body" style="overflow:hidden;height:0;background:rgba(24,26,32,.78);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)"></div>`).appendTo($box);
     ACTION_DEFS.forEach(def => {
         $items.append(`<div class="csf-item csf-action" data-act="${def.key}" style="
             height:${ITEM}px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
@@ -7913,7 +7913,8 @@ function __csUpdateFloat() {
         expanded = on;
         const h = on ? rowCount * ITEM : 0;
         $items.css({ height: h + 'px', transition: 'height .22s ease' });
-        $box.css('box-shadow', on ? '0 6px 18px rgba(0,0,0,.4)' : '0 3px 10px rgba(0,0,0,.3)');
+        $box.css('box-shadow', on ? '0 8px 26px rgba(0,0,0,.45)' : '0 5px 16px rgba(0,0,0,.35)');
+        $box.css('border-radius', on ? '19px' : '50%');
         // 0.12.61 展开后底部超出可视区域→向上收(手机端常见: 球贴底, 菜单全展开时尾部够不着)
         if (on) {
             const top = parseInt($box.css('top') || '', 10);
