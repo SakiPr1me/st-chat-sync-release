@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.87'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.88'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7896,14 +7896,14 @@ function __csUpdateFloat() {
     ACTION_DEFS.forEach(def => {
         $items.append(`<div class="csf-item csf-action" data-act="${def.key}" style="
             height:${ITEM}px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
-            cursor:pointer;border-bottom:1px solid rgba(255,255,255,.07);position:relative
+            cursor:pointer;border-bottom:1px solid rgba(128,128,128,.28);position:relative
         " title="${def.label}"><span style="display:inline-flex;align-items:center;justify-content:center">${__csSvgIcon(def.ico, def.color)}</span></div>`);
     });
     if (ACTION_DEFS.length) $items.append(`<div class="csf-sep" style="height:5px;background:rgba(128,128,128,0.12);border-bottom:1px solid rgba(128,128,128,.25);cursor:default"></div>`);
     PAGE_DEFS.forEach(def => {
         $items.append(`<div class="csf-item" data-act="${def.key}" style="
             height:${ITEM}px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
-            cursor:pointer;border-bottom:1px solid rgba(255,255,255,.07);position:relative
+            cursor:pointer;border-bottom:1px solid rgba(128,128,128,.28);position:relative
         " title="打开「${def.label}」页面"><span style="display:inline-flex;align-items:center;justify-content:center">${__csSvgIcon(def.ico, 'var(--SmartThemeQuoteColor)')}</span></div>`);
     });
     $items.find('.csf-item').on('mouseenter', function () { $(this).css('background', 'rgba(128,128,128,.22)'); });
@@ -7915,10 +7915,10 @@ function __csUpdateFloat() {
         $items.css({ height: h + 'px', opacity: on ? 1 : 0, transition: 'height .22s ease, opacity .18s ease' });
         // 0.12.85 折叠=纯漂浮emoji无背景; 展开才加毛玻璃sheet背景
         $box.css(on ? {
-            'background': 'rgba(26,28,36,.85)',
+            'background': 'var(--SmartThemeBlurTintColor, rgba(30,32,40,.88))',
             'backdrop-filter': 'blur(14px)',
             '-webkit-backdrop-filter': 'blur(14px)',
-            'border-color': 'rgba(255,255,255,.16)',
+            'border-color': 'var(--SmartThemeBorderColor, rgba(255,255,255,.16))',
             'box-shadow': '0 8px 26px rgba(0,0,0,.45)',
             'border-radius': '20px',
         } : {
