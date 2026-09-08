@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.77'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.78'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1167,24 +1167,35 @@ function __csFloorCount(msgs) {
     return Math.max(0, arr.length - (hasGreeting ? 1 : 0));
 }
 
-// 0.12.77 补回新楼即时正则美化(用户: 以前导入即时加载美化, 0.12.68 改 addOneMessage 后丢了)——
-//   ST 官方 messageFormatting 是正则美化执行者(渲染消息时跑全部正则脚本, 如 <tableEdit>/<scene> 转 HTML), kimi 同款手动覆写。
-//   不依赖 mesid/chat 索引偏移: 新楼都在 DOM 尾部, 与 addedMsgs 按顺序一一对应, 逐个覆写 .mes_text。
+// 0.12.77/0.12.78 补回新楼即时美化——用户: 正则层有了但"代码块包裹的完整网页美化"仍要小铅笔/刷新才出现(kimi 已解决此问题)。
+//   根因: 完整网页美化由"整楼完整渲染管线"产出(addOneMessage/手动 messageFormatting 只到文本层); kimi(余温) applyFixedMessage 的解法 =
+//   酒馆助手 TH.setChatMessages([{message_id,message}]) —— 即 ST 点小铅笔保存后同款的完整处理管线。
+//   依序: ①酒馆助手 setChatMessages(完整,含代码块网页美化) ②refreshOneMessage ③手动 messageFormatting 覆写 .mes_text 兜底。
 async function __csBeautifyFloors(addedMsgs) {
     try {
+        const c = ctx();
         const msgs = Array.isArray(addedMsgs) ? addedMsgs.filter((m) => m && typeof m === 'object' && m.mes !== undefined) : [];
         if (!msgs.length) return;
+        const TH = window.TavernHelper;
         const fmt = (typeof __stCompat !== 'undefined' && __stCompat && typeof __stCompat.messageFormatting === 'function') ? __stCompat.messageFormatting : null;
-        if (!fmt) return;
         const all = Array.from(document.querySelectorAll('.mes'));
         if (all.length < msgs.length) return; // DOM 还没建全(极少), 跳过避免错位
         const tail = all.slice(all.length - msgs.length);
-        msgs.forEach((m, k) => {
+        for (let k = 0; k < msgs.length; k++) {
             const el = tail[k];
-            const tEl = el && el.querySelector('.mes_text');
-            if (!tEl) return;
-            try { tEl.innerHTML = fmt(String(m.mes), m.name || '', !!m.is_system, !!m.is_user, Number(el.getAttribute('mesid')) || 0); } catch (e2) { }
-        });
+            if (!el) continue;
+            const id = Number(el.getAttribute('mesid'));
+            const msg = (Number.isFinite(id) && c.chat && c.chat[id] && c.chat[id] === msgs[k]) ? c.chat[id] : msgs[k];
+            const mesText = String((msg && msg.mes) || '');
+            if (TH && typeof TH.setChatMessages === 'function' && Number.isFinite(id)) {
+                try { await TH.setChatMessages([{ message_id: id, message: mesText }]); continue; } catch (e2) { }
+            }
+            if (TH && typeof TH.refreshOneMessage === 'function' && Number.isFinite(id)) {
+                try { await TH.refreshOneMessage(id); continue; } catch (e3) { }
+            }
+            const tEl = el.querySelector('.mes_text');
+            if (tEl && fmt) { try { tEl.innerHTML = fmt(mesText, (msg && msg.name) || '', !!(msg && msg.is_system), !!(msg && msg.is_user), Number.isFinite(id) ? id : 0); } catch (e4) { } }
+        }
     } catch (e) { console.warn('[chat-sync] 补回楼美化失败(忽略)', e); }
 }
 
