@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.129'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.130'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2526,6 +2526,9 @@ async function pushSelectedThemes(names) {
 async function __officialDeleteThemeFlow(name) {
     const $themesEl = window.jQuery ? jQuery('#themes') : null;
     if (!$themesEl) return false;
+    // 0.12.130 删除前记下当前主题——官方 deleteTheme(power-user.js:2389)删完会把当前主题切成 themes[0] 并 applyTheme,
+    //   删"非当前"主题也中招(用户实报"删除瞬间换主题")。删除成功且删的不是当前 → 用官方下拉链路恢复原主题。
+    const prevTheme = (power_user && power_user.theme) || String($themesEl.val() || '');
     if (!$themesEl.find(`option[value="${name}"]`).length) {
         $themesEl.append(new Option(name, name)); // 官方「保存主题」不更新界面下拉, 缺就补
     }
@@ -2544,11 +2547,22 @@ async function __officialDeleteThemeFlow(name) {
         if (okBtn) { okBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); confirmed = true; }
     }
     if (!confirmed) return false;
+    let deleted = false;
     for (let t = 0; t < 5; t++) {
         await new Promise(r => setTimeout(r, 600));
-        try { const d2 = await fetchSettingsJson(true); if (!Array.isArray(d2.themes) || !d2.themes.some(t2 => t2 && t2.name === name)) return true; } catch { }
+        try { const d2 = await fetchSettingsJson(true); if (!Array.isArray(d2.themes) || !d2.themes.some(t2 => t2 && t2.name === name)) { deleted = true; break; } } catch { }
     }
-    return false;
+    // 0.12.130 恢复原当前主题(删的不是它且它还在): 官方已把当前切成 themes[0], 这里切回
+    if (deleted && prevTheme && prevTheme !== name) {
+        try {
+            const still = await _themeLocalList();
+            if (still.some(t => t && t.name === prevTheme)) {
+                const el2 = window.jQuery ? jQuery('#themes') : null;
+                if (el2 && el2.find(`option[value="${prevTheme}"]`).length) el2.val(prevTheme).trigger('change'); // 官方change=设theme+applyTheme+save
+            }
+        } catch { }
+    }
+    return deleted;
 }
 // ── 官方「导入主题」文件框触发法: #ui_preset_import_file(change) → importTheme(power-user.js:2443) ──
 // importTheme 完整同步: 内存数组 push + saveTheme 写文件 + 下拉 append + 保存; 重名/@import 会抛错
@@ -6810,6 +6824,18 @@ ext: {
             async push(items) { return pushSelectedThemes(items); },
             async pull(items) { return importSelectedThemes(items); },
             async del(items, mode) { return deleteSelectedThemes(items, mode); },
+            // 0.12.130 主题行"切"按钮(本地视图): 当前使用中的主题高亮, 点任意主题行按钮即切换过去(官方链路免刷新)。
+            statusOf(n, mode) {
+                if (mode === 'cloud') return null; // 云端无"当前使用"概念, 不显示
+                const cur = (power_user && power_user.theme) || '';
+                return { on: String(cur) === String(n) };
+            },
+            async toggleStatus(n) {
+                const $themesEl = window.jQuery ? jQuery('#themes') : null;
+                if (!$themesEl) throw new Error('主题下拉不可用');
+                if (!$themesEl.find(`option[value="${n}"]`).length) $themesEl.append(new Option(n, n)); // 官方下拉可能没这项, 补上
+                $themesEl.val(n).trigger('change'); // 官方 change 处理器: power_user.theme=n + applyTheme(n) + saveSettings, 免刷新
+            },
             async diffMap() {
                 const local = await _themeLocalList();
                 const map = new Map(local.map((t) => [t.name, t.data]));
@@ -7002,9 +7028,12 @@ ext: {
             let st;
             try { st = drv.statusOf(n, mode); } catch { return ''; }
             if (!st) return '';
-            const txt = st.on ? '开' : '关';
-            if (mode === 'cloud') return `<b class="cs-cln-en" style="cursor:default" data-on="${st.on ? '1' : '0'}" title="云端记录的状态">${txt}</b>`;
-            return `<button type="button" class="cs-cln-en" data-en-n="${escapeHtml(n)}" data-on="${st.on ? '1' : '0'}" title="点击切换开/关">${txt}</button>`;
+            // 0.12.130 主题行的"切"按钮: 文字恒为'切'(当前用中高亮+不同title), 点击=应用该主题
+            const isTheme = drv === window.__cfgDrivers.theme;
+            const txt = isTheme ? '切' : (st.on ? '开' : '关');
+            if (mode === 'cloud') return `<b class="cs-cln-en" style="cursor:default" data-on="${st.on ? '1' : '0'}" title="${isTheme ? '主题(云端视图无切换)' : '云端记录的状态'}">${txt}</b>`;
+            const tip = isTheme ? (st.on ? '使用中（点击其它行即切换主题）' : '点击切换到此主题') : '点击切换开/关';
+            return `<button type="button" class="cs-cln-en" data-en-n="${escapeHtml(n)}" data-on="${st.on ? '1' : '0'}" title="${tip}">${txt}</button>`;
         };
         if (renderId !== window.__cfgRenderGen) return; // whereSets 过期(期间有新请求) → 丢弃, 等最新渲染
         // 0.12.105 加载提示: 云端视图(网络慢)已有; 拓展的【本地】视图也要——__discoverExts 逐个查 manifest/version/.git,
