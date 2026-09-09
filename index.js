@@ -17,6 +17,11 @@ import { power_user } from '../../../power-user.js'; // 主题删除走官方按
 // Api分项密钥随行(0.12.0): canViewSecrets探测allowKeysExposure / writeSecret写入(返回新id,内部已刷新state) / readSecretState刷新 / secret_state活绑定(含掩码或明文)
 // 0.12.23 兼容: canViewSecrets 在 ≤1.15 不存在——命名空间导入+守护别名, 旧版不炸, 密钥功能降级(不随行, 导入留引用)
 import * as __secCompat from '../../../secrets.js';
+// 0.12.128 角色卡差异复核: ST 现成 PNG→角色JSON 解析(utils.js 的 extractDataFromPng)。
+//   本地扩展(酒馆助手/JS-Slash-Runner 等)每次保存卡会写入运行时空壳字段(tavern_helper/chat等) → 卡字节变 → 假"本地新"。
+//   复核用它读两端卡 JSON, 剥离已知运行时噪音后做语义比较。命名空间 import + 探测: 旧版无此导出 → null, 复核跳过走原字节逻辑。
+import * as __utilsCompat from '../../../utils.js';
+const __csExtractPng = (typeof __utilsCompat.extractDataFromPng === 'function') ? __utilsCompat.extractDataFromPng.bind(__utilsCompat) : null;
 const __secretCanView = (typeof __secCompat.canViewSecrets === 'function') ? __secCompat.canViewSecrets : async () => null;
 const __secretWrite = (typeof __secCompat.writeSecret === 'function') ? __secCompat.writeSecret : async () => null;
 const __secretReadState = (typeof __secCompat.readSecretState === 'function') ? __secCompat.readSecretState : async () => {};
@@ -34,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.127'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.128'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -770,6 +775,77 @@ async function gitBlobSha(bytes) {
     const merged = new Uint8Array(header.length + bytes.length);
     merged.set(header, 0); merged.set(bytes, header.length);
     return await sha1Bytes(merged); // 0.12.75: crypto.subtle 降级(非安全上下文 http 用纯 JS SHA-1, 输出一致)
+}
+// 0.12.128 角色卡"运行时噪音"剥离(供差异复核): 本地扩展在 ST 保存卡时会写入运行时空壳字段——
+//   实测 JS-Slash-Runner/酒馆助手 写 data.extensions.tavern_helper{scripts:[],variables:{}}、
+//   ST 顶层写 chat(当前打开的聊天文件名)、data.group_only_greetings 等。这些不是用户内容,
+//   却让卡字节每次保存都变 → 与云端比对恒判"假本地新"。复核前剥掉这些键, 只比实质内容。
+function __csStripCardRuntime(j) {
+    if (!j || typeof j !== 'object') return j;
+    const out = { ...j };
+    delete out.chat; // v1 顶层: 当前打开聊天文件名(运行时)
+    const d = out.data;
+    if (d && typeof d === 'object') {
+        // v2: data.extensions 里扩展注入的运行时空壳。实测 JS-Slash-Runner/酒馆助手 写 tavern_helper{scripts:[],variables:{}}
+        //   (整体空壳对象)。删掉已知扩展注入键; 再删"值全为空"的对象壳(空对象/空数组)。
+        const ex = d.extensions;
+        if (ex && typeof ex === 'object') {
+            const RUNTIME_EXT = new Set(['tavern_helper', 'chat_sync_runtime']);
+            const cleaned = {};
+            for (const k of Object.keys(ex)) {
+                const v = ex[k];
+                if (RUNTIME_EXT.has(k)) continue; // 已知扩展运行时空壳键
+                const isAllEmpty = (val) => {
+                    if (val === null || val === undefined) return true;
+                    if (Array.isArray(val)) return val.length === 0 || val.every(isAllEmpty);
+                    if (typeof val === 'object') { const ks = Object.keys(val); return ks.length === 0 || ks.every((k2) => isAllEmpty(val[k2])); }
+                    return false;
+                };
+                if (isAllEmpty(v)) continue; // 值整体为空的对象/数组壳
+                cleaned[k] = v;
+            }
+            if (Object.keys(cleaned).length) d.extensions = cleaned; else delete d.extensions;
+        }
+        delete d.group_only_greetings; // 运行时群组标志噪音
+    }
+    return out;
+}
+// 0.12.128 PNG 字节 → 角色 JSON(ST 官方 extractDataFromPng; null 表示解析失败/工具缺失)
+async function __csCardJsonFromPng(pngBytes) {
+    try {
+        if (!__csExtractPng || !pngBytes || !pngBytes.length) return null;
+        const u8 = pngBytes instanceof Uint8Array ? pngBytes : new Uint8Array(pngBytes);
+        return __csExtractPng(u8) || null;
+    } catch { return null; }
+}
+// 0.12.128 角色卡语义复核: 本地卡(u8) vs 云端卡, 都转 JSON、剥运行时噪音后比实质。
+//   localU8=本地 export PNG 字节; cloudParts=分块[{rest,sha}] 或 charNameForSingle=单文件角色名(二选一)。
+//   云端字节仅在需要复核时下载一次。返回 true=实质一致(假本地新); false=解析失败或实质不同(由调用方判 local)。
+async function __csCardRecheck(localU8, cloudParts, charNameForSingle) {
+    try {
+        const localJ = await __csCardJsonFromPng(localU8);
+        if (!localJ) return false;
+        let cloudU8b = null;
+        try {
+            if (cloudParts && cloudParts.length) {
+                // 分块卡: parts rest 是完整云路径(sync/名/character.png.parts/part-NNNN), 逐块拉 base64 文本拼接
+                let all = '';
+                for (const cp of cloudParts) {
+                    const g = await Gitee.getText(String(cp.rest)).catch(() => null);
+                    if (g && g.content) all += g.content;
+                }
+                if (all) { const bin = atob(all.replace(/\s/g, '')); cloudU8b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) cloudU8b[i] = bin.charCodeAt(i); }
+            } else if (charNameForSingle) {
+                // 单文件卡: getBase64 返回 {b64, sha}
+                const g = await Gitee.getBase64('sync/' + charNameForSingle + '/character.png').catch(() => null);
+                if (g && g.b64) { const bin = atob(String(g.b64).replace(/\s/g, '')); cloudU8b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) cloudU8b[i] = bin.charCodeAt(i); }
+            }
+        } catch { }
+        if (!cloudU8b) return false;
+        const cloudJ = await __csCardJsonFromPng(cloudU8b);
+        if (!cloudJ) return false;
+        return jsonStableString(__csStripCardRuntime(localJ)) === jsonStableString(__csStripCardRuntime(cloudJ));
+    } catch { return false; }
 }
 async function exportCharacter(charName, worldName) {
     const base = `sync/${charName}`;
@@ -4989,9 +5065,19 @@ function wirePanelEvents() {
                                         const cparts = e.chunks.slice().sort((a2, b2) => a2.rest.localeCompare(b2.rest, undefined, { numeric: true }));
                                         const localShas = [];
                                         for (let i2 = 0; i2 < clean.length; i2 += CARD_CHUNK_CHARS) localShas.push(await gitBlobSha(new TextEncoder().encode(clean.slice(i2, i2 + CARD_CHUNK_CHARS))));
-                                        det.card = (localShas.length === cparts.length && localShas.every((sh, i3) => sh === cparts[i3].sha)) ? 'same' : 'local';
+                                        const bytesSame = (localShas.length === cparts.length && localShas.every((sh, i3) => sh === cparts[i3].sha));
+                                        if (bytesSame) { det.card = 'same'; }
+                                        else {
+                                            // 0.12.128 字节不同 → 复核: 拼云端分块 PNG, 与本地卡剥"运行时噪音"后比语义(假本地新: 本地扩展写卡)
+                                            det.card = (await __csCardRecheck(u8, cparts)) ? 'same' : 'local';
+                                        }
                                     } else if (e.cardSha) {
-                                        det.card = ((await gitBlobSha(u8)) === e.cardSha) ? 'same' : 'local';
+                                        const bytesSame = ((await gitBlobSha(u8)) === e.cardSha);
+                                        if (bytesSame) { det.card = 'same'; }
+                                        else {
+                                            // 0.12.128 单文件复核: 下载云端 character.png, 剥噪音语义比
+                                            det.card = (await __csCardRecheck(u8, null, name)) ? 'same' : 'local';
+                                        }
                                     }
                                 }
                             } catch { }
