@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.135'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.136'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1741,6 +1741,16 @@ function hideBusy() {
         const s2 = document.getElementById('cs_cfg2_status');
         if (s2 && s2.textContent.startsWith('🔄 ')) { s2.textContent = ''; s2.style.color = ''; }
     } catch { }
+}
+
+// 0.12.136 状态行统一收口: kind='ok'|'err'|''(普通), 写文案同时设/清 .cs-ok/.cs-err 并移除内联色(防残留红字)
+function __csSetStatus(el, text, kind) {
+    if (!el) return;
+    if (el.style) el.style.color = ''; // 清旧内联色(内联优先于 class, 必须先清)
+    el.classList.remove('cs-ok', 'cs-err');
+    if (kind === 'ok') el.classList.add('cs-ok');
+    else if (kind === 'err') el.classList.add('cs-err');
+    el.textContent = text;
 }
 
 // ============ 弹窗确认（兼容 ST/TT） ============
@@ -4770,7 +4780,7 @@ window.__csManualCheck = async function (btn) {
                         <label class="cs-label" for="${id}_repoinput">云数据仓库（私有空仓库；先建一个）</label>
                         <input id="${id}_repoinput" class="text_pole" style="width:100%;box-sizing:border-box" placeholder="如 satosaki/chat-sync 或 chat-sync" value="${escapeHtml(settings.owner && settings.repo ? settings.owner + '/' + settings.repo : '')}">
                         <div class="cs-sep"></div>
-                        <label class="cs-label" for="${id}_token">私人令牌 token（Gitee→头像→设置→私人令牌，全选，永久；GitHub→Settings→Developer settings→Personal access tokens(classic)→no Expiration+勾选repo；GitLab→https://gitlab.com/-/user_settings/personal_access_tokens→Generate token→Expiration改到一年后→权限全选→Generate token→复制→Done）</label>
+                        <label class="cs-label" for="${id}_token">访问令牌 token（点右侧 ❓ 看各平台图文获取教程）</label>
                         <div style="display:flex;gap:4px;align-items:center">
                             <input id="${id}_token" type="password" class="text_pole" style="flex:1;min-width:0;box-sizing:border-box" placeholder="粘贴你的私人令牌" value="${escapeHtml(settings.token)}" autocomplete="off">
                             <button id="${id}_token_eye" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="点击查看/隐藏令牌（检查有没有复制漏/多）">👁</button>
@@ -4848,7 +4858,7 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_pull_sel" type="button" class="cs-btn cs-eq">📥 导入选中角色</button>
                         </div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
-                            <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn cs-eq" title="删除选中的文件(本地视图删本地/云端视图删云端)">🗑 删除选中文件</button>
+                            <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn cs-eq" title="删除选中的角色(本地视图删本地/云端视图删云端)">🗑 删除选中</button>
                             <button id="${id}_del_both" type="button" class="cs-btn cs-danger-btn cs-eq" title="同时删除本地与云端选中的角色：本地=卡+全部聊天+绑定世界书(未被其他角色引用时)，云端=整个 sync/名/ 目录。双端均不可恢复">🗑 删除双端</button>
                         </div>
                         <p id="${id}_delete_target" class="cs-hint" style="margin:3px 0 0"></p>
@@ -4861,10 +4871,9 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
                             </span>
-                            <input type="text" id="cs_search_roles" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_roles_list" title="按名字快速过滤（可与上方筛选叠加）">
+                            <input type="text" id="cs_search_roles" class="text_pole" placeholder="🔍搜索…" style="width:120px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_roles_list" title="按名字快速过滤（可与上方筛选叠加）">
                         </div>
                         <p id="${id}_delete_status" class="cs-hint" style="margin-top:4px"></p>
-                        <p id="${id}_cloud_status" class="cs-hint" style="margin-top:6px"></p>
                     </div>
                     </details>
                 </div>
@@ -4898,7 +4907,7 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
                             </span>
-                            <input type="text" id="cs_search_wb" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_wb_list" title="按名字快速过滤（可与上方筛选叠加）">
+                            <input type="text" id="cs_search_wb" class="text_pole" placeholder="🔍搜索…" style="width:120px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_wb_list" title="按名字快速过滤（可与上方筛选叠加）">
                         </div>
                         <p id="${id}_wb_status" class="cs-hint" style="margin-top:4px"></p>
                     </div>
@@ -4921,11 +4930,10 @@ window.__csManualCheck = async function (btn) {
                         <div id="${id}_cln_listbox" class="cs-roles cs-sellect" style="max-height:230px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:4px;padding:4px;margin-top:4px"><p class="cs-hint">（先选角色，列表自动出现）</p></div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_cln_del" type="button" class="cs-btn cs-danger-btn" title="删除勾选的聊天：本地+云端同名一起删">🗑 删除选中（本地+云端同名同删）</button>
-                            <span class="cs-hint" style="margin-left:2px">🗑 删除=本地+云端同名一起删</span>
                         </div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
-                            <input type="text" id="cs_search_cln" class="text_pole" placeholder="🔍搜索…" style="width:150px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cln_listbox" title="按聊天名快速过滤">
-                            <input type="text" id="cs_search_content" class="text_pole" placeholder="🔎搜内容…" style="width:130px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" title="扫该角色全部本地聊天文件内容，列出命中聊天+楼层+片段">
+                            <input type="text" id="cs_search_cln" class="text_pole" placeholder="🔍搜索…" style="width:120px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cln_listbox" title="按聊天名快速过滤">
+                            <input type="text" id="cs_search_content" class="text_pole" placeholder="🔍搜内容…" style="width:140px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" title="扫该角色全部本地聊天文件内容，列出命中聊天+楼层+片段">
                         </div>
                         <p id="${id}_cln_status" class="cs-hint" style="margin-top:4px"></p>
                         <div id="${id}_cln_content_results" class="cs-hint" style="margin-top:4px"></div>
@@ -4973,7 +4981,7 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="仅云端" style="padding:1px 8px;font-size:.72em">仅云端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="本地新" style="padding:1px 8px;font-size:.72em" title="本机内容比云端新(需差异徽章支持的分项)">本地新</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
-                            </span><input type="text" id="cs_search_cfg" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cfg_list" title="按名字快速过滤（可与上方筛选叠加）">
+                            </span><input type="text" id="cs_search_cfg" class="text_pole" placeholder="🔍搜索…" style="width:120px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cfg_list" title="按名字快速过滤（可与上方筛选叠加）">
                         </div>
                         <div class="cs-row" style="margin-top:2px;flex-wrap:wrap;align-items:center">
                             <button id="${id}_cfg_user_br" type="button" class="cs-btn" style="display:none" title="一键备份：用户名+全部人设+全部头像照片">💾 一键备份全部</button>
@@ -5627,7 +5635,7 @@ function wirePanelEvents() {
             <span class="cs-cln-fname" title="${escapeHtml(r.fileName)}">${escapeHtml(r.fileName)}</span>
             <b style="color:var(--SmartThemeQuoteColor,#f0a35e);font-size:.82em;flex:none" title="楼层数">${r.mesCount ?? '?'}楼</b>
             <b class="cs-cln-size">${escapeHtml(String(r.size || '?'))}</b>
-            <small class="cs-cln-date">latest: ${escapeHtml(r.lastTime || '?')}</small>
+            <small class="cs-cln-date">最新: ${escapeHtml(r.lastTime || '?')}</small>
         </div>`;
     }
     function __filterClnRows() {
@@ -5719,7 +5727,7 @@ function wirePanelEvents() {
         </div>`;
         // nav 为预览框固定头部(flex:none), 标题+正文放独立滚动区 fbody —— 导航物理贴顶, 不依赖 sticky
         pane.innerHTML = nav
-            + `<div class="cs-cln-fbody" id="cs_cln_fbody"><div class="cs-cln-ptitle"><b>${escapeHtml(pv.fileName)}</b><br><small>latest: ${escapeHtml(r ? r.lastTime : '?')} ｜ 大小 <b class="cs-cln-size">${escapeHtml(String(r ? r.size : '?'))}</b> ｜ 共 ${__csFloorCount(pv.floors)} 楼</small></div>`
+            + `<div class="cs-cln-fbody" id="cs_cln_fbody"><div class="cs-cln-ptitle"><b>${escapeHtml(pv.fileName)}</b><br><small>最新: ${escapeHtml(r ? r.lastTime : '?')} ｜ 大小 <b class="cs-cln-size">${escapeHtml(String(r ? r.size : '?'))}</b> ｜ 共 ${__csFloorCount(pv.floors)} 楼</small></div>`
             + `<div class="cs-cln-ptext cs-cln-fl ${f.is_user ? 'cs-cln-fl-user' : 'cs-cln-fl-ai'}">${__fmtPrevText(previewAfterContent(f.mes).slice(0, 6000)) || '（这层楼没有文字内容）'}</div></div>`;
         pane.innerHTML += '<button class="cs-top-fab" type="button">↑ 回顶部</button>';
         const fbody = pane.querySelector('#cs_cln_fbody');
@@ -5782,7 +5790,7 @@ function wirePanelEvents() {
         if (!d || !d.floors || !d.floors.length) {
             if (window.__clnPreviewInflight === fileName) window.__clnPreviewInflight = null;
             const r2 = window.__clnRows.find((x) => x.fileName === fileName);
-            pane.innerHTML = `<div class="cs-cln-ptitle"><b>${escapeHtml(fileName)}</b><br><small>latest: ${escapeHtml(r2 ? r2.lastTime : '?')}</small></div><div class="cs-cln-ptext">（读取失败或该聊天为空——酒馆后端偶发返回空，会自动重试；若长时间未恢复，点下面按钮手动重试）</div>
+            pane.innerHTML = `<div class="cs-cln-ptitle"><b>${escapeHtml(fileName)}</b><br><small>最新: ${escapeHtml(r2 ? r2.lastTime : '?')}</small></div><div class="cs-cln-ptext">（读取失败或该聊天为空——酒馆后端偶发返回空，会自动重试；若长时间未恢复，点下面按钮手动重试）</div>
             <button class="cs-btn" id="cs_cln_preview_retry" type="button" style="margin-top:6px">↻ 重试读取</button>`;
             return;
         }
@@ -5818,7 +5826,7 @@ function wirePanelEvents() {
         document.getElementById('cs_cln_m_selall').addEventListener('click', () => document.querySelectorAll('#cs_cln_modal input[name="cs_cln_msel"]').forEach((c) => { c.checked = true; }));
         document.getElementById('cs_cln_m_clr').addEventListener('click', () => document.querySelectorAll('#cs_cln_modal input[name="cs_cln_msel"]').forEach((c) => { c.checked = false; }));
         const list = document.getElementById('cs_cln_mlist');
-        list.innerHTML = shown.map((r) => `<div class="cs-role-item cs-cln-mrow" data-file="${escapeHtml(r.fileName)}" title="${escapeHtml(r.fileName)} ｜ latest: ${escapeHtml(r.lastTime || '?')}">
+        list.innerHTML = shown.map((r) => `<div class="cs-role-item cs-cln-mrow" data-file="${escapeHtml(r.fileName)}" title="${escapeHtml(r.fileName)} ｜ 最新: ${escapeHtml(r.lastTime || '?')}">
             <input type="checkbox" value="${escapeHtml(r.fileName)}" name="cs_cln_msel">
             <span class="cs-cln-fname">${escapeHtml(r.fileName)}</span>
             <b style="color:var(--SmartThemeQuoteColor,#f0a35e);font-size:.82em;flex:none" title="楼层数">${r.mesCount ?? '?'}楼</b>
@@ -7067,7 +7075,7 @@ ext: {
             if (drv !== window.__cfgDrivers.ext || mode !== 'local') return '';
             const meta = (window.__extMeta && window.__extMeta[String(n)]) || {};
             if (meta.upToDate !== false) return '';
-            return `<button type="button" class="cs-btn cs-upd-row" data-upd-n="${escapeHtml(n)}" style="padding:1px 8px;font-size:.72em;flex:none" title="检测到远端有新版本, 点击更新(多个可一起点, 最后刷新页面生效)" style="padding:0 6px;color:#6fce6f;border-color:rgba(111,206,111,.55)">New</button>`;
+            return `<button type="button" class="cs-btn cs-upd-row" data-upd-n="${escapeHtml(n)}" style="padding:1px 8px;font-size:.72em;flex:none" title="检测到远端有新版本, 点击更新(多个可一起点, 最后刷新页面生效)" style="padding:0 6px;color:#6fce6f;border-color:rgba(111,206,111,.55)">新版</button>`;
         } catch { return ''; }
     };
     function __cfgStatusChip(drv, n, mode) {
@@ -7096,7 +7104,7 @@ ext: {
         try { names = mode === 'cloud' ? await drv.listCloud() : await drv.listLocal(); }
         catch (e) {
             const why = (e && e.message) || e;
-            if (st2) { st2.textContent = '读取失败：' + why; st2.style.color = '#e66'; }
+            if (st2) __csSetStatus(st2, '读取失败：' + why, 'err');
             list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ ${mode === 'cloud' ? '读取云端失败' : '读取本地失败'}：${escapeHtml(why)}<br>${mode === 'cloud' ? '请点设置里的「连接」自查（网络/仓库/token）' : '请确认酒馆扩展目录可访问后重试'}</p>`;
             hideBusy(); return;
         }
@@ -7224,6 +7232,15 @@ ext: {
                 const hit = (kind === '双端' && w === '双端') || (kind === '仅本地' && w === '仅本地') || (kind === '仅云端' && w === '仅云端') || (kind === '本地新' && d === '本地新') || (kind === '云端新' && d === '云端新');
                 r.style.display = hit ? '' : 'none';
             }
+            // 0.12.136 筛选/搜索无命中 → 提示(有行但全隐藏时显示占位, 不覆盖真正的空列表文案)
+            if (rows.length) {
+                const anyVisible = rows.some((r) => r.style.display !== 'none');
+                let ph = host.querySelector(':scope > .cs-filter-empty');
+                if (!anyVisible) {
+                    if (!ph) { ph = document.createElement('p'); ph.className = 'cs-hint cs-filter-empty'; ph.style.cssText = 'margin:6px 0 0;text-align:center'; host.appendChild(ph); }
+                    ph.textContent = '（无匹配项，试试清除筛选/搜索）';
+                } else if (ph) { ph.remove(); }
+            }
         } catch { }
     }
     function __applyCfgFilter() { __applyRowFilter('cs_cfg_list', window.__cfgFilter || '全部'); }
@@ -7282,7 +7299,7 @@ ext: {
         const st2 = $('cs_cfg2_status');
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要上传的项'; return; }
         if (window.__cfgMode !== 'local') {
-            if (st2) { st2.textContent = '当前是云端视图——「上传选中」上传的是本机内容，请切到「本地」视图再点'; st2.style.color = '#e66'; setTimeout(() => { if (st2.textContent.startsWith('当前是云端视图')) { st2.textContent = ''; st2.style.color = ''; } }, 4000); }
+            if (st2) { __csSetStatus(st2, '当前是云端视图——「上传选中」上传的是本机内容，请切到「本地」视图再点', 'err'); setTimeout(() => { if (st2.textContent.startsWith('当前是云端视图')) __csSetStatus(st2, '', ''); }, 4000); }
             return;
         }
         if (st2) st2.style.color = '';
@@ -7291,12 +7308,12 @@ ext: {
         try {
             const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
             hideBusy();
-            if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 上传出错：没有返回结果'; st2.style.color = '#e66'; } return; }
+            if (!(r && typeof r.ok === 'number')) { if (st2) __csSetStatus(st2, '❌ 上传出错：没有返回结果', 'err'); return; }
             try { await window.__renderCfgList(window.__cfgMode); } catch { } // 先刷新(刷新会清状态行), 再写完成文案
-            if (st2) { st2.textContent = `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}`; st2.style.color = r.fail ? '#e66' : ''; }
+            if (st2) __csSetStatus(st2, `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}`, r.fail ? 'err' : 'ok');
         } catch (e) {
             hideBusy();
-            if (st2) { st2.textContent = '❌ 上传异常：' + ((e && e.message) || e); st2.style.color = '#e66'; }
+            if (st2) __csSetStatus(st2, '❌ 上传异常：' + ((e && e.message) || e), 'err');
             console.warn('[chat-sync] 上传异常', e);
         }
     });
@@ -7305,7 +7322,7 @@ ext: {
         const st2 = $('cs_cfg2_status');
         if (!sel.length) { if (st2) st2.textContent = '请先勾选要导入的项'; return; }
         if (window.__cfgMode !== 'cloud') {
-            if (st2) { st2.textContent = '当前是本地视图——「导入选中」导入的是云端内容，请切到「云端」视图再点'; st2.style.color = '#e66'; setTimeout(() => { if (st2.textContent.startsWith('当前是本地视图')) { st2.textContent = ''; st2.style.color = ''; } }, 4000); }
+            if (st2) { __csSetStatus(st2, '当前是本地视图——「导入选中」导入的是云端内容，请切到「云端」视图再点', 'err'); setTimeout(() => { if (st2.textContent.startsWith('当前是本地视图')) __csSetStatus(st2, '', ''); }, 4000); }
             return;
         }
         if (st2) st2.style.color = '';
@@ -7314,12 +7331,12 @@ ext: {
         try {
             const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
             hideBusy();
-            if (!(r && typeof r.ok === 'number')) { if (st2) { st2.textContent = '❌ 导入出错：没有返回结果'; st2.style.color = '#e66'; } return; }
+            if (!(r && typeof r.ok === 'number')) { if (st2) __csSetStatus(st2, '❌ 导入出错：没有返回结果', 'err'); return; }
             try { await window.__renderCfgList(window.__cfgMode); } catch { }
-            if (st2) { st2.textContent = `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}`; st2.style.color = r.fail ? '#e66' : ''; }
+            if (st2) __csSetStatus(st2, `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}`, r.fail ? 'err' : 'ok');
         } catch (e) {
             hideBusy();
-            if (st2) { st2.textContent = '❌ 导入异常：' + ((e && e.message) || e); st2.style.color = '#e66'; }
+            if (st2) __csSetStatus(st2, '❌ 导入异常：' + ((e && e.message) || e), 'err');
             console.warn('[chat-sync] 导入异常', e);
         }
     });
@@ -7541,7 +7558,7 @@ ext: {
         if (st2) st2.textContent = '删除中…';
         const r = await window.__cfgDrivers[window.__cfgTab].del(sel, mode);
         try { await window.__renderCfgList(window.__cfgMode); } catch { } // 先刷新
-        if (st2) st2.textContent = `删除完成：成功 ${r ? r.ok : 0} / 共 ${sel.length}${r && r.fail ? `，失败 ${r.fail}` : ''}`;
+        if (st2) __csSetStatus(st2, `删除完成：成功 ${r ? r.ok : 0} / 共 ${sel.length}${r && r.fail ? `，失败 ${r.fail}` : ''}`, (r && r.fail) ? 'err' : 'ok');
         // 精确失效(不整清缓存): 云端删→目录剔除被删文件; 本地删→只清差异缓存
         const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas', api: () => API_CLOUD_DIR };
         try {
@@ -7571,7 +7588,7 @@ ext: {
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { if (st2) st2.textContent = '请先在上方勾选要删除的项'; return; }
         if (!settings.owner || !settings.repo || !settings.token) {
-            if (st2) { st2.style.color = '#e66'; st2.textContent = '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中」'; }
+            if (st2) __csSetStatus(st2, '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中」', 'err');
             return;
         }
         if (tab === 'ext' || tab === 'thp') {
@@ -7629,7 +7646,7 @@ ext: {
             const noteParts = [];
             if (skipLocalN) noteParts.push(`仅云端 ${skipLocalN} 跳过本地`);
             if (skipCloudN) noteParts.push(`仅本地/本地失败 ${skipCloudN} 跳过云端`);
-            if (st2) st2.textContent = `双端删除完成：成功 ${okN} / 共 ${sel.length}${noteParts.length ? '；' + noteParts.join('；') : ''}${failed.length ? `，失败 ${failN}（${failed.join('、')}）` : ''}`;
+            if (st2) __csSetStatus(st2, `双端删除完成：成功 ${okN} / 共 ${sel.length}${noteParts.length ? '；' + noteParts.join('；') : ''}${failed.length ? `，失败 ${failN}（${failed.join('、')}）` : ''}`, failed.length ? 'err' : 'ok');
             window.__renderCfgList(mode === 'cloud' ? 'cloud' : 'local');
         } finally { __csReleaseBusy(); }
     });
@@ -7846,7 +7863,7 @@ ext: {
             if (origConfirm) P.show.confirm = origConfirm;
             else if (origPopupConfirm) P.confirm = origPopupConfirm;
             const failTxt = r && r.failReasons && r.failReasons.length ? `，失败 ${r.fail}（${r.csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : (r && r.fail ? `，失败 ${r.fail}` : '');
-            if (st) st.textContent = `删除完成：成功 ${r ? r.ok : 0} / 共 ${sel.length}${failTxt}`;
+            if (st) __csSetStatus(st, `删除完成：成功 ${r ? r.ok : 0} / 共 ${sel.length}${failTxt}`, (r && r.fail) ? 'err' : 'ok');
             for (const k of Object.keys(__dirEntryCache)) delete __dirEntryCache[k];
         window.__renderWorldbookList && window.__renderWorldbookList(mode === 'cloud' ? 'cloud' : 'local');
         } finally { __csReleaseBusy(); }
@@ -7858,7 +7875,7 @@ ext: {
         const sel = [...document.querySelectorAll('input[name="cs_wb_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { if (st) st.textContent = '请先在上方勾选要删除的世界书'; return; }
         if (!settings.owner || !settings.repo || !settings.token) {
-            if (st) { st.style.color = '#e66'; st.textContent = '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中世界书」'; }
+            if (st) __csSetStatus(st, '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中世界书」', 'err');
             return;
         }
         const shown = sel.length > 8 ? sel.slice(0, 5).map(escapeHtml).join('、') + ` 等共 ${sel.length} 个` : sel.map(escapeHtml).join('、');
@@ -7887,39 +7904,12 @@ ext: {
             if (r.skipLocal.length) noteParts.push(`仅云端 ${r.skipLocal.length} 跳过本地`);
             if (r.skipCloud.length) noteParts.push(`仅本地 ${r.skipCloud.length} 跳过云端`);
             const failTxt = r.fail.length ? `，失败 ${r.fail.length}（${r.fail.map((x) => `${escapeHtml(x.name)}:${escapeHtml(x.reason)}`).join('、')}）` : '';
-            if (st) st.textContent = `双端删除完成：成功 ${r.ok} / 共 ${sel.length}${noteParts.length ? '；' + noteParts.join('；') : ''}${failTxt}`;
+            if (st) __csSetStatus(st, `双端删除完成：成功 ${r.ok} / 共 ${sel.length}${noteParts.length ? '；' + noteParts.join('；') : ''}${failTxt}`, r.fail.length ? 'err' : 'ok');
             for (const k of Object.keys(__dirEntryCache)) delete __dirEntryCache[k];
             window.__renderWorldbookList && window.__renderWorldbookList(mode === 'cloud' ? 'cloud' : 'local');
         } finally { __csReleaseBusy(); }
     });
     if (window.__renderWorldbookList) window.__renderWorldbookList('local');
-    // 刷新云端角色列表（读 sync/ 目录）
-    $('cs_refresh_cloud')?.addEventListener('click', async () => {
-        const sel = $('cs_cloud_char'); const st = $('cs_cloud_status');
-        if (!settings.token || !settings.repo) { if (st) st.textContent = '请先配置 token+仓库'; return; }
-        if (st) st.textContent = '读取云端角色…';
-        try {
-            const names = await Gitee.listDir('sync');
-            const current = sel.value;
-            sel.innerHTML = '<option value="">— 选择云端角色 —</option>';
-            names.forEach((n) => {
-                const opt = document.createElement('option');
-                opt.value = n; opt.textContent = n;
-                sel.appendChild(opt);
-            });
-            if (names.includes(current)) sel.value = current;
-            if (st) st.textContent = names.length ? `云端有 ${names.length} 个角色` : '云端暂无角色';
-        } catch (e) { if (st) st.textContent = '读取失败：' + e.message; }
-    });
-    // 从云端导入选中角色（全量）
-    $('cs_import_cloud')?.addEventListener('click', async () => {
-        const sel = $('cs_cloud_char'); const st = $('cs_cloud_status');
-        const charName = sel && sel.value;
-        if (!charName) { if (st) st.textContent = '请先选择要导入的云端角色'; return; }
-        if (st) st.textContent = '导入中…';
-        try { await importCharFromCloud(charName); if (st) st.textContent = '导入完成'; }
-        catch (e) { toastr.error('导入失败：' + e.message); if (st) st.textContent = '导入失败'; }
-    });
     // 删除选中文件：删除对象随当前列表视图（本地视图→删本地，云端视图→删云端）
     $('cs_del_sel')?.addEventListener('click', async () => {
         const st = $('cs_delete_status');
@@ -7961,7 +7951,7 @@ ext: {
             }
             if (origConfirm) P.show.confirm = origConfirm;
             else if (origPopupConfirm) P.confirm = origPopupConfirm;
-            if (st) st.textContent = `删除完成：成功 ${okCount}，失败 ${failCount}${failed.length ? `（${failed.join('、')}）` : ''}`;
+            if (st) __csSetStatus(st, `删除完成：成功 ${okCount}，失败 ${failCount}${failed.length ? `（${failed.join('、')}）` : ''}`, failCount ? 'err' : 'ok');
             window.__renderRoleMultiList && window.__renderRoleMultiList(mode === 'cloud' ? 'cloud' : 'local');
         } finally { __csReleaseBusy(); }
     });
@@ -7974,7 +7964,7 @@ ext: {
         if (!sel.length) { if (st) st.textContent = '请先在上方勾选要删除的角色'; return; }
         // 防呆：双端删除依赖云端可用。未配置则阻止并指引(否则会出现"本地删了云端没删"的假双删)。
         if (!settings.owner || !settings.repo || !settings.token) {
-            if (st) { st.style.color = '#e66'; st.textContent = '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中文件」'; }
+            if (st) __csSetStatus(st, '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中」', 'err');
             return;
         }
         const shown = sel.length > 8 ? sel.slice(0, 5).map(escapeHtml).join('、') + ` 等共 ${sel.length} 个` : sel.map(escapeHtml).join('、');
@@ -8070,13 +8060,16 @@ const CHAT_SYNC_CSS = `
 .cs-ico { font-size:13px; color:var(--SmartThemeQuoteColor); opacity:.85; }
 .cs-body { padding:10px 12px; }
 .cs-label { display:block; margin-bottom:4px; font-size:.88em; font-weight:600; color:var(--SmartThemeBodyColor,var(--grey_color)); opacity:.9; }
-.cs-hint { font-size:.72em; color:var(--SmartThemeBodyColor,var(--grey_color)); opacity:.72; line-height:1.5; margin:3px 0 0; }
+.cs-hint { font-size:.78em; color:var(--SmartThemeBodyColor,var(--grey_color)); opacity:.82; line-height:1.5; margin:4px 0 0; } /* 0.12.136 提示字号 .72→.78 可读性(仍小于正文保持层级) */
+.cs-ok { color:#6fce6f !important; }   /* 0.12.136 成功状态统一色 */
+.cs-err { color:#e66 !important; }     /* 0.12.136 失败状态统一色(替换散落的内联 #e66) */
+.cs-stack { margin-top:6px; } .cs-stack-sm { margin-top:4px; } /* 0.12.136 间距两档 */
 .cs-sep { height:1px; background:var(--SmartThemeBorderColor); margin:9px 0; }
 .cs-role-item { display:flex; align-items:center; gap:6px; padding:1px 4px; cursor:pointer; border-radius:3px; }
-.cs-role-item:hover { background:var(--SmartThemeBlurTintColor,rgba(0,0,0,.06)); }
+.cs-role-item:hover { background:var(--SmartThemeBlurTintColor,rgba(0,0,0,.08)); } /* 0.12.136 归并重复的 hover 定义 */
 .cs-role-item span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.85em; }
 .cs-role-item input { transform:scale(.85); flex:none; }
-.cs-group-title { font-size:.78em; font-weight:600; color:var(--SmartThemeBodyColor,var(--grey_color)); margin:6px 0 3px; }
+.cs-group-title { font-size:.78em; font-weight:700; color:var(--SmartThemeBodyColor,var(--grey_color)); margin:6px 0 3px; }
 .cs-row { display:flex; gap:8px; align-items:center; }
 /* 0.12.103 操作/删除按钮行内均分等宽(仅打 cs-eq 的按钮参与): 上传/导入 与 删除选中/双端 两行按钮等宽铺满, 上下行右缘对齐成列; 过滤chips(.cs-flt)不加不受影响 */
 .cs-row > button.cs-eq { flex:1 1 0; min-width:0; white-space:nowrap; }
@@ -8176,8 +8169,7 @@ const CHAT_SYNC_CSS = `
 /* 0.12.12: 整个面板板块不透明白: 面板/卡/全部文字固色深底浅字, 彻底不依赖主题半透明 */
 #chat_sync_settings, #cs_float_win, #cs_quick_float, .cs-cln-modal { color:var(--SmartThemeBodyColor, inherit); }
 #chat_sync_settings small, #cs_float_win small, #cs_quick_float small, .cs-cln-modal small { color:var(--SmartThemeBodyColor, inherit); opacity:.75; }
-
-.cs-role-item:hover { background:rgba(128,128,128,0.18); }
+/* 0.12.136 原重复 hover(.cs-role-item:hover 0.18)删除——上方统一为 BlurTint .08 */
 /* 0.12.11: 面板内所有原生控件统一深色(浅色主题下 .text_pole/select/checkbox 原生就是白色, 一并压掉) */
 #chat_sync_settings .text_pole, #cs_float_win .text_pole, #cs_quick_float .text_pole, .cs-cln-modal .text_pole, #chat_sync_settings select, #cs_float_win select, #cs_quick_float select, .cs-cln-modal select, #chat_sync_settings input[type='text'], #cs_float_win input[type='text'], #cs_quick_float input[type='text'], .cs-cln-modal input[type='text'], #chat_sync_settings input[type='password'], #cs_float_win input[type='password'], #cs_quick_float input[type='password'], .cs-cln-modal input[type='password'], #chat_sync_settings textarea, #cs_float_win textarea, #cs_quick_float textarea, .cs-cln-modal textarea { background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor, inherit); border:1px solid var(--SmartThemeBorderColor); border-radius:8px; padding:3px 8px; }
 #chat_sync_settings select, #cs_float_win select, #cs_quick_float select, .cs-cln-modal select { color-scheme:dark; }
