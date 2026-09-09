@@ -34,7 +34,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.89'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.126'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -44,7 +44,8 @@ const DEFAULT_SETTINGS = {
     autoSyncOnOpen: false,    // 【一次性】打开角色时自动拉取一次（独立，不归自动总开关；默认关）
     autoSyncOnSwitch: false,  // 【自动】切换角色/聊天时自动上传备份（受自动总开关管；默认关）
     autoSyncOnSend: false,    // 0.12.44 事件节点: 用户发送消息后自动上传当前聊天
-    autoSyncOnReply: false,   // 0.12.44 事件节点: AI回复完(20秒内无重roll/截断)自动上传当前聊天
+    autoSyncOnReply: false,   // 0.12.44 事件节点: AI回复完(窗口秒内无重roll/截断)自动上传当前聊天; 窗口见 autoSyncReplyWaitSec
+    autoSyncReplyWaitSec: 20, // 0.12.100 可填秒数: AI回复完无重roll判定窗口(原硬编码20s; 秒, 正整数, 用户可填 1-600)
     lastCloudSha: {},         // {云端路径: sha} 记忆
     lastLocalMTime: {},       // {云端路径: 上次同步时本地聊天文件mtime} 增量粗筛
     syncMap: {},              // {角色名: {云路径: 本地导入后的真实文件名}} 稳定身份映射，让跨端同步收敛不复制
@@ -53,10 +54,10 @@ const DEFAULT_SETTINGS = {
     autoUpdate: true,         // 自动更新插件至最新(默认勾选; 每次启动检查, 有新版自动升级+刷新)
     floatEnabled: true,       // 0.12.6 快捷入口: 悬浮球总开关(每页可见, 点头部展开/收起, 可拖拽)
     floatUploadChat: true,    // 悬浮球内「上传当前聊天」(功能型, 绿色)
-    floatImportChat: true,    // 悬浮球内「导入云端至当前聊天」(功能型, 蓝色)
+    floatImportChat: true,    // 悬浮球内「导入至当前聊天」(功能型, 蓝色)
     menuUploadChat: true,     // 左下角拓展菜单入口「上传当前聊天」
-    menuImportChat: true,     // 左下角拓展菜单入口「导入云端至当前聊天」
-    floatPages: { conn: true, roles: true, char: true, wb: true, cln: true, cfg: true }, // 悬浮球面板入口(打开对应页面)逐页开关
+    menuImportChat: true,     // 左下角拓展菜单入口「导入至当前聊天」
+    floatPages: { conn: true, roles: true, char: true, wb: true, cln: true, cfg: true, asy: true }, // 悬浮球面板入口(打开对应页面)逐页开关
 };
 
 // 统一从 settings 读；未初始化就建
@@ -1160,6 +1161,7 @@ async function importSelectedCharacters(charNames) {
 
 // 0.12.83 悬浮球图标内联 SVG(fa 原样式, 不依赖 FontAwesome 字体——旧浏览器/字体加载失败也可见)
 const CS_FA_ICONS = {
+    'gear': { v:'0 0 512 512', d:'M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z' },
     'arrows-rotate': { v:'0 0 512 512', d:'M105.1 202.6c7.7-21.8 20.2-42.3 37.8-59.8c62.5-62.5 163.8-62.5 226.3 0L386.3 160H352c-17.7 0-32 14.3-32 32s14.3 32 32 32H463.5c0 0 0 0 0 0h.4c17.7 0 32-14.3 32-32V80c0-17.7-14.3-32-32-32s-32 14.3-32 32v35.2L414.4 97.6c-87.5-87.5-229.3-87.5-316.8 0C73.2 122 55.6 150.7 44.8 181.4c-5.9 16.7 2.9 34.9 19.5 40.8s34.9-2.9 40.8-19.5zM39 289.3c-5 1.5-9.8 4.2-13.7 8.2c-4 4-6.7 8.8-8.1 14c-.3 1.2-.6 2.5-.8 3.8c-.3 1.7-.4 3.4-.4 5.1V432c0 17.7 14.3 32 32 32s32-14.3 32-32V396.9l17.6 17.5 0 0c87.5 87.4 229.3 87.4 316.7 0c24.4-24.4 42.1-53.1 52.9-83.7c5.9-16.7-2.9-34.9-19.5-40.8s-34.9 2.9-40.8 19.5c-7.7 21.8-20.2 42.3-37.8 59.8c-62.5 62.5-163.8 62.5-226.3 0l-.1-.1L125.6 352H160c17.7 0 32-14.3 32-32s-14.3-32-32-32H48.4c-1.6 0-3.2 .1-4.8 .3s-3.1 .5-4.6 1z' },
     'bolt': { v:'0 0 448 512', d:'M349.4 44.6c5.9-13.7 1.5-29.7-10.6-38.5s-28.6-8-39.9 1.8l-256 224c-10 8.8-13.6 22.9-8.9 35.3S50.7 288 64 288H175.5L98.6 467.4c-5.9 13.7-1.5 29.7 10.6 38.5s28.6 8 39.9-1.8l256-224c10-8.8 13.6-22.9 8.9-35.3s-16.6-20.7-30-20.7H272.5L349.4 44.6z' },
     'book': { v:'0 0 448 512', d:'M96 0C43 0 0 43 0 96V416c0 53 43 96 96 96H384h32c17.7 0 32-14.3 32-32s-14.3-32-32-32V384c17.7 0 32-14.3 32-32V32c0-17.7-14.3-32-32-32H384 96zm0 384H352v64H96c-17.7 0-32-14.3-32-32s14.3-32 32-32zm32-240c0-8.8 7.2-16 16-16H336c8.8 0 16 7.2 16 16s-7.2 16-16 16H144c-8.8 0-16-7.2-16-16zm16 48H336c8.8 0 16 7.2 16 16s-7.2 16-16 16H144c-8.8 0-16-7.2-16-16s7.2-16 16-16z' },
@@ -1894,6 +1896,37 @@ async function deleteSelectedWorldbooks(names, mode) {
     } finally { /* busy 由调用方管理 */ }
 }
 
+// 双端删除全局世界书（0.12.99）：对勾选名字 本地 deleteWorldInfo + 云端 worldbooks/<名>.json 一并删。
+// 口径与角色双端一致：先本地后云端；仅一端存在→删存在端，另一端跳过(不计失败)；单名失败不中断。
+// 返回 {ok, skipLocal:[], skipCloud:[], fail:[{name,reason}]}
+async function deleteBothSidesWorldbooks(names) {
+    const ok = [], skipLocal = [], skipCloud = [], fail = [];
+    for (let i = 0; i < names.length; i++) {
+        const name = names[i];
+        try {
+            // ── 本地 ──
+            const existed = Array.isArray(world_names) && world_names.includes(name);
+            if (existed) {
+                await deleteWorldInfo(name); // 官方: 删文件 + 更新 world_names(不在 world_names 里删不动)
+            } else {
+                skipLocal.push(name); // 本地无 → 跳过不算失败
+            }
+            // ── 云端 ──
+            const p = `worldbooks/${name}.json`;
+            const cloud = await Gitee.getText(p);
+            if (cloud) {
+                await Gitee.deleteFile(p, cloud.sha, `delete worldbook ${name}`);
+                if (settings.lastCloudSha && settings.lastCloudSha[p] !== undefined) delete settings.lastCloudSha[p];
+            } else {
+                skipCloud.push(name); // 云端无 → 跳过不算失败
+            }
+            ok.push(name);
+        } catch (e) { fail.push({ name, reason: (e && e.message) || String(e) }); }
+    }
+    saveSettingsDebounced();
+    return { ok: ok.length, skipLocal, skipCloud, fail };
+}
+
 // ============ 聊天记录清理器（2026-08-23 用户需求：选角色→列历史(预览/时间)→勾选→本地+云端同名同删） ============
 // 列出某角色 本地+云端 全部聊天（本地走官方 /api/characters/chats 一次拿全: 楼数/大小/最后一楼预览/mtime；
 // 云端走目录列表拿 name/size/sha；按文件名对齐，同名=双端都有）
@@ -2307,6 +2340,9 @@ async function importSelectedConnPresets(items) { // items: [{apiId, name}]
                         }
                     }
                 } catch (e) { console.warn('[chat-sync] 同步前端预设列表失败(不影响落盘)', e); }
+                // 0.12.117 导入后补记 lastCloudSha(同 theme 导入修): 方向判定有可信同步点, 不再"无记忆猜本地新/旧记忆猜云端新"
+                settings.lastCloudSha = settings.lastCloudSha || {};
+                settings.lastCloudSha[p] = cloud.sha;
                 ok.push(saveName === name ? name : `${name}→另存「${saveName}」`); __lastSettingsData = null; // 失效缓存, 下次重读
             } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
         }
@@ -2515,6 +2551,10 @@ async function importSelectedThemes(names) {
                 }
                 const imported = await __officialImportThemeFlow(JSON.stringify(theme), importName);
                 if (!imported) { fail.push(name); failReasons.push({ name, reason: '官方导入未完成（可能重名或弹窗超时）' }); continue; }
+                // 0.12.117 导入后补记 lastCloudSha(=云端当前sha): 此前导入不记 → 之后官方保存/键序重排使字节不同时,
+                //   方向判定无记忆(空→猜本地新) 或 记忆是更早的(旧→猜云端新), 同项两视图/不同时刻互相矛盾。导入即本地==云端, 记下同步点。
+                settings.lastCloudSha = settings.lastCloudSha || {};
+                settings.lastCloudSha[p] = cloud.sha;
                 ok.push(importName === name ? name : `${name}→另存「${importName}」`); __lastSettingsData = null;
             } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
         }
@@ -2606,6 +2646,9 @@ async function importSelectedRegex(names) {
                         arr.push(script);
                     } else arr[existingIdx] = script;
                 } else arr.push(script);
+                // 0.12.117 导入后补记 lastCloudSha(同 theme/conn 导入修): 方向判定有可信同步点
+                settings.lastCloudSha = settings.lastCloudSha || {};
+                settings.lastCloudSha[p] = cloud.sha;
                 ok.push(savedAs === key ? key : `${key}→另存「${savedAs}」`); __lastSettingsData = null;
             } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
         }
@@ -3613,7 +3656,11 @@ function jsonStableString(v) {
     return JSON.stringify(v);
 }
 // 内容差异判定: 'same'=指纹一致(同步跳过) | 'local'=本地较新 | 'cloud'=云端较新(别处改过) | null=云端缺失
-const __diffCache = {}; // {path: {val, ts}} 5分钟复用
+const __diffCache = {}; // {path: {val, ts}} 5分钟复用(上传/导入实时判断用)
+// 0.12.116 语义复核缓存【独立于 __diffCache】: 0.12.114 复核曾复用 __diffCache 同 key → 复核写的 {val,ts,sha} 会被
+//   上传流程 __diffOf 读到(val 语义不同), 反之 __diffOf 写的 5 分钟短缓存也可能让复核跳过——互相污染。
+//   独立缓存带云端 sha 校验: 云端未变(sha 同)则 30 分钟内直接复用, 不重复下载; 云端变(sha 不同)立即失效重核。
+const __recheckCache = {}; // {path: {val, ts, sha}} 30分钟复用
 function __diffOf(cloudObj, localText, path) {
     if (!cloudObj || cloudObj.content === undefined) return null; // 云端缺失 → 存在性徽章已说明
     const now = Date.now();
@@ -3641,15 +3688,61 @@ async function __diffMapOf(dir, localTextOf, remapKey = null) {
     const arr = await __cachedListEntries(dir);
     const shaMap = new Map(arr.filter((e2) => e2.type === 'file' && e2.name.endsWith('.json')).map((e2) => [e2.name.replace(/\.json$/, ''), e2.sha]));
     const out = new Map();
-    for (const [key, sha] of shaMap) {
+    // 0.12.115 并发4处理(原串行逐项): 复核需下载云端内容, 串行在"多个字节不同项"时慢——worker池压延迟;
+    //   每项逻辑与原一致(缓存命中/语义复核/方向判定), out.set 与 __diffCache 写按 path 独立, 无竞态。
+    const __one = async (key) => {
+        const sha = shaMap.get(key);
         const localText = await localTextOf(key, remapKey);
-        if (localText === null) continue; // 仅云端: 无"谁新"可比(存在性徽章已表达)
+        if (localText === null) return; // 仅云端: 无"谁新"可比(存在性徽章已表达)
         const lb = await gitBlobSha(new TextEncoder().encode(localText));
-        if (lb === sha) { out.set(key, 'same'); continue; }
+        if (lb === sha) { out.set(key, 'same'); return; }
+        // 0.12.114 语义复核(修键序漂移误报): 字节不同可能是 JSON 键序变化(内容一致)——theme/conn/regex 的
+        //   本地对象经官方保存/导入/应用后键序可能重排, 字节 sha 恒不同 → 曾误判"本地新/云端新"且两视图矛盾。
+        //   下载云端内容做 jsonStableString(键序无关)复核: 语义一致 → same; 真不同才走 lastCloudSha 方向。
+        //   (api/thp 早已语义比较; 本函数补齐 theme/conn/regex/user 共用路径)
         const p = `${dir}/${key}.json`;
-        const mem = settings.lastCloudSha && settings.lastCloudSha[p];
-        out.set(key, (mem && sha !== mem) ? 'cloud' : 'local');
+        // 0.12.116 复核缓存(独立 __recheckCache, 30分钟): 字节不同项已复核过且云端sha未变 → 直接复用, 不重复下载
+        const __dcHit = __recheckCache[p];
+        if (__dcHit && Date.now() - __dcHit.ts < 1800000 && __dcHit.sha === sha) {
+            if (__dcHit.val === 'same') { settings.lastCloudSha = settings.lastCloudSha || {}; settings.lastCloudSha[p] = sha; out.set(key, 'same'); return; }
+            out.set(key, __dcHit.val); return;
+        }
+        try {
+            const cc = await Gitee.getText(p).catch(() => null);
+            if (cc && cc.content) {
+                let localNode = null, cloudNode = null;
+                try { localNode = JSON.parse(localText); cloudNode = JSON.parse(cc.content); } catch { }
+                if (localNode !== null && cloudNode !== null && jsonStableString(localNode) === jsonStableString(cloudNode)) {
+                    settings.lastCloudSha = settings.lastCloudSha || {};
+                    settings.lastCloudSha[p] = sha; // 记住当前已一致版本, 方向判定不再误判
+                    __recheckCache[p] = { val: 'same', ts: Date.now(), sha };
+                    out.set(key, 'same');
+                    return;
+                }
+                // 语义不同但下载过 → 缓存方向判定(带sha防过期)
+                const __mem2 = settings.lastCloudSha && settings.lastCloudSha[p];
+                const __rv = (__mem2 && sha !== __mem2) ? 'cloud' : 'local';
+                __recheckCache[p] = { val: __rv, ts: Date.now(), sha };
+                out.set(key, __rv);
+                return;
+            }
+        } catch { }
+        // 0.12.117 复核下载/解析失败: 无法证实内容关系时【不猜方向】——旧实现落进 lastCloudSha 启发式:
+        //   下载失败不写缓存、每次刷新重试, 网络抖动时同键可在本地/云端两视图渲染间取到相反结果(用户实测"本地新/云端新打架")。
+        //   如实标 'diff'(两边不同, DIFF_LABEL.diff), 绝不冒充"本地新/云端新"。若云端sha与记忆同=本地后来改过才是可信的local。
+        const __mem3 = settings.lastCloudSha && settings.lastCloudSha[p];
+        if (__mem3 && sha !== __mem3) { out.set(key, 'cloud'); return; } // 云端sha≠我上次传的 → 云端确实被别端改过(可信方向)
+        out.set(key, 'diff'); // 其余(无记忆/记忆==当前sha但复核失败)无法判断 → 两边不同
+    };
+    const keys = [...shaMap.keys()];
+    let __i = 0;
+    async function __worker() {
+        while (__i < keys.length) {
+            const k = keys[__i++];
+            try { await __one(k); } catch { /* 单项失败不拖垮整体 */ }
+        }
     }
+    await Promise.all([__worker(), __worker(), __worker(), __worker()]);
     return out;
 }
 // 仅当首段是已知 apiId(openai等)时才剥离, 预设名自身含'|'不会被误剥
@@ -4086,12 +4179,14 @@ function ensureChatJsonlHeader(jsonlText, userName, charName2) {
 }
 
 // 删除云端某个角色的整条记录（卡+世界书+聊天+清单，递归删 sync/<角色>/ 下所有文件）
-async function deleteCharFromCloud(charName) {
-    if (!settings.owner || !settings.repo || !settings.token) { toastr.error('请先配置'); return; }
-    if (!charName) { toastr.error('未选择要删除的角色'); return; }
+// silent=true：批量删除用（0.12.97 双端删除）。此时不弹 info/success toast（汇总由调用方给），
+//   并返回 {deleted, missing} 供调用方统计；默认 false 行为与历史一致（各自 toast + 无返回值）。
+async function deleteCharFromCloud(charName, silent = false) {
+    if (!settings.owner || !settings.repo || !settings.token) { if (!silent) toastr.error('请先配置'); return { deleted: 0, missing: true, unconfigured: true }; }
+    if (!charName) { if (!silent) toastr.error('未选择要删除的角色'); return { deleted: 0, missing: true }; }
     const base = `sync/${charName}`;
     const files = await Gitee.listAllFiles(base);
-    if (files.length === 0) { toastr.info(`云端没有 ${charName} 的记录`); return; }
+    if (files.length === 0) { if (!silent) toastr.info(`云端没有 ${charName} 的记录`); return { deleted: 0, missing: true }; }
     let deleted = 0;
     for (const f of files) {
         try { await Gitee.deleteFile(f.path, f.sha, `delete ${f.path}`); deleted++; } catch (e) { console.warn('[chat-sync] 删除失败', f.path, e); }
@@ -4103,8 +4198,11 @@ async function deleteCharFromCloud(charName) {
     for (const key of Object.keys(settings.lastLocalMTime)) {
         if (key.startsWith(base)) delete settings.lastLocalMTime[key];
     }
+    // 0.12.98 角色级身份映射一并清：角色已删, 陈旧 syncMap[名] 会让同名角色重导入时绑回已删云路径(串数据)
+    if (settings.syncMap && settings.syncMap[charName]) { delete settings.syncMap[charName]; }
     saveSettingsDebounced();
-    toastr.success(`已从云端删除角色「${charName}」的 ${deleted} 个文件 ✅`);
+    if (!silent) toastr.success(`已从云端删除角色「${charName}」的 ${deleted} 个文件 ✅`);
+    return { deleted, missing: false };
 }
 
 // 删除本地角色（含卡+全部聊天）。
@@ -4138,6 +4236,8 @@ async function deleteLocalCharacter(charName, skipConfirm = false, silent = fals
         if (suppressDelete && restoreDelete) Pdel.show.confirm = restoreDelete;
         if (success) {
             if (!silent) toastr.success(`已删除本地角色「${charName}」`);
+            // 0.12.98 角色级身份映射一并清(与云端删除侧同口径), 防同名角色重导入串到已删云路径
+            if (settings.syncMap && settings.syncMap[charName]) { delete settings.syncMap[charName]; saveSettingsDebounced(); }
             // 官方函数已 removeCharacterFromUI 刷新列表；再补一次插件自己的列表刷新
             window.__renderRoleMultiList && window.__renderRoleMultiList('local');
             return true;
@@ -4333,14 +4433,14 @@ async function __csFetchRemoteVer() {
         'https://gitee.com/satosaki/tavern-synchronization-plugin/raw/master/manifest.json', // ⑤ Gitee raw
     ];
     const found = [];
-    let foundApi = false; // 任一权威API源成功 → 检测结果可信(CDN回声取不到更高版本)
+    let foundApi = false; // 任一权威源成功 → 检测结果可信(CDN回声取不到更高版本)
     let lastErr = null;
     for (const url of sources) {
         try {
             const headers = {};
             if (url.includes('api.github.com')) { headers['Accept'] = 'application/vnd.github+json'; if (settings.token && sv.includes('github')) headers['Authorization'] = 'Bearer ' + settings.token; }
             else if (url.includes('gitee.com/api')) { if (settings.token && (sv === '' || sv.includes('gitee'))) headers['Authorization'] = 'token ' + settings.token; } // 0.12.64 公开仓匿名即可读, 不再用硬编码token(失效会致权威源失败→误判)
-            const r = await fetch(url, { cache: 'no-store', headers, signal: AbortSignal.timeout(6000) });
+            const r = await fetch(url, { cache: 'no-store', headers, redirect: 'follow', signal: AbortSignal.timeout(6000) });
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const text = await r.text();
             let v = '';
@@ -4349,7 +4449,12 @@ async function __csFetchRemoteVer() {
                 v = (j && typeof j.content === 'string') ? JSON.parse(__b64ToText(j.content)).version : j.version;
             } catch { throw new Error('parse'); }
             v = String(v || '').trim();
-            if (v) { found.push(v); if (url.includes('gitee.com/api')) foundApi = true; } // 0.12.60 权威仅认 Gitee 主仓 API; GitHub 镜像(api.github.com)滞后会误导"本机高于远端", 只能作候选
+            if (v) {
+                found.push(v);
+                // 0.12.126 权威判定放宽: Gitee API 匿名限流很凶(实测403), 而 Gitee raw(gitee.com/.../raw) 与 API 同主仓同源不滞后——
+                //   都算权威; 否则限流时只剩 GitHub 发布仓镜像(常年滞后, 如停在0.12.89) → max取旧版 → 误判"本机已最新", TT/任何端都检测不到新版(用户实报)
+                if (url.includes('gitee.com/api') || url.includes('gitee.com/satosaki/tavern-synchronization-plugin/raw')) foundApi = true;
+            }
         } catch (e) { lastErr = e; }
     }
     if (!found.length) throw lastErr || new Error('所有更新源均失败');
@@ -4380,12 +4485,33 @@ window.__csCheckUpdate = async function (opts) {
         }
     } catch { }
 };
+// 0.12.123 自身 manifest 完好性校验(更新成功后/刷新前): 能 fetch 到自身 manifest.json 且含 js+version 才算完好。
+//   背景(考核 kimi 同因修复): git pull 若弱网中断可能损坏文件 → 直接刷新会让 ST 加载不到 manifest → 扩展从列表消失且重装报已存在。
+//   ⚠️ 多路径探测：物理目录可能带 third-party/ 前缀或为纯目录名，死拼一条 URL 会 404 → 误报校验失败。
+async function __csVerifySelfManifest() {
+    try {
+        const f = window.__csSelfFolder || 'st-chat-sync';
+        const candidates = [
+            `/scripts/extensions/${f}/manifest.json`,
+            `/scripts/extensions/third-party/${f}/manifest.json`,
+        ];
+        for (const p of [...new Set(candidates)]) {
+            try {
+                const r = await fetch(p, { cache: 'no-store' });
+                if (!r.ok) continue;
+                const mj = await r.json().catch(() => null);
+                if (mj && mj.js && mj.version) return true;
+            } catch { }
+        }
+        return false;
+    } catch { return false; }
+}
 // 一键自更新(走酒馆官方 /api/extensions/update)
 async function __csDoSelfUpdate(btn, remoteVer) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ 更新中…'; }
     // 用自身实际文件夹名调接口(不硬编码)
     const selfName = window.__csSelfFolder || 'st-chat-sync';
-    const REPO_URL = 'https://gitee.com/satosaki/tavern-synchronization-plugin.git';
+    let lastErr_s = ''; // 0.12.119 声明局部(原代码 lastErr_g/lastErr_s 未声明泄漏到全局)
     // 阶段1: 官方 update 接口
     for (const g of [true, false]) {
         try {
@@ -4394,38 +4520,23 @@ async function __csDoSelfUpdate(btn, remoteVer) {
                 body: JSON.stringify({ extensionName: selfName, global: g }),
             });
             if (r.status === 404) continue;
-            if (!r.ok) { lastErr_g = g; lastErr_s = 'HTTP ' + r.status; continue; }
+            if (!r.ok) { lastErr_s = 'HTTP ' + r.status; continue; }
             const j = await r.json().catch(() => ({}));
             if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
             if (btn) btn.textContent = '✅ 已更新';
+            // 0.12.124 更新接口成功 = git pull 完成，不再做 manifest 自校验(HTTP 拼路径易 404 误报，
+            // 误判会让用户卡在"已更新但提示校验失败")。官方 update 成功即可信，统一走协调刷新。
             toastr.success('🌐 一键云同步：已更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
             window.__csDoReload(); // 协调刷新(多插件并发由最后完成者统一) + watchdog兜底必刷
             return;
         } catch (e2) { }
     }
-    // 阶段2: update 全灭 → 自动删旧 + URL 重装
-    toastr.info('常规更新不可用，正在通过重装方式更新…', null, { timeOut: 6000 });
-    if (btn) btn.textContent = '⏳ 重装更新中…';
-    for (const g of [true, false]) {
-        try {
-            const rd = await fetch('/api/extensions/delete', {
-                method: 'POST', headers: getRequestHeaders(),
-                body: JSON.stringify({ extensionName: selfName, global: g }),
-            });
-            if (rd.ok) break;
-        } catch { }
-    }
-    try {
-        const ri = await fetch('/api/extensions/install', {
-            method: 'POST', headers: getRequestHeaders(),
-            body: JSON.stringify({ url: REPO_URL, global: true }),
-        });
-        if (!ri.ok) throw new Error('HTTP ' + ri.status);
-        toastr.success('🌐 一键云同步：已通过重装方式更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
-        window.__csDoReload();
-        return;
-    } catch (e3) { toastr.error('重装也失败：' + ((e3 && e3.message) || e3) + '。请手动到扩展管理删除后重装。'); }
+    // 0.12.119 移除"update 全灭 → 自动 delete+install 重装兜底"(同 kimi 修因): 弱网下 delete/install 中断→目录残缺/manifest损坏
+    //   → 插件从扩展列表消失且重装报"已存在"(用户实报现象); 且原兜底 delete 试 [true,false] 而 install 硬编码 global:true,
+    //   实际装 user 目录时会删掉 user 副本却装到全局 → 位置错乱。正常 git 直装形态官方 /update 即可更新, 该兜底本不该触发;
+    //   update 全灭时只明确报错, 让用户手动到扩展管理删除后重装。
     if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新'; }
+    toastr.error('🌐 一键云同步：自动更新失败（常规 git 更新不可用' + (lastErr_s ? '：' + lastErr_s : '') + '）。为避免插件损坏不再自动重装——若持续失败，请到「管理扩展」删除本插件后重新安装。', null, { timeOut: 8000 });
 }
 // 🔍 手动检测: 四态结果直接显示在按钮上(有新版/最新/本地更高/失败), 3 秒后还原待机
 window.__csManualCheck = async function (btn) {
@@ -4488,7 +4599,7 @@ window.__csManualCheck = async function (btn) {
     container.innerHTML = `
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header" id="${id}_toggle">
-                <b>🌐 一键云同步（角色/聊天/世界书/配置）</b>
+                <b>🌐 一键云同步</b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content" id="${id}_content" style="display:none">
@@ -4534,14 +4645,14 @@ window.__csManualCheck = async function (btn) {
                         <div class="cs-sep"></div>
                         <div style="font-size:.85em;font-weight:700;margin:4px 0 2px;opacity:.9">功能型（点图标直接执行）</div>
                         <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_upload" style="margin:0" ${settings.floatUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">悬浮球「上传当前聊天」</span></label>
-                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_import" style="margin:0" ${settings.floatImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">悬浮球「导入云端至当前聊天」</span></label>
+                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_import" style="margin:0" ${settings.floatImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">悬浮球「导入至当前聊天」</span></label>
                         <div class="cs-sep"></div>
                         <div style="font-size:.85em;font-weight:700;margin:4px 0 2px;opacity:.9">面板型（点图标打开对应页面）</div>
                         ${CS_FLOAT_PAGES.map((p) => `<label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_fpg_${p.key}" style="margin:0" ${settings.floatPages && settings.floatPages[p.key] === false ? '' : 'checked'}><span>悬浮球「${p.label}」</span></label>`).join('')}
                         <div class="cs-sep"></div>
                         <div style="font-size:.85em;font-weight:700;margin:4px 0 2px;opacity:.9">拓展菜单（左下角拓展菜单入口）</div>
                         <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_upload" style="margin:0" ${settings.menuUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">菜单「上传当前聊天」</span></label>
-                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_import" style="margin:0" ${settings.menuImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">菜单「导入云端至当前聊天」</span></label>
+                        <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_menu_import" style="margin:0" ${settings.menuImportChat === false ? '' : 'checked'}><span style="color:#6fbcf6;font-weight:600">菜单「导入至当前聊天」</span></label>
                     </div>
                     </details>
                 </div>
@@ -4553,13 +4664,13 @@ window.__csManualCheck = async function (btn) {
                         <div id="${id}_char_display" class="cs-current">当前角色：<b>${escapeHtml(charName || '（未打开单人角色）')}</b>${worldName ? `<br>绑定世界书：<b>${escapeHtml(worldName)}</b>` : ''}</div>
                         <p class="cs-hint" style="margin:6px 0 2px">当前聊天（增量上传 / 导入）</p>
                         <div class="cs-row" style="margin-top:4px">
-                            <button id="${id}_push_chat" type="button" class="cs-btn">📤 上传当前聊天</button>
-                            <button id="${id}_pull_chat" type="button" class="cs-btn">📥 导入云端至当前聊天</button>
+                            <button id="${id}_push_chat" type="button" class="cs-btn cs-eq">📤 上传当前聊天</button>
+                            <button id="${id}_pull_chat" type="button" class="cs-btn cs-eq">📥 导入至当前聊天</button>
                         </div>
                         <p class="cs-hint" style="margin:6px 0 2px">该角色全部聊天（增量上传 / 导入）</p>
                         <div class="cs-row" id="${id}_char_actions" style="margin-top:4px">
-                            <button id="${id}_push_char" type="button" class="cs-btn">📤 上传角色全部聊天</button>
-                            <button id="${id}_pull_char" type="button" class="cs-btn">📥 导入云端该角色全部聊天</button>
+                            <button id="${id}_push_char" type="button" class="cs-btn cs-eq">📤 上传角色全部聊天</button>
+                            <button id="${id}_pull_char" type="button" class="cs-btn cs-eq">📥 导入角色全部聊天</button>
                         </div>
                     </div>
                     </details>
@@ -4571,8 +4682,8 @@ window.__csManualCheck = async function (btn) {
                     <div class="cs-body">
                         <p class="cs-hint" style="margin-bottom:4px">把本地角色整包/聊天上传到云端，或从云端导入/删除。</p>
                         <div class="cs-row" style="margin-top:6px">
-                            <button id="${id}_push_all" type="button" class="cs-btn">📤 上传全部角色</button>
-                            <button id="${id}_pull_all" type="button" class="cs-btn">📥 导入全部云端角色</button>
+                            <button id="${id}_push_all" type="button" class="cs-btn cs-eq">📤 上传全部角色</button>
+                            <button id="${id}_pull_all" type="button" class="cs-btn cs-eq">📥 导入全部云端角色</button>
                         </div>
                         <div class="cs-sep"></div>
                         <p class="cs-hint" style="margin-bottom:4px">【选择部分角色】刷新列出本地/云端角色，拖动划选勾选，再操作</p>
@@ -4584,11 +4695,16 @@ window.__csManualCheck = async function (btn) {
                         </div>
                         <div id="${id}_roles_list" class="cs-roles cs-sellect" style="max-height:150px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:4px;padding:4px;margin-top:4px;user-select:none"></div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
-                            <button id="${id}_push_sel" type="button" class="cs-btn">📤 上传选中角色</button>
-                            <button id="${id}_pull_sel" type="button" class="cs-btn">📥 导入选中角色</button>
-                            <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn" title="删除选中的文件">🗑 删除选中文件</button>
-
-<span style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
+                            <button id="${id}_push_sel" type="button" class="cs-btn cs-eq">📤 上传选中角色</button>
+                            <button id="${id}_pull_sel" type="button" class="cs-btn cs-eq">📥 导入选中角色</button>
+                        </div>
+                        <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
+                            <button id="${id}_del_sel" type="button" class="cs-btn cs-danger-btn cs-eq" title="删除选中的文件(本地视图删本地/云端视图删云端)">🗑 删除选中文件</button>
+                            <button id="${id}_del_both" type="button" class="cs-btn cs-danger-btn cs-eq" title="同时删除本地与云端选中的角色：本地=卡+全部聊天+绑定世界书(未被其他角色引用时)，云端=整个 sync/名/ 目录。双端均不可恢复">🗑 删除双端</button>
+                        </div>
+                        <p id="${id}_delete_target" class="cs-hint" style="margin:3px 0 0"></p>
+                        <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
+                            <span style="display:inline-flex;gap:4px;flex-wrap:wrap">
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
@@ -4597,7 +4713,6 @@ window.__csManualCheck = async function (btn) {
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_roles_list" data-flt="云端新" style="padding:1px 8px;font-size:.72em" title="云端被另一端改过(需差异徽章支持的分项)">云端新</button>
                             </span>
                             <input type="text" id="cs_search_roles" class="text_pole" placeholder="🔍搜索…" style="width:110px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_roles_list" title="按名字快速过滤（可与上方筛选叠加）">
-                            <span id="${id}_delete_target" class="cs-hint" style="margin-left:6px"></span>
                         </div>
                         <p id="${id}_delete_status" class="cs-hint" style="margin-top:4px"></p>
                         <p id="${id}_cloud_status" class="cs-hint" style="margin-top:6px"></p>
@@ -4618,11 +4733,15 @@ window.__csManualCheck = async function (btn) {
                         </div>
                         <div id="${id}_wb_list" class="cs-roles cs-sellect" style="max-height:140px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:4px;padding:4px;margin-top:4px;user-select:none"></div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
-                            <button id="${id}_wb_push" type="button" class="cs-btn">📤 上传选中世界书</button>
-                            <button id="${id}_wb_pull" type="button" class="cs-btn">📥 导入选中世界书</button>
-                            <button id="${id}_wb_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的全局世界书(本地视图删本地/云端视图删云端)">🗑 删除选中世界书</button>
-
-<span style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
+                            <button id="${id}_wb_push" type="button" class="cs-btn cs-eq">📤 上传选中世界书</button>
+                            <button id="${id}_wb_pull" type="button" class="cs-btn cs-eq">📥 导入选中世界书</button>
+                        </div>
+                        <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
+                            <button id="${id}_wb_del" type="button" class="cs-btn cs-danger-btn cs-eq" title="删除选中的全局世界书(本地视图删本地/云端视图删云端)">🗑 删除选中世界书</button>
+                            <button id="${id}_wb_del_both" type="button" class="cs-btn cs-danger-btn cs-eq" title="同时删除本地与云端选中的全局世界书：本地 deleteWorldInfo + 云端 worldbooks/名.json。双端均不可恢复">🗑 删除双端</button>
+                        </div>
+                        <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
+                            <span style="display:inline-flex;gap:4px;flex-wrap:wrap">
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_wb_list" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
@@ -4653,9 +4772,11 @@ window.__csManualCheck = async function (btn) {
                         <div id="${id}_cln_listbox" class="cs-roles cs-sellect" style="max-height:230px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:4px;padding:4px;margin-top:4px"><p class="cs-hint">（先选角色，列表自动出现）</p></div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_cln_del" type="button" class="cs-btn cs-danger-btn" title="删除勾选的聊天：本地+云端同名一起删">🗑 删除选中（本地+云端同名同删）</button>
+                            <span class="cs-hint" style="margin-left:2px">🗑 删除=本地+云端同名一起删</span>
+                        </div>
+                        <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
                             <input type="text" id="cs_search_cln" class="text_pole" placeholder="🔍搜索…" style="width:150px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" data-kw-target="cs_cln_listbox" title="按聊天名快速过滤">
                             <input type="text" id="cs_search_content" class="text_pole" placeholder="🔎搜内容…" style="width:130px;font-size:.78em;padding:1px 6px;margin-left:4px;flex:none" title="扫该角色全部本地聊天文件内容，列出命中聊天+楼层+片段">
-                            <span class="cs-hint" style="margin-left:2px">🗑 删除=本地+云端同名一起删</span>
                         </div>
                         <p id="${id}_cln_status" class="cs-hint" style="margin-top:4px"></p>
                         <div id="${id}_cln_content_results" class="cs-hint" style="margin-top:4px"></div>
@@ -4668,7 +4789,6 @@ window.__csManualCheck = async function (btn) {
                     <summary><i class="fa-solid fa-database cs-ico" aria-hidden="true"></i>酒馆配置同步（预设/主题/正则/插件等设置）</summary>
                     <div class="cs-body">
                         <p id="${id}_cfg_status" class="cs-hint" style="margin-top:4px"></p>
-                        <div class="cs-sep"></div>
                         <div class="cs-label">分项部分同步（内容一致自动跳过；不同时可选 替换/另存副本）：</div>
                         <div class="cs-row" style="align-items:center;margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_cfg_tab_conn" type="button" class="cs-btn cs-tab" data-cfgtab="conn">预设</button>
@@ -4688,12 +4808,16 @@ window.__csManualCheck = async function (btn) {
                         </div>
                         <div id="${id}_cfg_list" class="cs-roles cs-sellect" style="max-height:150px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:4px;padding:4px;margin-top:4px;user-select:none"></div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap">
-                            <button id="${id}_cfg_push" type="button" class="cs-btn">📤 上传选中</button>
-                            <button id="${id}_cfg_pull" type="button" class="cs-btn">📥 导入选中</button>
-                            <button id="${id}_cfg_del" type="button" class="cs-btn cs-danger-btn" title="删除选中的配置项(本地视图删本地/云端视图删云端)">🗑 删除选中</button>
-
-                            <button id="${id}_cfg_updall" type="button" class="cs-btn" style="display:none" title="按顺序更新选中的拓展(仅本地视图, 多个可连点, 最后刷新页面一次生效)">⬆ 更新选中</button>
-                            <span id="${id}_cfg_filter" style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px">
+                            <button id="${id}_cfg_push" type="button" class="cs-btn cs-eq">📤 上传选中</button>
+                            <button id="${id}_cfg_pull" type="button" class="cs-btn cs-eq">📥 导入选中</button>
+                            <button id="${id}_cfg_updall" type="button" class="cs-btn cs-eq" style="display:none" title="按顺序更新选中的拓展(仅本地视图, 多个可连点, 最后刷新页面一次生效)">⬆ 更新选中</button>
+                        </div>
+                        <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
+                            <button id="${id}_cfg_del" type="button" class="cs-btn cs-danger-btn cs-eq" title="删除选中的配置项(本地视图删本地/云端视图删云端)">🗑 删除选中</button>
+                            <button id="${id}_cfg_del_both" type="button" class="cs-btn cs-danger-btn cs-eq" title="同时删除本地与云端选中的配置项(当前分项)。仅一端存在的自动删存在端，另一端跳过。双端均不可恢复">🗑 删除双端</button>
+                        </div>
+                        <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
+                            <span id="${id}_cfg_filter" style="display:inline-flex;gap:4px;flex-wrap:wrap">
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="全部" style="padding:1px 8px;font-size:.72em">全部</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="双端" style="padding:1px 8px;font-size:.72em">双端</button>
                                 <button type="button" class="cs-btn cs-flt" data-target="cs_cfg_list" data-flt="仅本地" style="padding:1px 8px;font-size:.72em">仅本地</button>
@@ -4724,7 +4848,7 @@ window.__csManualCheck = async function (btn) {
                         <div style="display:flex;flex-direction:column;gap:6px">
                             <label class="checkbox_label"><input id="${id}_chk_switch" type="checkbox" ${settings.autoSyncOnSwitch ? 'checked' : ''}> 切换角色/聊天（含新聊天）时</label>
                             <label class="checkbox_label"><input id="${id}_chk_send" type="checkbox" ${settings.autoSyncOnSend ? 'checked' : ''}> 用户发送消息后</label>
-                            <label class="checkbox_label"><input id="${id}_chk_reply" type="checkbox" ${settings.autoSyncOnReply ? 'checked' : ''}> AI回复完（20秒内没有重roll）</label>
+                            <label class="checkbox_label"><input id="${id}_chk_reply" type="checkbox" ${settings.autoSyncOnReply ? 'checked' : ''}> AI回复完（<input id="${id}_reply_wait" type="number" min="1" max="600" step="1" value="${Number(settings.autoSyncReplyWaitSec) || 20}" style="width:64px;font-size:.85em;text-align:center;padding:0 4px;margin:0 3px" title="无重roll判定窗口(秒), 1-600"> 秒内没有重roll）</label>
                         </div>
                         <p id="${id}_status" class="cs-hint" style="margin-top:6px"></p>
                     </div>
@@ -4736,12 +4860,39 @@ window.__csManualCheck = async function (btn) {
     `;
     // 折叠：ST 全局委托 $(document).on('click','.inline-drawer-toggle') 自动处理展开/收起，无需自绑
     wirePanelEvents();
+    // 0.12.108 手风琴初始收敛: 模板默认可能同时 open 多张(如未配置时 连接配置 + 快捷入口都开)——
+    //   手风琴语义下首次只留第一张开, 其余收起(用 requestAnimationFrame 等 details 初始 toggle 落定后再收)
+    try {
+        const __accBox0 = document.getElementById('chat_sync_settings');
+        if (__accBox0) {
+            requestAnimationFrame(() => {
+                const opened0 = __accBox0.querySelectorAll('details.cs-fold[open]');
+                if (opened0.length > 1) { for (let i = 1; i < opened0.length; i++) opened0[i].open = false; }
+            });
+        }
+    } catch { }
     // 初始按当前角色状态显示对应操作区块
     updateCurrentCharDisplay();
 }
 
 function wirePanelEvents() {
     const $ = (id) => document.getElementById(id);
+    // 0.12.108 折叠卡手风琴(用户需求): 点开任一卡, 其它卡自动收起, 面板不会拉很长。挂容器委托一次
+    //   (data-cs-acc=1 防重复); details 展开/收起会触发原生 toggle 事件并冒泡, 捕获阶段拦下。
+    //   注意: 只能在「某个卡新展开」时关别的, 展开中的那张自身要保留——用 e.target.open 判断。
+    const accBox = document.getElementById('chat_sync_settings');
+    if (accBox && !accBox.dataset.csAcc) {
+        accBox.dataset.csAcc = '1';
+        accBox.addEventListener('toggle', (e) => {
+            const opened = e.target;
+            if (!opened || opened.tagName !== 'DETAILS' || !opened.classList || !opened.classList.contains('cs-fold')) return;
+            if (!opened.open) return; // 只处理展开动作
+            // 关掉同容器里其它已展开的折叠卡(保留当前正要开的)
+            for (const d of accBox.querySelectorAll('details.cs-fold[open]')) {
+                if (d !== opened) d.open = false;
+            }
+        }, true);
+    }
     // 幂等保护：ensurePanel/renderSettingsPanel 可能被重复调用，否则 addEventListener 会重复绑定 →
     // 点一次删除会触发多次，第一次删除成功、第二次因文件已删返回 400（用户见"一边失败HTTP400一边成功"）
     // 渲染「选择部分角色」多选列表：mode='local' 列本地角色，'cloud' 列云端角色；紧凑排版（checkbox 前置、名字在右）
@@ -5283,9 +5434,24 @@ function wirePanelEvents() {
         const sel = $('cs_cln_char'); if (!sel) return;
         const cur = sel.value;
         const localNames = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group')).map((x) => x.name);
+        // 0.12.118 云端角色只列"确实有聊天"的: 用户用「删除选中文件」删本地后, 云端 sync/名/ 目录仍在(设计如此, 清理器用于清云端残留),
+        //   但若该目录只剩角色卡没聊天, 下拉出现空壳 → 过滤掉。listEntries sync/名/chats 探测有无聊天文件(并发4)。
         let cloudNames = [];
-        try { cloudNames = await Gitee.listDir('sync'); } catch { }
-        const all = [...new Set([...localNames, ...cloudNames])];
+        try { const allCloud = await Gitee.listDir('sync'); cloudNames = allCloud; } catch { }
+        const hasCloudChats = async (nm) => {
+            try {
+                const es = await Gitee.listEntries(`sync/${nm}/chats`).catch(() => []);
+                return es.some((e) => e.type === 'file' && /\.jsonl$/i.test(e.name) && !/\.p\d{3}\.jsonl$/i.test(e.name) && !/\.manifest\.json$/i.test(e.name));
+            } catch { return false; }
+        };
+        const cloudKeep = [];
+        {
+            let ci = 0;
+            const workers = Array.from({ length: 4 }, async () => { while (ci < cloudNames.length) { const nm = cloudNames[ci++]; if (await hasCloudChats(nm)) cloudKeep.push(nm); } });
+            await Promise.all(workers);
+        }
+        // 本地侧: 已删卡的角色不在 characters 里(不会出现); 还在的本地角色保留(可能含本地聊天, 即便空也便于后续清理)
+        const all = [...new Set([...localNames, ...cloudKeep])];
         sel.innerHTML = all.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
         if (cur && all.includes(cur)) sel.value = cur;
     }
@@ -5640,6 +5806,13 @@ function __safeName(name) {
     return n.slice(0, 60) || 'script';
 }
 async function __discoverExts() {
+    // 0.12.105 列表缓存: discover + 逐扩展查 manifest/version/.git 很慢(多扩展时数秒), 每次切视图全量重查像卡死。
+    //   缓存 60s: 缓存期内先秒回上次列表, 只有真正超时才重新 discover; 后端 meta 另由 __extMetaFetchedAt 60s 门控异步刷新。
+    if (window.__extListAt && Date.now() - window.__extListAt < 60000 && Array.isArray(window.__extListCache)) {
+        // 后台兜底: 超 60s 的 meta 刷新(不阻塞返回)
+        if (window.__extMetaFetchedAt && Date.now() - window.__extMetaFetchedAt > 60000) { window.__extMetaFetchedAt = Date.now(); __extMetaFillAsync().catch(() => { }); }
+        return window.__extListCache.slice().sort();
+    }
     const r = await fetch('/api/extensions/discover', { cache: 'no-store' });
     if (!r.ok) throw new Error('扩展清单获取失败 HTTP ' + r.status);
     const j = await r.json();
@@ -5655,16 +5828,22 @@ async function __discoverExts() {
             out.push(String(x.name));
         }
     }
+    window.__extListAt = Date.now();
+    window.__extListCache = out.slice();
     // 显示名: 每个扩展自带 manifest.json 的 display_name(官方加载器同一URL, TT/ST 服务端均挂载, 实测通)
     window.__extDisplayBy = window.__extDisplayBy || {};
     // 详情( url/branch/commit )并发取
     window.__extMeta = window.__extMeta || {};
     // 后台异步填充元数据(不阻塞列表渲染); 60s 缓存
-    if (window.__extMetaFetchedAt && Date.now() - window.__extMetaFetchedAt < 60000 && out.every((f) => window.__extMeta[f])) {
-        return out.sort(); // 全部有缓存, 跳过
-    }
+    __extMetaFillAsync().catch(() => { });
+    return out.sort();
+}
+// 0.12.105 抽出 meta 填充(列表缓存命中也只刷新 meta, 不重查 discover)
+async function __extMetaFillAsync() {
+    const out = window.__extListCache || [];
+    if (window.__extMetaFetchedAt && Date.now() - window.__extMetaFetchedAt < 60000 && out.every((f) => window.__extMeta[f])) return;
     window.__extMetaFetchedAt = Date.now();
-    Promise.all(out.map(async (full) => {
+    await Promise.all(out.map(async (full) => {
         const sname = String(full).split('/').pop();
         const jobs = [];
         if (!window.__extDisplayBy[sname]) {
@@ -6252,8 +6431,14 @@ ext: {
                                     fail.push(sname);
                                     failReasons.push({ name: sname, reason: (entry.url ? '重装失败HTTP' + rr.status : '云端无来源URL') + '，已导出安全包zip(解压到 data/extensions/third-party/' + sname + ' 后「刷新本地」再导入)' });
                                 } else {
+                                    // 0.12.106 诊断增强: 附完整错误(不截断到60) + 云端记录的url + 可能原因, 便于用户自查(网络/私仓/需梯子/地址失效)
+                                    let errTxt = '';
+                                    try { errTxt = String(await rr.text()).slice(0, 240); } catch { }
+                                    const hint = /IO error|Could not resolve|timed? ?out|ENOTFOUND|getaddrinfo/i.test(errTxt)
+                                        ? '（多为网络无法访问该仓库：GitHub 需梯子 / 仓库私有或已删 / 地址失效，可先浏览器打开该地址确认）'
+                                        : '';
                                     fail.push(sname);
-                                    failReasons.push({ name: sname, reason: entry.url ? '重装失败 HTTP ' + rr.status + ' ' + (await rr.text()).slice(0, 60) : '本机未安装且云端无来源URL(无安全包)' });
+                                    failReasons.push({ name: sname, reason: entry.url ? `重装失败 HTTP ${rr.status} ${errTxt}${hint}｜来源: ${entry.url}` : '本机未安装且云端无来源URL(无安全包)' });
                                 }
                                 continue;
                             }
@@ -6272,6 +6457,7 @@ ext: {
                     } catch (e) { fail.push(sname); failReasons.push({ name: sname, reason: (e && e.message) || e }); }
                 }
                 if (ok.length) toastr.info(`导入拓展配置：成功 ${ok.length}${fail.length ? `（失败 ${fail.length}: ${csShortList(failReasons.map(x => x.name + ':' + x.reason))}）` : ''}`);
+                else if (fail.length) toastr.error(`导入拓展失败：${fail.length} 条（${csShortList(failReasons.map(x => x.name + ':' + x.reason))}）`);
                 return { ok: ok.length, fail: fail.length, failReasons };
             },
             async del(items, mode) {
@@ -6286,9 +6472,16 @@ ext: {
                                 body: JSON.stringify({ extensionName: sname, global: t === 'global' }),
                             });
                             if (!r.ok) { fail.push(sname + ': HTTP ' + r.status + ' ' + (await r.text()).slice(0, 60)); continue; }
-                            try { if (window.__extType) delete window.__extType[full]; if (window.__extMeta) delete window.__extMeta[full]; } catch { }
+                            try { if (window.__extType) delete window.__extType[full]; if (window.__extMeta) delete window.__extMeta[full]; window.__extListAt = 0; } catch { } // 0.12.105 清列表缓存: 删了立即重发现
                             ok.push(sname);
                         } catch (e) { fail.push(sname + ':' + ((e && e.message) || e)); }
+                    }
+                    // 0.12.111 真卸载: 官方 /api/extensions/delete 只删目录, 扩展的注册/菜单/设置是页面加载期挂的——
+                    //   官方自身卸载也是删完 location.reload()(extensions.js:1587)。插件此前只重渲染列表 → 内存里扩展还在,
+                    //   看起来"没卸载"。删除成功后延迟整页刷新(带 guard, 多扩展/重复调用只刷一次)。
+                    if (ok.length && !window.__csReloadGuard) {
+                        window.__csReloadGuard = 1;
+                        setTimeout(() => location.reload(), ok.length === items.length ? 900 : 1600);
                     }
                     return { ok: ok.length, fail: fail.length, failReasons: fail.map((x) => ({ name: x, reason: '' })) };
                 }
@@ -6366,8 +6559,11 @@ ext: {
                         if (!node) { fail.push(name + ': 本地无此脚本/文件夹'); continue; }
                         const fname = __safeName(name) + '.json';
                         const txt = JSON.stringify(node, null, 2);
-                        const prev = await Gitee.getText(`${TH_SCRIPTS_DIR}/${fname}`).catch(() => null);
-                        await Gitee.putText(`${TH_SCRIPTS_DIR}/${fname}`, txt, prev && prev.sha ? prev.sha : undefined, `th script ${fname}`);
+                        const path3 = `${TH_SCRIPTS_DIR}/${fname}`;
+                        const prev = await Gitee.getText(path3).catch(() => null);
+                        // 0.12.104 补记 lastCloudSha(此前缺失 → diffMap 无方向参照, 云端被别端改过也判不出"云端新")
+                        settings.lastCloudSha = settings.lastCloudSha || {};
+                        settings.lastCloudSha[path3] = (await Gitee.putText(path3, txt, prev && prev.sha ? prev.sha : undefined, `th script ${fname}`)) || (settings.lastCloudSha[path3]);
                         ok.push((type === 'folder' ? '📁' : '📜') + name);
                     } catch (e) { fail.push(name + ':' + ((e && e.message) || e)); }
                 }
@@ -6427,17 +6623,38 @@ ext: {
                 return { ok: ok.length, fail: fail.length, failReasons: fail };
             },
             async diffMap() {
+                // 0.12.104 语义比较重写: 与 api 分项同思路——读云端 json 内容, jsonStableString(键序无关)比语义,
+                //   不再用字节级 blob sha。根因: TT 每次加载/官方 updateScriptTrees 会重建 node 对象, JSON 键序
+                //   可能漂移(如 {type,name,enabled} vs {name,enabled,type})→ 字节恒不同 → "本地没改却恒本地新"。
+                //   内容一致(键序无关)即判 same; 不同再靠 lastCloudSha 判方向(0.12.104 补 push 记录, 此前缺失→cloud 永不判出)。
+                //   key: 本地行值形态 [脚本/文件夹]名 + 云端文件 key(safeName) 双登记(本地/云端两视图都能查到)。
                 const local = __thTree();
                 const out = new Map();
-                const arr = await __cachedListEntries(TH_SCRIPTS_DIR);
-                for (const e of arr) {
-                    if (e.type !== 'file' || !e.name.endsWith('.json')) continue;
-                    const key = e.name.replace(/\.json$/, '');
-                    const node = local.find((n) => __safeName(n.name) === key);
-                    if (!node) continue; // 仅云端
-                    const lb = await gitBlobSha(new TextEncoder().encode(JSON.stringify(node.node)));
-                    out.set(key, lb === e.sha ? 'same' : 'local');
+                const fkeyOf = (n) => __safeName(n.name);
+                const pOf = (n) => `${TH_SCRIPTS_DIR}/${fkeyOf(n)}.json`;
+                // 并发读云端 json(差异徽章异步, 不阻塞列表; 限 4 防限流)
+                const nodes = local.slice();
+                let i = 0;
+                async function worker() {
+                    while (i < nodes.length) {
+                        const idx = i++;
+                        const n = nodes[idx];
+                        try {
+                            const c = await Gitee.getText(pOf(n)).catch(() => null);
+                            if (!c || !c.content) continue; // 仅本地
+                            const cloudNode = JSON.parse(c.content);
+                            const same = jsonStableString(cloudNode) === jsonStableString(n.node);
+                            const rowKey = (n.type === 'folder' ? '[文件夹]' : '[脚本]') + n.name;
+                            const fkey = fkeyOf(n);
+                            if (same) { out.set(rowKey, 'same'); out.set(fkey, 'same'); continue; }
+                            const mem = settings.lastCloudSha && settings.lastCloudSha[pOf(n)];
+                            const v = (mem && c.sha !== mem) ? 'cloud' : 'local';
+                            out.set(rowKey, v);
+                            out.set(fkey, v);
+                        } catch { }
+                    }
                 }
+                await Promise.all([worker(), worker(), worker(), worker()]);
                 return out;
             },
         },
@@ -6517,7 +6734,7 @@ ext: {
                 const r = (window.__userPersonaCache || []).find(x => x.file === file) || {};
                 const whereTag = { both: '<b class="cs-cln-where cs-cln-where-both">双端<span class="cs-where-diff" data-where-diff=""></span></b>', local: '<b class="cs-cln-where cs-cln-where-local">仅本地</b>', cloud: '<b class="cs-cln-where cs-cln-where-cloud">仅云端</b>' };
                 const nmRaw = r.name || file;
-                return `${whereTag[r.where] || ''}<span style="flex:0 0 4.2em;width:4.2em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.85em" title="${escapeHtml(nmRaw)}">${escapeHtml(nmRaw)}</span>
+                return `${whereTag[r.where] || ''}<span style="flex:0 1 auto;min-width:0;max-width:10em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.85em" title="${escapeHtml(nmRaw)}">${escapeHtml(nmRaw)}</span>
                     <span style="color:var(--SmartThemeQuoteColor,#f0a35e);font-weight:700;font-size:.82em;flex:none">${r.descLen || 0}字</span>
                     <span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78em;opacity:.72">${escapeHtml(r.preview || '（无描述）')}</span>`;
             },
@@ -6538,6 +6755,34 @@ ext: {
                     const lv = JSON.stringify({ name: nm, description: desc }, null, 2); // 与上传格式一致(缩进2)
                     const lb = await gitBlobSha(new TextEncoder().encode(lv));
                     const p = `${dir}/${file}.meta.json`;
+                    // 0.12.114 语义复核(同 __diffMapOf): 云端 meta 若来自别端/旧版键序字段不同, 字节不同但语义一致 → 判 same
+                    if (lb !== sha) {
+                        // 0.12.116 复核缓存(独立 __recheckCache, 30分钟, 带sha)
+                        const __uh = __recheckCache[p];
+                        if (__uh && Date.now() - __uh.ts < 1800000 && __uh.sha === sha) {
+                            if (__uh.val === 'same') { settings.lastCloudSha = settings.lastCloudSha || {}; settings.lastCloudSha[p] = sha; out.set(file, 'same'); continue; }
+                            out.set(file, __uh.val); continue;
+                        }
+                        try {
+                            const mc = await Gitee.getText(p).catch(() => null);
+                            if (mc && mc.content) {
+                                let ln = null, cn = null;
+                                try { ln = JSON.parse(lv); cn = JSON.parse(mc.content); } catch { }
+                                if (ln !== null && cn !== null && jsonStableString(ln) === jsonStableString(cn)) {
+                                    settings.lastCloudSha = settings.lastCloudSha || {};
+                                    settings.lastCloudSha[p] = sha;
+                                    __recheckCache[p] = { val: 'same', ts: Date.now(), sha };
+                                    out.set(file, 'same');
+                                    continue;
+                                }
+                                const __um = settings.lastCloudSha && settings.lastCloudSha[p];
+                                const __uv = (__um && sha !== __um) ? 'cloud' : 'local';
+                                __recheckCache[p] = { val: __uv, ts: Date.now(), sha };
+                                out.set(file, __uv);
+                                continue;
+                            }
+                        } catch { }
+                    }
                     const mem = settings.lastCloudSha && settings.lastCloudSha[p];
                     out.set(file, lb === sha ? 'same' : ((mem && sha !== mem) ? 'cloud' : 'local'));
                 }
@@ -6595,7 +6840,11 @@ ext: {
         const whereSets = { localSet: new Set(), cloudSet: new Set() };
         try {
             if (tab !== 'user') {
-                const _nm = (v) => __stripApiId(String(v).replace(/^third-party\//, '')).toLowerCase();
+                // 0.12.102 统一归一: 剥 apiId|/third-party/ 前缀 + 剥 thp 类型前缀; 仅 thp 额外过 __safeName——
+                //   云端文件存的是 __safeName(原始名).json(特殊字符转 _), 本地行值是 [脚本]原始名, 不转 safeName 则
+                //   含空格/符号的脚本两边永远对不上(用户实测"部分插件仍仅本地/仅云端")
+                const _thpNorm = (v) => __safeName(String(v).replace(/^\[(脚本|文件夹)\]/, ''));
+                const _nm = (v) => (tab === 'thp' ? _thpNorm(v) : __stripApiId(String(v).replace(/^third-party\//, '').replace(/^\[(脚本|文件夹)\]/, ''))).toLowerCase();
                 let lc = null, cc = null;
                 try { lc = await drv.listLocal(); } catch { }
                 try { cc = await drv.listCloud(); } catch { }
@@ -6614,7 +6863,8 @@ ext: {
         // 存在性徽章: 本地视图=双端/仅本地; 云端视图=(用户方案)【仅预设 conn】不显示 双端/仅云端 字样、双端项显示框内差异;
         //   主题/正则的云端视图照常显示 双端/仅云端 徽章(差异在框内), 与本地视图一致。
         // 统一名规范化(集合与行值都走同一规则, 否则第三分项带 third-party/ 前缀永不匹配)
-        const _nm2 = (v) => __stripApiId(String(v).replace(/^third-party\//, '')).toLowerCase();
+        const _thpNorm2 = (v) => __safeName(String(v).replace(/^\[(脚本|文件夹)\]/, ''));
+        const _nm2 = (v) => (tab === 'thp' ? _thpNorm2(v) : __stripApiId(String(v).replace(/^third-party\//, '').replace(/^\[(脚本|文件夹)\]/, ''))).toLowerCase(); // 0.12.102 thp 额外过 safeName(对齐云端文件名)
         const __whereOf = (n) => {
             if (tab === 'user') return '';
             const nn = _nm2(n);
@@ -6654,16 +6904,21 @@ ext: {
             return `<button type="button" class="cs-cln-en" data-en-n="${escapeHtml(n)}" data-on="${st.on ? '1' : '0'}" title="点击切换开/关">${txt}</button>`;
         };
         if (renderId !== window.__cfgRenderGen) return; // whereSets 过期(期间有新请求) → 丢弃, 等最新渲染
-        if (mode === 'cloud') {
-            showBusy(0, 0, '正在获取云端列表…');
-            list.innerHTML = '<p class="cs-hint">⏳ 正在获取云端列表…（云端响应慢时请稍候，最多约 45 秒）</p>';
+        // 0.12.105 加载提示: 云端视图(网络慢)已有; 拓展的【本地】视图也要——__discoverExts 逐个查 manifest/version/.git,
+        //   很慢(正常), 必须让用户知道在加载, 否则像卡死/以为只显示部分
+        const slowLocal = (mode !== 'cloud' && tab === 'ext');
+        if (mode === 'cloud' || slowLocal) {
+            showBusy(0, 0, mode === 'cloud' ? '正在获取云端列表…' : '正在读取本地拓展…');
+            list.innerHTML = mode === 'cloud'
+                ? '<p class="cs-hint">⏳ 正在获取云端列表…（云端响应慢时请稍候，最多约 45 秒）</p>'
+                : '<p class="cs-hint">⏳ 正在读取本地拓展…（逐个读取版本/仓库地址，拓展多时稍慢，请稍候）</p>';
         }
         let names = [];
         try { names = mode === 'cloud' ? await drv.listCloud() : await drv.listLocal(); }
         catch (e) {
             const why = (e && e.message) || e;
             if (st2) { st2.textContent = '读取失败：' + why; st2.style.color = '#e66'; }
-            list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接」自查（网络/仓库/token）</p>`;
+            list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ ${mode === 'cloud' ? '读取云端失败' : '读取本地失败'}：${escapeHtml(why)}<br>${mode === 'cloud' ? '请点设置里的「连接」自查（网络/仓库/token）' : '请确认酒馆扩展目录可访问后重试'}</p>`;
             hideBusy(); return;
         }
         hideBusy();
@@ -7098,8 +7353,11 @@ ext: {
         if (!sel.length) { if (st2) st2.textContent = '请先在上方勾选要删除的项'; return; }
         let ok;
         const disp = (v) => escapeHtml(__stripApiId(v)); // 显示剥掉 apiId| 前缀(仅已知apiId)
-        if (mode === 'cloud') ok = await csConfirm('⚠ 永久删除云端配置项', `将永久删除云端配置项：<b>${sel.map(disp).join('、')}</b>。<br>删除后无法直接找回，确定删除「${sel.length}」个吗？`);
-        else ok = await csConfirm('⚠ 删除本地配置项', `将删除本地配置项：<b>${sel.map(disp).join('、')}</b>。<br>确定删除「${sel.length}」个吗？`);
+        const isExtTab = window.__cfgTab === 'ext';
+        const dispN = (v) => isExtTab ? escapeHtml(String(v).split('/').pop()) : disp(v); // ext 行值带 third-party/ 前缀 → 显示纯名
+        if (mode === 'cloud') ok = await csConfirm('⚠ 永久删除云端配置项', `将永久删除云端配置项：<b>${sel.map(dispN).join('、')}</b>。<br>删除后无法直接找回，确定删除「${sel.length}」个吗？`);
+        else if (isExtTab) ok = await csConfirm('⚠ 卸载拓展', `将卸载（删除本地目录）拓展：<b>${sel.map(dispN).join('、')}</b>。<br>卸载成功后页面会自动刷新（拓展的注册/菜单/设置随刷新移除）。<br>确定卸载「${sel.length}」个吗？`);
+        else ok = await csConfirm('⚠ 删除本地配置项', `将删除本地配置项：<b>${sel.map(dispN).join('、')}</b>。<br>确定删除「${sel.length}」个吗？`);
         if (!ok) { if (st2) st2.textContent = '已取消'; return; }
         if (st2) st2.textContent = '删除中…';
         const r = await window.__cfgDrivers[window.__cfgTab].del(sel, mode);
@@ -7122,7 +7380,80 @@ ext: {
         } catch { }
         window.__renderCfgList(mode === 'cloud' ? 'cloud' : 'local');
     });
-    // ── 共享: 分项列表拖拽划选(<4px 原生翻转 / ≥4px 拖拽+one-shot拦截, 防双击双翻) ──
+    // 删除双端配置项（0.12.99）：当前分项 tab 下，勾选项 本地+云端 一并删。
+    // 口径与角色/世界书双端一致：先本地后云端；仅一端存在→删存在端，另一端 del 返回"该端无"→跳过(不计失败)。
+    // 各 driver.del(items, mode) 对"该端不存在"项返回 fail + reason 含「本地无/云端无」→ 解析 reason 归为跳过。
+    // ext/thp 不支持双端(本地是官方卸载语义, 非纯配置清理) → 明确提示。
+    $('cs_cfg_del_both')?.addEventListener('click', async () => {
+        const st2 = $('cs_cfg2_status');
+        const mode = window.__cfgMode || 'local';
+        const tab = window.__cfgTab || 'conn';
+        const drv = window.__cfgDrivers && window.__cfgDrivers[tab];
+        const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
+        if (!sel.length) { if (st2) st2.textContent = '请先在上方勾选要删除的项'; return; }
+        if (!settings.owner || !settings.repo || !settings.token) {
+            if (st2) { st2.style.color = '#e66'; st2.textContent = '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中」'; }
+            return;
+        }
+        if (tab === 'ext' || tab === 'thp') {
+            if (st2) { st2.style.color = ''; st2.textContent = '⚠ 拓展/酒馆助手分项不支持双端删除（本地删除是官方卸载/重装语义）——请用上方「删除选中」在对应视图分别删'; }
+            return;
+        }
+        const disp = (v) => escapeHtml(__stripApiId(v));
+        const shown = sel.length > 8 ? sel.slice(0, 5).map(disp).join('、') + ` 等共 ${sel.length} 个` : sel.map(disp).join('、');
+        const tabLbl = (drv && drv.label) || tab;
+        const ok = await csConfirm('⚠ 永久删除双端配置项', `将<b>同时删除本地与云端</b>的「${tabLbl}」配置项：<b>${shown}</b><br>` +
+            `· 本地：当前分项本地配置<br>· 云端：config-sync 对应目录<br>` +
+            `<span style="color:#e66">仅一端存在的自动删存在端、另一端跳过。双端均无法找回，确定删除「${sel.length}」个吗？</span>`);
+        if (!ok) { if (st2) st2.textContent = '已取消'; return; }
+        if (st2) st2.textContent = '双端删除中…';
+        if (!__csTryBusy()) { if (st2) st2.textContent = '已有同步在进行中，稍后再试'; return; }
+        try {
+            showBusy(0, sel.length, `删除双端${tabLbl}`);
+            const isMissingReason = (r2) => { const s = String(r2 || ''); return /无|不存在|未找到|该端/.test(s); };
+            let okN = 0, skipLocalN = 0, skipCloudN = 0, failN = 0; const failed = [];
+            for (let i = 0; i < sel.length; i++) {
+                const item = sel[i];
+                showBusy(i + 1, sel.length, `删除双端${tabLbl} ${String(item).split('|').pop()}`);
+                let localOk = true, cloudOk = true;
+                // ── 本地 ──
+                try {
+                    const rl = await drv.del([item], 'local');
+                    if (rl) {
+                        const noL = (rl.failReasons || []).some((x) => isMissingReason(x.reason));
+                        if (rl.fail && !noL) { localOk = false; failed.push(`${String(item).split('|').pop()} 本地删失败`); }
+                        else if (rl.fail && noL) { skipLocalN++; }
+                    }
+                } catch (e) { localOk = false; failed.push(`${String(item).split('|').pop()} 本地删失败:${(e && e.message) || e}`); }
+                // ── 云端 ──
+                if (localOk) {
+                    try {
+                        const rc = await drv.del([item], 'cloud');
+                        if (rc) {
+                            const noC = (rc.failReasons || []).some((x) => isMissingReason(x.reason));
+                            if (rc.fail && !noC) { cloudOk = false; failed.push(`${String(item).split('|').pop()} 云端删失败`); }
+                            else if (rc.fail && noC) { skipCloudN++; }
+                        }
+                    } catch (e) { cloudOk = false; failed.push(`${String(item).split('|').pop()} 云端删失败:${(e && e.message) || e}`); }
+                } else { skipCloudN++; } // 本地失败则不尝试云端, 该项云侧留待重试(记跳过不误报)
+                if (localOk && cloudOk) okN++;
+                else failN++;
+            }
+            try { await window.__renderCfgList(window.__cfgMode); } catch { }
+            // 缓存失效: 云端删 → 目录剔除; 本地删 → 清差异缓存(同 cfg_del 惯例)
+            const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas', api: () => API_CLOUD_DIR };
+            try {
+                const dir = DIR_BY_TAB[tab] && DIR_BY_TAB[tab]();
+                if (dir) { __evictDirCacheItems(dir, sel, tab); for (const it of sel) { const pure = __stripApiId(it); delete __diffCache[`${dir}/${tab === 'user' ? pure + '.meta.json' : (tab === 'api' ? __safeName(pure) + '.json' : pure + '.json')}`]; } }
+                else { for (const k of Object.keys(__diffCache)) delete __diffCache[k]; }
+            } catch { }
+            const noteParts = [];
+            if (skipLocalN) noteParts.push(`仅云端 ${skipLocalN} 跳过本地`);
+            if (skipCloudN) noteParts.push(`仅本地/本地失败 ${skipCloudN} 跳过云端`);
+            if (st2) st2.textContent = `双端删除完成：成功 ${okN} / 共 ${sel.length}${noteParts.length ? '；' + noteParts.join('；') : ''}${failed.length ? `，失败 ${failN}（${failed.join('、')}）` : ''}`;
+            window.__renderCfgList(mode === 'cloud' ? 'cloud' : 'local');
+        } finally { __csReleaseBusy(); }
+    });
     function __bindCfgDragSelect(box2, chkName) {
         if (!box2 || box2.getAttribute('data-csdragbound')) return;
         box2.setAttribute('data-csdragbound', '1');
@@ -7340,6 +7671,47 @@ ext: {
         window.__renderWorldbookList && window.__renderWorldbookList(mode === 'cloud' ? 'cloud' : 'local');
         } finally { __csReleaseBusy(); }
     });
+    // 删除双端全局世界书（0.12.99）：本地 deleteWorldInfo + 云端 worldbooks/名.json 一并删。
+    $('cs_wb_del_both')?.addEventListener('click', async () => {
+        const st = $('cs_wb_status');
+        const mode = window.__wbListMode || 'local';
+        const sel = [...document.querySelectorAll('input[name="cs_wb_sel"]:checked')].map((c) => c.value);
+        if (!sel.length) { if (st) st.textContent = '请先在上方勾选要删除的世界书'; return; }
+        if (!settings.owner || !settings.repo || !settings.token) {
+            if (st) { st.style.color = '#e66'; st.textContent = '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中世界书」'; }
+            return;
+        }
+        const shown = sel.length > 8 ? sel.slice(0, 5).map(escapeHtml).join('、') + ` 等共 ${sel.length} 个` : sel.map(escapeHtml).join('、');
+        const ok = await csConfirm('⚠ 永久删除双端全局世界书', `将<b>同时删除本地与云端</b>的全局世界书：<b>${shown}</b><br>` +
+            `· 本地：deleteWorldInfo（独立全局世界书文件）<br>` +
+            `· 云端：worldbooks/角色名.json<br>` +
+            `<span style="color:#e66">仅一端存在的自动删存在端、另一端跳过。双端均无法找回，确定删除「${sel.length}」个吗？</span>`);
+        if (!ok) { if (st) st.textContent = '已取消'; return; }
+        if (st) st.textContent = '双端删除中…';
+        if (!__csTryBusy()) { if (st) st.textContent = '已有同步在进行中，稍后再试'; return; }
+        try {
+            showBusy(0, sel.length, '删除双端世界书');
+            // 本地 deleteWorldInfo 可能需要确认(官方删除可能弹) → 临时接管确认弹窗
+            const P = window.Popup || Popup;
+            const origConfirm = P && P.show && P.show.confirm ? P.show.confirm.bind(P.show) : null;
+            const origPopupConfirm = P && P.confirm ? P.confirm.bind(P) : null;
+            if (origConfirm) P.show.confirm = () => Promise.resolve(1);
+            else if (origPopupConfirm) P.confirm = () => true;
+            let r;
+            try { r = await deleteBothSidesWorldbooks(sel); }
+            finally {
+                if (origConfirm) P.show.confirm = origConfirm;
+                else if (origPopupConfirm) P.confirm = origPopupConfirm;
+            }
+            const noteParts = [];
+            if (r.skipLocal.length) noteParts.push(`仅云端 ${r.skipLocal.length} 跳过本地`);
+            if (r.skipCloud.length) noteParts.push(`仅本地 ${r.skipCloud.length} 跳过云端`);
+            const failTxt = r.fail.length ? `，失败 ${r.fail.length}（${r.fail.map((x) => `${escapeHtml(x.name)}:${escapeHtml(x.reason)}`).join('、')}）` : '';
+            if (st) st.textContent = `双端删除完成：成功 ${r.ok} / 共 ${sel.length}${noteParts.length ? '；' + noteParts.join('；') : ''}${failTxt}`;
+            for (const k of Object.keys(__dirEntryCache)) delete __dirEntryCache[k];
+            window.__renderWorldbookList && window.__renderWorldbookList(mode === 'cloud' ? 'cloud' : 'local');
+        } finally { __csReleaseBusy(); }
+    });
     if (window.__renderWorldbookList) window.__renderWorldbookList('local');
     // 刷新云端角色列表（读 sync/ 目录）
     $('cs_refresh_cloud')?.addEventListener('click', async () => {
@@ -7413,11 +7785,81 @@ ext: {
             window.__renderRoleMultiList && window.__renderRoleMultiList(mode === 'cloud' ? 'cloud' : 'local');
         } finally { __csReleaseBusy(); }
     });
+    // 删除双端（0.12.97）：本地(卡+全部聊天+绑定世界书[未被其他角色引用时]) 与 云端(sync/名/ 整目录) 一并删。
+    // 口径(用户确认)：每角色先本地后云端；任一端失败即计入失败点名，不中断其余角色。
+    $('cs_del_both')?.addEventListener('click', async () => {
+        const st = $('cs_delete_status');
+        const mode = window.__csListMode || 'local';
+        const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
+        if (!sel.length) { if (st) st.textContent = '请先在上方勾选要删除的角色'; return; }
+        // 防呆：双端删除依赖云端可用。未配置则阻止并指引(否则会出现"本地删了云端没删"的假双删)。
+        if (!settings.owner || !settings.repo || !settings.token) {
+            if (st) { st.style.color = '#e66'; st.textContent = '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中文件」'; }
+            return;
+        }
+        const shown = sel.length > 8 ? sel.slice(0, 5).map(escapeHtml).join('、') + ` 等共 ${sel.length} 个` : sel.map(escapeHtml).join('、');
+        const ok = await csConfirm('⚠ 永久删除双端角色', `将<b>同时删除本地与云端</b>：<b>${shown}</b><br>` +
+            `· 本地：角色卡 + 全部聊天记录 + 绑定世界书（绑定世界书仅当未被其它角色引用时删除，被引用则保留并提示）<br>` +
+            `· 云端：整个 sync/角色名/ 目录（含备份的角色卡/绑定世界书/全部聊天/清单）<br>` +
+            `<span style="color:#e66">本地与云端的聊天记录都会一并删除，双端均无法找回，确定删除「${sel.length}」个吗？</span>`);
+        if (!ok) { if (st) st.textContent = '已取消'; return; }
+        if (st) st.textContent = '双端删除中…';
+        if (!__csTryBusy()) { if (st) st.textContent = '已有同步在进行中，稍后再试'; return; }
+        try {
+            showBusy(0, sel.length, '删除双端');
+            let okCount = 0, failCount = 0; const failed = []; const notes = [];
+            for (let i = 0; i < sel.length; i++) {
+                const name = sel[i];
+                showBusy(i + 1, sel.length, `删除双端 ${name}`);
+                const reasons = [];
+                try {
+                    // ── 本地：先删角色(卡+全部聊天)，成功后再处理绑定世界书 ──
+                    const localChar = (getContext().characters || []).find((c) => c && String(c.name) === String(name));
+                    const boundW = localChar && localChar.data && localChar.data.extensions ? String(localChar.data.extensions.world || '') : '';
+                    let localOk = true;
+                    if (!localChar) { reasons.push('本地无(跳过)'); }
+                    else {
+                        localOk = await deleteLocalCharacter(name, true, true); // 静默: 已有汇总, 且内部已接管临时聊天确认
+                        if (!localOk) reasons.push('本地删除失败');
+                    }
+                    // ── 绑定世界书连带：角色已删，重查是否仍被其它角色引用 ──
+                    if (localOk && boundW) {
+                        if (isWorldbookBound(boundW)) { notes.push(`绑定世界书「${boundW}」仍被其它角色引用，已保留`); }
+                        else if (Array.isArray(world_names) && world_names.includes(boundW)) {
+                            try { await deleteWorldInfo(boundW); }
+                            catch (e) { notes.push(`本地绑定世界书「${boundW}」删除失败：${(e && e.message) || e}（可去世界书面板单独删）`); }
+                        }
+                    }
+                    // ── 云端：整目录删（silent，汇总由本行给）──
+                    let cloudOk = true;
+                    try {
+                        const cr = await deleteCharFromCloud(name, true);
+                        if (cr && cr.unconfigured) { cloudOk = false; reasons.push('云端未配置'); }
+                        else if (cr && cr.missing) { reasons.push('云端无(跳过)'); }
+                        else if (cr && cr.deleted === 0) { cloudOk = false; reasons.push('云端删除失败(文件全部删除未成功)'); }
+                    } catch (e) { cloudOk = false; reasons.push('云端删除失败:' + ((e && e.message) || e)); }
+                    if (localOk && cloudOk) okCount++;
+                    else { failCount++; failed.push(reasons.length ? `${name}(${reasons.join(';')})` : name); }
+                } catch (e) { failCount++; failed.push(`${name}(${(e && e.message) || e})`); console.warn('[chat-sync] 双端删除角色失败', name, e); }
+            }
+            if (st) st.textContent = `双端删除完成：成功 ${okCount}，失败 ${failCount}${failed.length ? `（${failed.join('、')}）` : ''}${notes.length ? '；' + notes.join('；') : ''}`;
+            // 清云端目录/差异缓存避免徽章幽灵残留，再重渲染当前视图
+            for (const k of Object.keys(__dirEntryCache)) { if (k === 'sync' || k.startsWith('sync/')) delete __dirEntryCache[k]; }
+            for (const k of Object.keys(__diffCache)) { if (k === 'sync' || k.startsWith('sync/')) delete __diffCache[k]; }
+            window.__renderRoleMultiList && window.__renderRoleMultiList(mode === 'cloud' ? 'cloud' : 'local');
+        } finally { __csReleaseBusy(); }
+    });
     $('cs_chk_open')?.addEventListener('change', (e) => { settings.autoSyncOnOpen = e.target.checked; saveSettingsDebounced(); });
     // 切换角色/聊天自动推送开关
     $('cs_chk_switch')?.addEventListener('change', (e) => { settings.autoSyncOnSwitch = e.target.checked; saveSettingsDebounced(); });
     $('cs_chk_send')?.addEventListener('change', (e) => { settings.autoSyncOnSend = e.target.checked; saveSettingsDebounced(); });
     $('cs_chk_reply')?.addEventListener('change', (e) => { settings.autoSyncOnReply = e.target.checked; saveSettingsDebounced(); });
+    // 0.12.100 可填秒数: 无重roll判定窗口(1-600, 非法回落20)
+    $('cs_reply_wait')?.addEventListener('change', (e) => {
+        let v = Math.round(Number(e.target.value));
+        if (!Number.isFinite(v) || v < 1 || v > 600) { v = 20; e.target.value = 20; }
+        settings.autoSyncReplyWaitSec = v; saveSettingsDebounced();
+    });
 }
 
 // 挂到扩展设置面板（幂等：已存在则直接渲染，不重复创建）
@@ -7456,6 +7898,8 @@ const CHAT_SYNC_CSS = `
 .cs-role-item input { transform:scale(.85); flex:none; }
 .cs-group-title { font-size:.78em; font-weight:600; color:var(--SmartThemeBodyColor,var(--grey_color)); margin:6px 0 3px; }
 .cs-row { display:flex; gap:8px; align-items:center; }
+/* 0.12.103 操作/删除按钮行内均分等宽(仅打 cs-eq 的按钮参与): 上传/导入 与 删除选中/双端 两行按钮等宽铺满, 上下行右缘对齐成列; 过滤chips(.cs-flt)不加不受影响 */
+.cs-row > button.cs-eq { flex:1 1 0; min-width:0; white-space:nowrap; }
 .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor, inherit); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 .cs-btn:hover { filter:brightness(1.15); }
 .cs-btn.cs-primary { border-color:var(--SmartThemeQuoteColor); color:var(--SmartThemeQuoteColor); }
@@ -7503,7 +7947,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-row:hover { background:var(--SmartThemeBlurTintColor,rgba(0,0,0,.06)); }
 .cs-cln-row .cs-cln-fname { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.85em; }
 .cs-cln-row .cs-cln-date { white-space:nowrap; opacity:.65; font-size:.7em; }
-.cs-cln-where { flex:none; display:inline-flex; align-items:center; justify-content:center; font-size:.72em; line-height:1.6; padding:0 2px; border-radius:999px; border:1px solid; margin-right:3px; box-sizing:border-box; white-space:nowrap; width:4.4em; text-align:center; overflow:hidden; font-weight:600; }
+.cs-cln-where { flex:none; display:inline-flex; align-items:center; justify-content:center; font-size:.72em; line-height:1.6; padding:0 2px; border-radius:999px; border:1px solid; margin-right:0; box-sizing:border-box; white-space:nowrap; width:4.4em; text-align:center; overflow:hidden; font-weight:600; } /* 0.12.113 恢复固定4.4em(用户刻意: 徽章列对齐); 去margin-right——徽章右边框到开/关chip的空隙=行flex gap(6px)不再叠加 */
 .cs-cln-where .cs-where-diff { flex:none; font-size:1em !important; line-height:inherit; font-family:inherit; font-weight:inherit; color:inherit; margin:0; }
 .cs-chk-btn { flex:none; margin-left:8px; padding:2px 10px; font-size:.8em; font-weight:700; border-radius:999px; border:1px solid rgba(111,183,240,.6); background:rgba(111,183,240,.1); color:var(--SmartThemeBodyColor,#ddd); cursor:pointer; animation:cs_chk_pulse 2.6s ease-in-out infinite; }
 .cs-chk-btn:hover { filter:brightness(1.35); }
@@ -7517,7 +7961,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-where-local { color:#c9b458; border-color:rgba(201,180,88,.55); }
 .cs-cln-where-cloud { color:#6fb7f0; border-color:rgba(111,183,240,.55); }
 /* 开/关状态徽章(拓展/酒馆助手): 本地可点击切换, 云端只读(数据来自云端记录) */
-.cs-cln-en { flex:none; display:inline-flex; align-items:center; margin-left:6px; padding:0 8px; font-size:.72em; font-weight:700; border-radius:999px; border:1px solid; line-height:1.6; font-family:inherit; background:transparent; cursor:pointer; }
+.cs-cln-en { flex:none; display:inline-flex; align-items:center; margin-left:0; padding:0 8px; font-size:.72em; font-weight:700; border-radius:999px; border:1px solid; line-height:1.6; font-family:inherit; background:transparent; cursor:pointer; } /* 0.12.113 去margin-left: 徽章与开关空隙=行gap统一 */
 .cs-cln-en[data-on="1"] { color:#6fce6f; border-color:rgba(111,206,111,.55); }
 .cs-cln-en[data-on="0"] { color:#c9b458; border-color:rgba(201,180,88,.55); }
 .cs-cln-en:hover { filter:brightness(1.3); }
@@ -7628,8 +8072,9 @@ eventSource.on(event_types.GENERATION_ENDED, () => {
     __genEnd();
     if (!shouldAuto() || !settings.autoSyncOnReply || !currentCharName()) return;
     if (window.__csAutoReplyT) clearTimeout(window.__csAutoReplyT);
-    // 挂起20秒: 期间若又重roll(新的STARTED)则取消; 20秒内没有 → 上传当前聊天
-    window.__csAutoReplyT = setTimeout(() => { window.__csAutoReplyT = null; pushAuto().catch((e) => console.warn('[chat-sync] 回复完自动上传失败', e)); }, 20000);
+    // 挂起N秒(0.12.100 可填, 默认20): 期间若又重roll(新的STARTED)则取消; N秒内没有 → 上传当前聊天
+    const replyWait = Math.min(600, Math.max(1, Math.round(Number(settings.autoSyncReplyWaitSec) || 20))) * 1000;
+    window.__csAutoReplyT = setTimeout(() => { window.__csAutoReplyT = null; pushAuto().catch((e) => console.warn('[chat-sync] 回复完自动上传失败', e)); }, replyWait);
 });
 eventSource.on(event_types.GENERATION_STOPPED, __genEnd);
 // 0.12.44 事件节点: 用户发送消息后上传当前聊天
@@ -7657,6 +8102,10 @@ eventSource.on(event_types.CHAT_DELETED, () => {
     } catch { }
 });
 eventSource.on(event_types.CHAT_CHANGED, () => {
+    // 0.12.101 分叉/切聊天也取消"回复完自动上传"挂起: 用户点「新分支」(mes_create_branch→branchChat→openCharacterChat)
+    //   会复制楼层打开新聊天并 emit CHAT_CHANGED, 但不发 GENERATION_STARTED——若挂起照走, 20秒后 pushAuto 会把
+    //   刚分叉出的旧内容当"回复完"传上去。切聊天=上一轮回复上下文作废, 与重roll同取消。
+    if (window.__csAutoReplyT) { clearTimeout(window.__csAutoReplyT); window.__csAutoReplyT = null; }
     updateCurrentCharDisplay();
     if (!shouldAuto() || !settings.autoSyncOnSwitch) return;
     if (!currentCharName()) return;
@@ -7744,6 +8193,7 @@ const CS_FLOAT_PAGES = [
     { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书同步' },
     { key: 'cln', ico: 'fa-broom', label: '聊天清理器', kw: '聊天记录清理器' },
     { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置同步' },
+    { key: 'asy', ico: 'fa-gear', label: '自动同步/备份', kw: '自动同步/备份' },
 ];
 function csFloatPageEnabled(key) {
     const fp = settings.floatPages;
@@ -7843,6 +8293,105 @@ function __csRunInstant(kind) { // 复用官方按钮完整进度/冲突/提示�
     if (btn) { btn.click(); return; }
     toastr.warning('面板未就绪——请先打开一次插件面板，再用快捷入口');
 }
+// ===== 悬浮球：蓝色能量玻璃球（Canvas 2D；0.12.121） =====
+// 玻璃珠质感（中性材质，深浅主题通用）：淡冷青透光球体 + 内侧极柔暗影 + 左上柔光高光 + 锐利亮点，
+// 内部蓝色粒子自下而上漂浮（云/数据上行意象）。球外全透明。rAF 自停，后台自动暂停。
+function __csStartBubbleBall(cv) {
+    try {
+        const ctx = cv.getContext('2d');
+        if (!ctx) return null;
+        const DPR = 2;
+        const S = Number(cv.getAttribute('width')) || 48;
+        cv.width = S * DPR; cv.height = S * DPR;
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        const CX = S / 2, CY = S / 2;
+        const R = S / 2 - 1;
+        const parts = [];
+        const rand = (a, b) => a + Math.random() * (b - a);
+        let raf = 0;
+        function spawn() {
+            if (parts.length >= 42) return;
+            parts.push({
+                x: CX + rand(-R * 0.45, R * 0.45),
+                y: CY + R * rand(-0.1, 0.6),   // 中下冒出
+                vx: rand(-0.15, 0.15),
+                vy: rand(-1.0, -0.35),
+                life: 0,
+                max: rand(30, 60),
+                r: rand(0.5, 1.5),
+                hue: rand(200, 235),           // 蓝→青
+            });
+        }
+        function tick() {
+            if (!cv.isConnected) return;
+            ctx.clearRect(0, 0, S, S);
+            // 1) 玻璃体（中心透，外缘一圈冷青珠光）
+            const glass = ctx.createRadialGradient(CX, CY, R * 0.2, CX, CY, R);
+            glass.addColorStop(0, 'rgba(210,235,255,0.02)');
+            glass.addColorStop(0.78, 'rgba(210,235,255,0.03)');
+            glass.addColorStop(0.94, 'rgba(220,240,255,0.06)');
+            glass.addColorStop(1, 'rgba(235,245,255,0.11)');
+            ctx.fillStyle = glass;
+            ctx.beginPath(); ctx.arc(CX, CY, R, 0, 6.2832); ctx.fill();
+            // 2) 内部蓝色粒子（裁在球内，如气泡/流光上浮）
+            ctx.save();
+            ctx.beginPath(); ctx.arc(CX, CY, R - 0.5, 0, 6.2832); ctx.clip();
+            const glow = ctx.createRadialGradient(CX, CY + R * 0.5, 1, CX, CY + R * 0.2, R * 1.0);
+            glow.addColorStop(0, 'rgba(90,170,255,0.10)');
+            glow.addColorStop(1, 'rgba(60,130,255,0)');
+            ctx.fillStyle = glow;
+            ctx.fillRect(0, 0, S, S);
+            ctx.globalCompositeOperation = 'lighter';
+            for (let i = parts.length - 1; i >= 0; i--) {
+                const p = parts[i];
+                p.life++;
+                if (p.life >= p.max) { parts.splice(i, 1); continue; }
+                p.x += p.vx + Math.sin(p.life * 0.12 + p.x * 0.15) * 0.05;
+                p.y += p.vy;
+                const k = p.life / p.max;
+                const alpha = Math.sin(Math.PI * Math.min(k * 1.5, 1)) * 0.85;
+                const light = Math.min(75 - k * 40, 72); // 蓝粒子别太亮
+                ctx.fillStyle = 'hsla(' + p.hue + ',90%,' + Math.max(light, 20) + '%,' + alpha + ')';
+                ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(p.r * (1 - k * 0.4), 0.3), 0, 6.2832); ctx.fill();
+                if (k < 0.35 && p.r > 0.9) { // 浅亮核
+                    ctx.fillStyle = 'hsla(205,100%,88%,' + alpha * 0.55 + ')';
+                    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.45, 0, 6.2832); ctx.fill();
+                }
+            }
+            ctx.restore();
+            // 3) 玻璃装饰（玻璃珠质感：无线条，柔光/阴影/高光表现体积）
+            ctx.save();
+            ctx.beginPath(); ctx.arc(CX, CY, R, 0, 6.2832); ctx.clip();
+            // 下半部柔和体积阴影（非环线，仅底部渐变）
+            const sh = ctx.createRadialGradient(CX, CY + R * 0.5, R * 0.2, CX, CY + R * 0.55, R * 1.05);
+            sh.addColorStop(0, 'rgba(10,16,30,0.12)');
+            sh.addColorStop(0.6, 'rgba(10,16,30,0.05)');
+            sh.addColorStop(1, 'rgba(10,16,30,0)');
+            ctx.fillStyle = sh;
+            ctx.beginPath(); ctx.arc(CX, CY, R + 1, 0, 6.2832); ctx.fill();
+            const hl = ctx.createRadialGradient(CX - R * 0.36, CY - R * 0.42, 0.5, CX - R * 0.36, CY - R * 0.42, R * 0.55);
+            hl.addColorStop(0, 'rgba(255,255,255,0.4)');
+            hl.addColorStop(0.5, 'rgba(255,255,255,0.12)');
+            hl.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = hl;
+            ctx.beginPath();
+            ctx.ellipse(CX - R * 0.36, CY - R * 0.42, R * 0.55, R * 0.4, -0.7, 0, 6.2832);
+            ctx.fill();
+            const hot = ctx.createRadialGradient(CX - R * 0.48, CY - R * 0.5, 0, CX - R * 0.48, CY - R * 0.5, R * 0.16);
+            hot.addColorStop(0, 'rgba(255,255,255,0.88)');
+            hot.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = hot;
+            ctx.beginPath(); ctx.arc(CX - R * 0.48, CY - R * 0.5, R * 0.16, 0, 6.2832); ctx.fill();
+            ctx.restore();
+            if (Math.random() < 0.7) spawn();
+            if (Math.random() < 0.25) spawn();
+            raf = requestAnimationFrame(tick);
+        }
+        raf = requestAnimationFrame(tick);
+        return { stop() { if (raf) cancelAnimationFrame(raf); } };
+    } catch (e) { return null; }
+}
+
 function __csUpdateFloat() {
     const id = 'cs_quick_float';
     $('#' + id).remove();
@@ -7854,16 +8403,25 @@ function __csUpdateFloat() {
     if (!showU && !showI && !pagesOn) return;
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem('cs_float_pos') || 'null'); } catch (e) { }
-    const W = 48, HEAD = 48, ITEM = 38;
-    // 0.12.61 恢复记忆位置必须钳制到当前视口(否则大屏/横屏保存的位置在手机小视口直接搬到屏幕外): 拖拽/缩放有钳制, 唯独初始恢复漏了
-    // 0.12.81 默认位置也统一用可视视口(visual viewport)坐标 JS 定位——手机/缩放场景下 CSS right/bottom 相对布局视口可能落在屏幕外(用户实报: 全新手机端无球)
+    let dockSt = null;
+    try { dockSt = JSON.parse(localStorage.getItem('cs_float_dock') || 'null'); } catch (e) { }
+    const W = 40, HEAD = 40, ITEM = 38;   // 0.12.122 尺寸与余温对齐(球改小 48→40)
+    const DOCK_VIS = 16;                 // 吸附时露出的可视宽度（小把手，藏大半）
+    const DOCK_EDGE = Math.round(W * 1.6); // 距边缘多少 px 内松手即吸附
+    // 0.12.123 边缘吸附（同余温手机悬浮球）：默认右缘靠上吸住露把手；拖到边缘吸住；点开拉出再展开，收起若贴边回吸
+    let dockSide = (dockSt && (dockSt.side === 'left' || dockSt.side === 'right')) ? dockSt.side : null;
     let initPos = null;
     const maxX = window.innerWidth - W - 2, maxY = window.innerHeight - HEAD - 2;
-    if (saved && Number.isFinite(Number(saved.x)) && Number.isFinite(Number(saved.y))) {
-        initPos = { x: Math.min(Math.max(Number(saved.x), 2), Math.max(maxX, 2)), y: Math.min(Math.max(Number(saved.y), 2), Math.max(maxY, 2)) };
+    const clampY = (y) => Math.min(Math.max(Number(y) || 2, 2), Math.max(maxY, 2));
+    if (dockSide) {
+        const dockY = (dockSt && Number.isFinite(Number(dockSt.y))) ? Number(dockSt.y) : Math.max(2, Math.round(window.innerHeight * 0.16));
+        initPos = { x: dockSide === 'right' ? window.innerWidth - DOCK_VIS : -(W - DOCK_VIS), y: clampY(dockY) };
+    } else if (saved && Number.isFinite(Number(saved.x)) && Number.isFinite(Number(saved.y))) {
+        initPos = { x: Math.min(Math.max(Number(saved.x), 2), Math.max(maxX, 2)), y: clampY(saved.y) };
     } else {
-        // 默认: 可视区右侧内收 16px + 底部上方 150px(避开浏览器栏/底部栏), 全用 visual 坐标保证必在屏幕内
-        initPos = { x: Math.max(2, maxX), y: Math.max(2, window.innerHeight - 150) };
+        // 新装默认：贴右靠上吸附
+        dockSide = 'right';
+        initPos = { x: window.innerWidth - DOCK_VIS, y: Math.max(2, Math.round(window.innerHeight * 0.16)) };
     }
     const $box = $(`<div id="${id}" style="
         position:fixed;z-index:9600;width:${W}px;overflow:hidden;
@@ -7882,13 +8440,16 @@ function __csUpdateFloat() {
             $box.css({ left: nx + 'px', top: ny + 'px', right: 'auto', bottom: 'auto' });
         }
     } catch (e) { }
-    $box.append(`<div class="csf-head" style="height:${HEAD}px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:grab;font-size:15px;color:var(--SmartThemeBodyColor,#eee);transition:background .2s ease">
-        <span style="font-size:24px;line-height:1;cursor:pointer;filter:drop-shadow(0 1px 3px rgba(0,0,0,.35))">🌐</span>
+    $box.append(`<div class="csf-head" style="position:relative;height:${HEAD}px;display:flex;align-items:center;justify-content:center;gap:2px;cursor:grab;font-size:15px;color:var(--SmartThemeBodyColor,#eee)">
+        <canvas class="csf-bubble" width="40" height="40" style="position:absolute;left:0;top:0;width:40px;height:40px;pointer-events:none;display:block"></canvas>
+        <span class="csf-globe" style="display:inline-flex;align-items:center;justify-content:center;cursor:pointer;filter:drop-shadow(0 1px 3px rgba(0,0,0,.35))"><svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="width:24px;height:24px;display:block;flex:none"><path fill="#3B88C3" d="M18 0C8.059 0 0 8.059 0 18s8.059 18 18 18 18-8.059 18-18S27.941 0 18 0zM2.05 19h3.983c.092 2.506.522 4.871 1.229 7H4.158c-1.207-2.083-1.95-4.459-2.108-7zM19 8V2.081c2.747.436 5.162 2.655 6.799 5.919H19zm7.651 2c.754 2.083 1.219 4.46 1.317 7H19v-7h7.651zM17 2.081V8h-6.799C11.837 4.736 14.253 2.517 17 2.081zM17 10v7H8.032c.098-2.54.563-4.917 1.317-7H17zM6.034 17H2.05c.158-2.54.901-4.917 2.107-7h3.104c-.705 2.129-1.135 4.495-1.227 7zm1.998 2H17v7H9.349c-.754-2.083-1.219-4.459-1.317-7zM17 28v5.919c-2.747-.437-5.163-2.655-6.799-5.919H17zm2 5.919V28h6.8c-1.637 3.264-4.053 5.482-6.8 5.919zM19 26v-7h8.969c-.099 2.541-.563 4.917-1.317 7H19zm10.967-7h3.982c-.157 2.541-.9 4.917-2.107 7h-3.104c.706-2.129 1.136-4.494 1.229-7zm0-2c-.093-2.505-.523-4.871-1.229-7h3.104c1.207 2.083 1.95 4.46 2.107 7h-3.982zm.512-9h-2.503c-.717-1.604-1.606-3.015-2.619-4.199C27.346 4.833 29.089 6.267 30.479 8zM10.643 3.801C9.629 4.985 8.74 6.396 8.023 8H5.521c1.39-1.733 3.133-3.166 5.122-4.199zM5.521 28h2.503c.716 1.604 1.605 3.015 2.619 4.198C8.654 31.166 6.911 29.733 5.521 28zm19.836 4.198c1.014-1.184 1.902-2.594 2.619-4.198h2.503c-1.39 1.733-3.133 3.166-5.122 4.198z"/></svg></span>
     </div>`);
+    const $bubCv = $box.find('.csf-bubble')[0];
+    if (__csStartBubbleBall($bubCv)) $box.find('.csf-globe').hide(); // canvas 可用则隐藏地球 fallback
     // 功能区(直接执行, 彩色, 在最前) + 面板区(打开对应同步页面, 橙) —— 中间分隔线
     const ACTION_DEFS = [
         { key: 'upload', ico: 'fa-cloud-arrow-up', label: '上传当前聊天', color: '#6fce6f', run: () => __csRunInstant('upload') },
-        { key: 'import', ico: 'fa-cloud-arrow-down', label: '导入云端至当前聊天', color: '#6fbcf6', run: () => __csRunInstant('import') },
+        { key: 'import', ico: 'fa-cloud-arrow-down', label: '导入至当前聊天', color: '#6fbcf6', run: () => __csRunInstant('import') },
     ].filter(a => ((a.key === 'upload' && showU) || (a.key === 'import' && showI)));
     const PAGE_DEFS = CS_FLOAT_PAGES.filter((d) => csFloatPageEnabled(d.key));
     const rowCount = ACTION_DEFS.length + PAGE_DEFS.length + (ACTION_DEFS.length ? 1 : 0);
@@ -7913,14 +8474,34 @@ function __csUpdateFloat() {
         expanded = on;
         const h = on ? rowCount * ITEM : 0;
         $items.css({ height: h + 'px', opacity: on ? 1 : 0, transition: 'height .22s ease, opacity .18s ease' });
-        // 0.12.85 折叠=纯漂浮emoji无背景; 展开才加毛玻璃sheet背景
+        // 0.12.125 展开卡不强制毛玻璃：仅当主题本身是毛玻璃风格（SmartThemeBlurTintColor 变量
+        // 存在且非 transparent）才用该色做玻璃底 + blur；普通/浅色主题回退高不透明度实底保证清晰。
+        const themeInfo = (() => {
+            try {
+                const st = getComputedStyle(document.documentElement);
+                const blurVar = st.getPropertyValue('--SmartThemeBlurTintColor').trim();
+                const isGlass = !!blurVar && blurVar !== 'transparent' && blurVar !== 'initial' && blurVar !== 'none';
+                const v = (isGlass ? blurVar : '') || getComputedStyle(document.body).backgroundColor;
+                const m = v.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/);
+                const lum = m ? (Number(m[1]) + Number(m[2]) + Number(m[3])) / 3 : (isGlass ? 40 : 255);
+                return { isGlass, lum, blurVar };
+            } catch (e) { return { isGlass: false, lum: 40, blurVar: '' }; }
+        })();
+        const solidBg = themeInfo.lum > 150
+            ? 'rgba(252,252,254,0.97)'   // 浅色主题 → 近白实底
+            : 'rgba(24,26,30,0.97)';      // 深色主题 → 近黑实底
+        const glassBg = themeInfo.isGlass ? themeInfo.blurVar : solidBg;
+        const useBlur = themeInfo.isGlass ? 'blur(20px) saturate(1.4)' : 'none';
+        const cardShadow = themeInfo.lum > 150
+            ? '0 0 0 1px rgba(0,0,0,0.06), 0 10px 26px rgba(0,0,0,0.12)'
+            : '0 0 0 1px rgba(255,255,255,0.07), 0 12px 30px rgba(0,0,0,0.38)';
         $box.css(on ? {
-            'background': 'var(--SmartThemeBlurTintColor, rgba(30,32,40,.88))',
-            'backdrop-filter': 'blur(14px)',
-            '-webkit-backdrop-filter': 'blur(14px)',
-            'border-color': 'var(--SmartThemeBorderColor, rgba(255,255,255,.16))',
-            'box-shadow': '0 8px 26px rgba(0,0,0,.45)',
-            'border-radius': '20px',
+            'background': 'transparent',
+            'backdrop-filter': 'none',
+            '-webkit-backdrop-filter': 'none',
+            'border-color': 'transparent',
+            'box-shadow': cardShadow,
+            'border-radius': '16px',
         } : {
             'background': 'transparent',
             'backdrop-filter': 'none',
@@ -7928,6 +8509,14 @@ function __csUpdateFloat() {
             'border-color': 'transparent',
             'box-shadow': 'none',
             'border-radius': '50%',
+        });
+        $items.css({
+            height: h + 'px', opacity: on ? 1 : 0,
+            transition: 'height .22s ease, opacity .18s ease',
+            background: on ? glassBg : 'transparent',
+            'backdrop-filter': on ? useBlur : 'none',
+            '-webkit-backdrop-filter': on ? useBlur : 'none',
+            'border-radius': on ? '0 0 15px 15px' : '0',
         });
         // 0.12.61 展开后底部超出可视区域→向上收(手机端常见: 球贴底, 菜单全展开时尾部够不着)
         if (on) {
@@ -7938,8 +8527,70 @@ function __csUpdateFloat() {
                 if (top + bh > window.innerHeight - 2 && maxTop > 2) $box.css('top', Math.max(maxTop, 2) + 'px');
             }
         }
+        // 0.12.123 边缘吸附联动：点开=先拉回屏内完整再展开；收起后贴边→吸回露把手
+        if (on) {
+            pullOutOfDock();
+        } else {
+            trySnap();
+        }
     }
+    // ===== 位置持久化（自由位置 cs_float_pos / 吸附状态 cs_float_dock 分开存） =====
+    const savePos = (x, y) => { try { localStorage.setItem('cs_float_pos', JSON.stringify({ x, y })); } catch (e) { } };
+    const saveDockState = () => {
+        try {
+            if (dockSide) {
+                const p = $box.position();
+                localStorage.setItem('cs_float_dock', JSON.stringify({ side: dockSide, y: p.top }));
+            } else {
+                localStorage.removeItem('cs_float_dock');
+            }
+        } catch (e) { }
+    };
+    const pullOutOfDock = () => {
+        if (!dockSide) return;
+        const side = dockSide;
+        dockSide = null;
+        const vw = window.innerWidth;
+        const fullX = side === 'right' ? vw - W - 4 : 4;
+        $box.css({ left: fullX + 'px', right: 'auto', bottom: 'auto' });
+        saveDockState();
+    };
+    const trySnap = () => {
+        const vw = window.innerWidth;
+        const lx = $box.position().left;
+        let side = null;
+        if (lx <= DOCK_EDGE) side = 'left';
+        else if (lx + W >= vw - DOCK_EDGE) side = 'right';
+        if (side) {
+            dockSide = side;
+            $box.css({ left: (side === 'right' ? vw - DOCK_VIS : -(W - DOCK_VIS)) + 'px', right: 'auto', bottom: 'auto' });
+            saveDockState();
+            return true;
+        }
+        dockSide = null;
+        saveDockState();
+        return false;
+    };
     setExpanded(false);
+    // 桌面悬停把手：滑出整球（不展开），移开且未展开则缩回（触屏无 hover 不受影响）
+    let hoverDockTimer = null;
+    $box.find('.csf-head').on('mouseenter.csf', function () {
+        if (hoverDockTimer) { clearTimeout(hoverDockTimer); hoverDockTimer = null; }
+        if (!dockSide || expanded) return;
+        const side = dockSide;
+        const vw = window.innerWidth;
+        $box.css({ left: (side === 'right' ? vw - W - 4 : 4) + 'px', right: 'auto', bottom: 'auto' });
+    });
+    $box.find('.csf-head').on('mouseleave.csf', function () {
+        if (hoverDockTimer) { clearTimeout(hoverDockTimer); }
+        hoverDockTimer = setTimeout(() => {
+            hoverDockTimer = null;
+            if (!dockSide || expanded || dragging) return;
+            const side = dockSide;
+            const vw = window.innerWidth;
+            $box.css({ left: (side === 'right' ? vw - DOCK_VIS : -(W - DOCK_VIS)) + 'px', right: 'auto', bottom: 'auto' });
+        }, 450);
+    });
     $box.find('.csf-head').on('click.csf', function () { setExpanded(!expanded); });
     $items.find('.csf-item').on('click.csf', function () {
         const act = $(this).attr('data-act');
@@ -7951,7 +8602,7 @@ function __csUpdateFloat() {
         const def = PAGE_DEFS.find(a => a.key === act);
         if (def) __csFloatJumpSection(def.kw);
     });
-    // 拖拽(3px 阈值 + 边界钳制 + 位置记忆); 点击头部不拖拽时=展开
+    // 拖拽(3px 阈值 + 边界钳制 + 位置记忆); 点击头部不拖拽时=展开; 拖到边缘自动吸附
     let dragging = false, dx, dy, startX, startY;
     $box.find('.csf-head').on('mousedown.csf touchstart.csf', function (e) {
         dragging = false;
@@ -7966,25 +8617,44 @@ function __csUpdateFloat() {
     $(document).on('mousemove.csf touchmove.csf', function (e) {
         if (!$box[0] || dx === undefined) return;
         const ev = e.touches ? e.touches[0] : e;
-        if (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3) dragging = true;
-        if (!dragging) return;
+        if (!dragging) {
+            if (Math.abs(ev.clientX - startX) <= 3 && Math.abs(ev.clientY - startY) <= 3) return;
+            dragging = true;
+            if (dockSide) { // 从吸附态拖起：先拉回屏内完整再拖
+                pullOutOfDock();
+                dx = startX - $box.position().left;
+                dy = startY - $box.position().top;
+            }
+        }
         e.preventDefault();
         const maxX = window.innerWidth - $box.outerWidth() - 2;
         const maxY = window.innerHeight - $box.outerHeight() - 2;
         const lx = Math.min(Math.max(ev.clientX - dx, 2), Math.max(maxX, 2));
         const ly = Math.min(Math.max(ev.clientY - dy, 2), Math.max(maxY, 2));
         $box.css({ left: lx + 'px', top: ly + 'px', right: 'auto', bottom: 'auto' });
-        try { localStorage.setItem('cs_float_pos', JSON.stringify({ x: lx, y: ly })); } catch (err) { }
+        savePos(lx, ly);
     });
     $(document).on('mouseup.csf touchend.csf', function () {
         if (!$box[0]) return;
         $box.css({ cursor: '', transition: '' });
         dx = undefined;
+        if (dragging) {
+            dragging = false;
+            if (!expanded) trySnap(); // 真拖过且收起：松手靠边 → 吸住露把手
+        }
     });
     $(window).on('resize.csf', function () {
         const $b = $('#cs_quick_float');
         if (!$b.length || $b[0].style.left === '') return;
-        const maxX = window.innerWidth - $b.outerWidth() - 2;
+        const vw = window.innerWidth;
+        if (dockSide) {
+            const p = $b.position();
+            const ny = Math.min(Math.max(p.top, 2), Math.max(window.innerHeight - HEAD - 2, 2));
+            $b.css({ left: (dockSide === 'right' ? vw - DOCK_VIS : -(W - DOCK_VIS)) + 'px', top: ny + 'px', right: 'auto', bottom: 'auto' });
+            saveDockState();
+            return;
+        }
+        const maxX = vw - $b.outerWidth() - 2;
         const maxY = window.innerHeight - $b.outerHeight() - 2;
         let lx = parseInt($b.css('left'), 10), ly = parseInt($b.css('top'), 10);
         if (isNaN(lx) || isNaN(ly)) return;
@@ -7992,7 +8662,7 @@ function __csUpdateFloat() {
         const ny = Math.min(Math.max(ly, 2), Math.max(maxY, 2));
         if (nx !== lx) $b.css('left', nx);
         if (ny !== ly) $b.css('top', ny);
-        try { localStorage.setItem('cs_float_pos', JSON.stringify({ x: nx, y: ny })); } catch (e) { }
+        savePos(nx, ny);
     });
 }
 window.__csUpdateFloat = __csUpdateFloat;
@@ -8007,7 +8677,7 @@ function __csUpdateMenuEntries() {
         $('#cs_menu_upload_ext').on('click', (e) => { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); __csRunInstant('upload'); });
     }
     if (settings.menuImportChat !== false) {
-        $menu.append(`<a id="cs_menu_import_ext" class="list-group-item" href="#" title="导入云端至当前聊天（增量补楼）"><i class="fa-solid fa-cloud-arrow-down" style="color:#6fbcf6"></i> 导入云端至当前聊天</a>`);
+        $menu.append(`<a id="cs_menu_import_ext" class="list-group-item" href="#" title="导入至当前聊天（增量补楼）"><i class="fa-solid fa-cloud-arrow-down" style="color:#6fbcf6"></i> 导入至当前聊天</a>`);
         $('#cs_menu_import_ext').on('click', (e) => { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); __csRunInstant('import'); });
     }
 }
