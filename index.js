@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.131'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.132'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2526,10 +2526,26 @@ async function pushSelectedThemes(names) {
 async function __officialDeleteThemeFlow(name, restorePrev = true) {
     const $themesEl = window.jQuery ? jQuery('#themes') : null;
     if (!$themesEl) return false;
-    // 0.12.130 删除前记下当前主题——官方 deleteTheme(power-user.js:2389)删完会把当前主题切成 themes[0] 并 applyTheme,
-    //   删"非当前"主题也中招(用户实报"删除瞬间换主题")。删除成功且删的不是当前 → 用官方下拉链路恢复原主题。
-    //   0.12.131 restorePrev=false(批量删除/导入替换): 恢复由调用方统一做, 此处不做(避免批量每删一个恢复一次/导入替换后误恢复)。
-    const prevTheme = restorePrev ? ((power_user && power_user.theme) || String($themesEl.val() || '')) : null;
+    const curTheme = (power_user && power_user.theme) || String($themesEl.val() || '');
+    // 0.12.132 删"非当前"主题 → 完全不变主题不闪: 服务端只删文件(官方 /api/themes/delete 只 unlink, 不碰当前主题),
+    //   切换主题纯粹是官方前端 deleteTheme 删完做 power_user.theme=themes[0]+applyTheme。绕开官方按钮:
+    //   直接调服务端删文件 + 手动移除下拉项, 当前主题的 power_user.theme/themes 定义原样 → 继续用, 不闪不切。
+    //   副作用: ST 内存 themes 数组残留该主题定义(下拉已移除, 不显示不碍事), 刷新页面自动清。
+    if (String(curTheme) !== String(name)) {
+        try {
+            const rr = await fetch('/api/themes/delete', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ name }) });
+            if (!rr.ok && rr.status !== 404) return false;
+            if (rr.status === 404) return false; // 文件本就不在 = 已删
+            $themesEl.find(`option[value="${name}"]`).remove(); // 前端下拉同步移除(内存 themes 残留无害)
+            // 回读验证文件真没了
+            for (let t = 0; t < 5; t++) {
+                await new Promise(r => setTimeout(r, 500));
+                try { const d2 = await fetchSettingsJson(true); if (!Array.isArray(d2.themes) || !d2.themes.some(t2 => t2 && t2.name === name)) return true; } catch { }
+            }
+            return false;
+        } catch { return false; }
+    }
+    // 删的是【当前使用中】的主题 → 走官方按钮流程(官方会切到剩余第一个, 合理——当前主题文件没了不能继续用)
     if (!$themesEl.find(`option[value="${name}"]`).length) {
         $themesEl.append(new Option(name, name)); // 官方「保存主题」不更新界面下拉, 缺就补
     }
@@ -2553,17 +2569,7 @@ async function __officialDeleteThemeFlow(name, restorePrev = true) {
         await new Promise(r => setTimeout(r, 600));
         try { const d2 = await fetchSettingsJson(true); if (!Array.isArray(d2.themes) || !d2.themes.some(t2 => t2 && t2.name === name)) { deleted = true; break; } } catch { }
     }
-    // 0.12.130 恢复原当前主题(删的不是它且它还在): 官方已把当前切成 themes[0], 这里切回
-    // 0.12.131 仅 restorePrev 时恢复(批量由调用方统一恢复)
-    if (deleted && restorePrev && prevTheme && prevTheme !== name) {
-        try {
-            const still = await _themeLocalList();
-            if (still.some(t => t && t.name === prevTheme)) {
-                const el2 = window.jQuery ? jQuery('#themes') : null;
-                if (el2 && el2.find(`option[value="${prevTheme}"]`).length) el2.val(prevTheme).trigger('change'); // 官方change=设theme+applyTheme+save
-            }
-        } catch { }
-    }
+    // 删的是当前主题: 官方已切到 themes[0](合理, 不恢复)。restorePrev 参数在此路径无意义(prevTheme==name)。
     return deleted;
 }
 // ── 官方「导入主题」文件框触发法: #ui_preset_import_file(change) → importTheme(power-user.js:2443) ──
@@ -2593,8 +2599,6 @@ async function __officialImportThemeFlow(jsonText, themeName) {
 async function deleteSelectedThemes(names, mode) {
     mode = mode || 'local';
     if (!Array.isArray(names) || !names.length) return null;
-    let prevTheme = null; // 批量删完恢复用户原主题选中
-    try { const tEl = document.querySelector('#themes'); if (tEl && tEl.value) prevTheme = tEl.value; } catch { }
     const ok = [], fail = []; const failReasons = [];
     for (let i = 0; i < names.length; i++) {
         const name = names[i];
@@ -2605,7 +2609,7 @@ async function deleteSelectedThemes(names, mode) {
                 if (!c) { fail.push(name); failReasons.push({ name, reason: '云端无该主题' }); continue; }
                 await Gitee.deleteFile(p, c.sha, `delete theme ${name}`);
             } else {
-                // 0.12.131 批量删除: 每删一个不恢复(restorePrev=false, 避免反复trigger), 循环后统一恢复一次
+                // 0.12.132 批量删除: 非当前主题走裸删(不切不闪); 仅当批量含"当前主题"时官方切走 → 循环后统一恢复
                 const gone = await __officialDeleteThemeFlow(name, false);
                 if (!gone) { fail.push(name); failReasons.push({ name, reason: '删除未生效（官方按钮流程后文件仍在）' }); continue; }
             }
@@ -2613,16 +2617,8 @@ async function deleteSelectedThemes(names, mode) {
         } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
     }
     if (mode === 'local') {
-        // 0.12.131 批量删完统一恢复原当前主题(若它不在被删列表且仍在): 官方每个 deleteTheme 都把当前切成 themes[0]
-        if (prevTheme && !names.includes(prevTheme)) {
-            try {
-                const still = await _themeLocalList();
-                if (still.some(t => t && t.name === prevTheme)) {
-                    const elB = window.jQuery ? jQuery('#themes') : null;
-                    if (elB && elB.find(`option[value="${prevTheme}"]`).length) elB.val(prevTheme).trigger('change');
-                }
-            } catch { }
-        }
+        // 0.12.132 无需恢复: 非当前主题走服务端裸删(不切当前); 仅当删除列表含当前主题时官方才切走——
+        //   此时当前主题已被删, 无主题可恢复(官方落到 themes[0] 是正确兜底)。故无恢复动作。
         saveSettingsDebounced(); __lastSettingsData = null;
     }
     return { ok: ok.length, fail: fail.length, failReasons };
