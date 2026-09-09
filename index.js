@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.130'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.131'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2523,12 +2523,13 @@ async function pushSelectedThemes(names) {
 // ── 官方「删除主题」按钮触发法: 选中目标 → 点 #ui-preset-delete-button(deleteTheme) → 自动确认 ──
 // deleteTheme(power-user.js:2389) 删 power_user.theme(当前选中) 并完整同步: 内存数组/下拉选项/应用下一主题/保存
 // 返回 true=文件已消失(回读验证)
-async function __officialDeleteThemeFlow(name) {
+async function __officialDeleteThemeFlow(name, restorePrev = true) {
     const $themesEl = window.jQuery ? jQuery('#themes') : null;
     if (!$themesEl) return false;
     // 0.12.130 删除前记下当前主题——官方 deleteTheme(power-user.js:2389)删完会把当前主题切成 themes[0] 并 applyTheme,
     //   删"非当前"主题也中招(用户实报"删除瞬间换主题")。删除成功且删的不是当前 → 用官方下拉链路恢复原主题。
-    const prevTheme = (power_user && power_user.theme) || String($themesEl.val() || '');
+    //   0.12.131 restorePrev=false(批量删除/导入替换): 恢复由调用方统一做, 此处不做(避免批量每删一个恢复一次/导入替换后误恢复)。
+    const prevTheme = restorePrev ? ((power_user && power_user.theme) || String($themesEl.val() || '')) : null;
     if (!$themesEl.find(`option[value="${name}"]`).length) {
         $themesEl.append(new Option(name, name)); // 官方「保存主题」不更新界面下拉, 缺就补
     }
@@ -2553,7 +2554,8 @@ async function __officialDeleteThemeFlow(name) {
         try { const d2 = await fetchSettingsJson(true); if (!Array.isArray(d2.themes) || !d2.themes.some(t2 => t2 && t2.name === name)) { deleted = true; break; } } catch { }
     }
     // 0.12.130 恢复原当前主题(删的不是它且它还在): 官方已把当前切成 themes[0], 这里切回
-    if (deleted && prevTheme && prevTheme !== name) {
+    // 0.12.131 仅 restorePrev 时恢复(批量由调用方统一恢复)
+    if (deleted && restorePrev && prevTheme && prevTheme !== name) {
         try {
             const still = await _themeLocalList();
             if (still.some(t => t && t.name === prevTheme)) {
@@ -2603,13 +2605,26 @@ async function deleteSelectedThemes(names, mode) {
                 if (!c) { fail.push(name); failReasons.push({ name, reason: '云端无该主题' }); continue; }
                 await Gitee.deleteFile(p, c.sha, `delete theme ${name}`);
             } else {
-                const gone = await __officialDeleteThemeFlow(name);
+                // 0.12.131 批量删除: 每删一个不恢复(restorePrev=false, 避免反复trigger), 循环后统一恢复一次
+                const gone = await __officialDeleteThemeFlow(name, false);
                 if (!gone) { fail.push(name); failReasons.push({ name, reason: '删除未生效（官方按钮流程后文件仍在）' }); continue; }
             }
             ok.push(name);
         } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
     }
-    if (mode === 'local') { saveSettingsDebounced(); __lastSettingsData = null; }
+    if (mode === 'local') {
+        // 0.12.131 批量删完统一恢复原当前主题(若它不在被删列表且仍在): 官方每个 deleteTheme 都把当前切成 themes[0]
+        if (prevTheme && !names.includes(prevTheme)) {
+            try {
+                const still = await _themeLocalList();
+                if (still.some(t => t && t.name === prevTheme)) {
+                    const elB = window.jQuery ? jQuery('#themes') : null;
+                    if (elB && elB.find(`option[value="${prevTheme}"]`).length) elB.val(prevTheme).trigger('change');
+                }
+            } catch { }
+        }
+        saveSettingsDebounced(); __lastSettingsData = null;
+    }
     return { ok: ok.length, fail: fail.length, failReasons };
 }
 async function importSelectedThemes(names) {
@@ -2646,7 +2661,8 @@ async function importSelectedThemes(names) {
                 }
                 // 官方入口导入(file-input 触发 importTheme): 内存/下拉/文件全官方同步
                 if (needDeleteFirst) {
-                    const gone = await __officialDeleteThemeFlow(name);
+                    // 0.12.131 替换前删旧主题不恢复(restorePrev=false): 随后立即导入并应用新主题, 恢复会干扰
+                    const gone = await __officialDeleteThemeFlow(name, false);
                     if (!gone) console.warn('[chat-sync] 替换前删除旧主题未确认, 继续尝试导入');
                 }
                 const imported = await __officialImportThemeFlow(JSON.stringify(theme), importName);
