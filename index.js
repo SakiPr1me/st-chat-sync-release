@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.134'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.135'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7776,7 +7776,8 @@ ext: {
                 dragMoved = true;
             }
             const el = document.elementFromPoint(e.clientX, e.clientY);
-            const label = el && el.closest('.cs-cln-row');
+            // 0.12.135 修: 世界书行是 label.cs-role-item, 误写成 .cs-cln-row(清理器聊天行) → 永远匹配不到 → 不能拖动划选
+            const label = el && el.closest('label.cs-role-item');
             if (label) {
                 const cb = label.querySelector('input[type="checkbox"]');
                 if (cb && !toggled.has(cb)) {
