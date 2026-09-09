@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.133'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.134'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1135,7 +1135,7 @@ async function pushAllCharacters(skipConfirm = false, presetDecision = null) {
     for (let i = 0; i < total; i++) {
         const name = chars[i].name;
         setStatus(`正在同步全部角色：${i + 1}/${total}（${name}）…`);
-        showBusy(i + 1, total, `上传全部角色`);
+        showBusy(i + 1, total, `正在上传全部角色「${name}」`); // 0.12.134 进度卡片名带上当前角色
         try {
             const r = await pushCurrentCharacter(name, { presetDecision });
             if (r === false) { skipped++; skippedNames.push(name); } // 内部抢锁失败=被跳过, 如实计
@@ -1164,7 +1164,7 @@ async function importAllCharacters() {
     for (let i = 0; i < total; i++) {
         const name = names[i];
         setStatus(`正在导入云端角色：${i + 1}/${total}（${name}）…`);
-        showBusy(i + 1, total, `导入全部云端角色`);
+        showBusy(i + 1, total, `正在导入全部云端角色「${name}」`); // 0.12.134 进度卡片名带上当前角色
         try { await importCharFromCloud(name, { noJump: true }); ok++; }
         catch (e) { fail++; failedNames.push(name); console.warn('[chat-sync] 导入失败', name, e); setStatus(`角色「${name}」导入失败`); }
     }
@@ -1958,9 +1958,12 @@ async function deleteSelectedWorldbooks(names, mode) {
     mode = mode || 'local';
     if (!Array.isArray(names) || !names.length) return null;
     const ok = [], fail = []; const failReasons = [];
+    // 0.12.134 逐条进度(删多个时用户看到当前删哪个/第几个); 末尾 hideBusy 统一结束
+    try { showBusy(0, names.length, mode === 'cloud' ? '正在删除云端世界书' : '正在删除本地世界书'); } catch { }
     try {
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
+            try { showBusy(i + 1, names.length, `正在删除世界书「${name}」`); } catch { }
             try {
                 if (mode === 'cloud') {
                     const p = `worldbooks/${name}.json`;
@@ -1978,8 +1981,9 @@ async function deleteSelectedWorldbooks(names, mode) {
             } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
         }
         saveSettingsDebounced();
+        hideBusy(); // 0.12.134 结束进度
         return { ok: ok.length, fail: fail.length, failReasons };
-    } finally { /* busy 由调用方管理 */ }
+    } finally { hideBusy(); }
 }
 
 // 双端删除全局世界书（0.12.99）：对勾选名字 本地 deleteWorldInfo + 云端 worldbooks/<名>.json 一并删。
@@ -2998,7 +3002,11 @@ async function uploadUserPersonasToCloud(files) {
     const ok = [], fail = []; const failReasons = [];
     const pu = power_user || {};
     const dir = 'config-sync/user/personas';
-    for (const file of files) {
+    // 0.12.134 逐条进度: 每个头像=读原图+传图+传meta 多次请求, 让用户知道传第几个
+    try { showBusy(0, files.length, '正在上传 User 人设与头像'); } catch { }
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try { showBusy(i + 1, files.length, `正在上传 User 人设/头像「${file}」`); } catch { }
         try {
             const r = await fetch('/User Avatars/' + encodeURIComponent(file));
             if (!r.ok) { fail.push(file); failReasons.push({ name: file, reason: '读取原图 HTTP ' + r.status }); continue; }
@@ -3018,13 +3026,18 @@ async function uploadUserPersonasToCloud(files) {
             ok.push(file);
         } catch (e) { fail.push(file); failReasons.push({ name: file, reason: (e && e.message) || String(e) }); }
     }
+    hideBusy(); // 0.12.134 结束进度
     return { ok: ok.length, fail: fail.length, failReasons };
 }
 // 从云端下载选中人设到本地: 图片经官方 /api/avatars/upload(overwrite 保文件名), 注册人设名/描述
 async function downloadUserPersonasFromCloud(files) {
     const ok = [], fail = []; const failReasons = [];
     const dir = 'config-sync/user/personas';
-    for (const file of files) {
+    // 0.12.134 逐条进度: 每个人设=下载图+下载meta+写本地多次请求
+    try { showBusy(0, files.length, '正在下载 User 人设'); } catch { }
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try { showBusy(i + 1, files.length, `正在下载 User 人设「${file}」`); } catch { }
         try {
             const img = await Gitee.getBase64(`${dir}/${file}`);
             if (!img || !img.b64) { fail.push(file); failReasons.push({ name: file, reason: '云端无该人设' }); continue; }
@@ -3042,12 +3055,16 @@ async function downloadUserPersonasFromCloud(files) {
         } catch (e) { fail.push(file); failReasons.push({ name: file, reason: (e && e.message) || String(e) }); }
     }
     saveSettingsDebounced();
+    hideBusy(); // 0.12.134 结束进度
     return { ok: ok.length, fail: fail.length, failReasons };
 }
 // 删除选中人设(官方 deletePersona 全套动作复刻): 返回 {ok, fail, failReasons}
 async function deleteSelectedUserPersonas(files) {
     const ok = [], fail = []; const failReasons = [];
-    for (const file of files) {
+    try { showBusy(0, files.length, '正在删除 User 人设'); } catch { }
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try { showBusy(i + 1, files.length, `正在删除 User 人设「${file}」`); } catch { }
         try {
             const req = await fetch('/api/avatars/delete', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar: file }) });
             if (!req.ok) { fail.push(file); failReasons.push({ name: file, reason: '头像删除 HTTP ' + req.status }); continue; }
@@ -3063,6 +3080,7 @@ async function deleteSelectedUserPersonas(files) {
             ok.push(file);
         } catch (e) { fail.push(file); failReasons.push({ name: file, reason: (e && e.message) || String(e) }); }
     }
+    hideBusy(); // 0.12.134 结束进度
     return { ok: ok.length, fail: fail.length, failReasons };
 }
 
