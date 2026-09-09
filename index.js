@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.136'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.137'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4800,7 +4800,7 @@ window.__csManualCheck = async function (btn) {
                     <details class="cs-fold" ${settings.floatEnabled === false ? 'open' : ''}>
                     <summary><i class="fa-solid fa-wand-magic-sparkles cs-ico" aria-hidden="true"></i>快捷入口</summary>
                     <div class="cs-body">
-                        <label style="display:flex!important;align-items:center;gap:6px;font-size:.92em;margin-bottom:4px;cursor:pointer"><input type="checkbox" id="cs_float_enabled" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.floatEnabled === false ? '' : 'checked'}><span>开启悬浮球🌐（每个页面都在，点🌐展开/收起，可拖拽；入口勾选见下）</span></label>
+                        <label style="display:flex!important;align-items:center;gap:6px;font-size:.92em;margin-bottom:4px;cursor:pointer"><input type="checkbox" id="cs_float_enabled" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.floatEnabled === false ? '' : 'checked'}><span>开启悬浮球🌐</span></label>
                         <div class="cs-sep"></div>
                         <div style="font-size:.85em;font-weight:700;margin:4px 0 2px;opacity:.9">功能型（点图标直接执行）</div>
                         <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_upload" style="margin:0" ${settings.floatUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">悬浮球「上传当前聊天」</span></label>
@@ -4947,14 +4947,17 @@ window.__csManualCheck = async function (btn) {
                     <div class="cs-body">
                         <p id="${id}_cfg_status" class="cs-hint" style="margin-top:4px"></p>
                         <div class="cs-label">分项部分同步（内容一致自动跳过；不同时可选 替换/另存副本）：</div>
-                        <div class="cs-row" style="align-items:center;margin-top:4px;flex-wrap:wrap">
-                            <button id="${id}_cfg_tab_conn" type="button" class="cs-btn cs-tab" data-cfgtab="conn">预设</button>
-                            <button id="${id}_cfg_tab_theme" type="button" class="cs-btn cs-tab" data-cfgtab="theme">主题</button>
-                            <button id="${id}_cfg_tab_regex" type="button" class="cs-btn cs-tab" data-cfgtab="regex">全局正则</button>
-                            <button id="${id}_cfg_tab_user" type="button" class="cs-btn cs-tab" data-cfgtab="user">User</button>
-                            <button id="${id}_cfg_tab_ext" type="button" class="cs-btn cs-tab" data-cfgtab="ext">拓展</button>
-                            <button id="${id}_cfg_tab_thp" type="button" class="cs-btn cs-tab" data-cfgtab="thp">酒馆助手</button>
-                            <button id="${id}_cfg_tab_api" type="button" class="cs-btn cs-tab" data-cfgtab="api" title="API连接配置(新建API配置保存的那份: 端点/模型/密钥引用等)">Api</button>
+                        <!-- 0.12.137 7个分项 tab 拆 4+3 两行, 各按钮等宽铺满整齐 -->
+                        <div class="cs-row" style="align-items:center;margin-top:4px">
+                            <button id="${id}_cfg_tab_conn" type="button" class="cs-btn cs-tab cs-eq" data-cfgtab="conn">预设</button>
+                            <button id="${id}_cfg_tab_user" type="button" class="cs-btn cs-tab cs-eq" data-cfgtab="user">User人设</button>
+                            <button id="${id}_cfg_tab_regex" type="button" class="cs-btn cs-tab cs-eq" data-cfgtab="regex">全局正则</button>
+                            <button id="${id}_cfg_tab_theme" type="button" class="cs-btn cs-tab cs-eq" data-cfgtab="theme">主题</button>
+                        </div>
+                        <div class="cs-row" style="align-items:center;margin-top:4px">
+                            <button id="${id}_cfg_tab_ext" type="button" class="cs-btn cs-tab cs-eq" data-cfgtab="ext">拓展插件</button>
+                            <button id="${id}_cfg_tab_thp" type="button" class="cs-btn cs-tab cs-eq" data-cfgtab="thp">酒馆助手</button>
+                            <button id="${id}_cfg_tab_api" type="button" class="cs-btn cs-tab cs-eq" data-cfgtab="api" title="API连接配置(新建API配置保存的那份: 端点/模型/密钥引用等)">Api</button>
                         </div>
                         <div class="cs-row" style="align-items:center;margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_cfg_local" type="button" class="cs-btn cs-btn-local"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 本地配置</button>
@@ -5605,6 +5608,9 @@ function wirePanelEvents() {
     async function __fillCleanerChars() {
         const sel = $('cs_cln_char'); if (!sel) return;
         const cur = sel.value;
+        // 0.12.137 修: 下拉曾只有1个角色——TT/面板渲染早期 getContext().characters 可能未全量(只含当前)。
+        //   先 getCharacters() 强制重拉官方全量角色, 确保所有角色进下拉。
+        try { await getCharacters(); } catch { /* 忽略: 失败则用现有数组 */ }
         const localNames = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group')).map((x) => x.name);
         // 0.12.118 云端角色只列"确实有聊天"的: 用户用「删除选中文件」删本地后, 云端 sync/名/ 目录仍在(设计如此, 清理器用于清云端残留),
         //   但若该目录只剩角色卡没聊天, 下拉出现空壳 → 过滤掉。listEntries sync/名/chats 探测有无聊天文件(并发4)。
@@ -7010,7 +7016,7 @@ ext: {
         const list = $('cs_cfg_list'); const tgt = $('cs_cfg_target'); const st2 = $('cs_cfg2_status');
         if (!list) return;
         // 切分项时提示"正在切换至XX分页"(渲染完成后被列表内容覆盖)
-        const TAB_NAMES = { conn: '预设', theme: '主题', regex: '全局正则', user: 'User人设', ext: '拓展', thp: '酒馆助手', api: 'Api配置' };
+        const TAB_NAMES = { conn: '预设', theme: '主题', regex: '全局正则', user: 'User人设', ext: '拓展插件', thp: '酒馆助手', api: 'Api配置' };
         if (st2) { st2.textContent = '正在切换至「' + (TAB_NAMES[window.__cfgTab] || window.__cfgTab) + '」分页…'; st2.style.color = ''; }
         const __csTabSwitchedAt = Date.now();
         const tab = window.__cfgTab;
