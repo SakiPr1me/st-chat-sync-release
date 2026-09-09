@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.132'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.133'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1143,7 +1143,7 @@ async function pushAllCharacters(skipConfirm = false, presetDecision = null) {
         } catch (e) { fail++; failedNames.push(name); console.warn('[chat-sync] 角色同步失败', name, e); setStatus(`角色「${name}」同步失败`); }
     }
     setStatus('');
-    toastr.success(`全部角色同步完成：成功 ${ok}，失败 ${fail}${skipped ? `，跳过 ${skipped}` : ''} / 共 ${total}${failedNames.length ? `（失败：${csShortList(failedNames)}）` : ''}${skippedNames.length ? `（跳过：${csShortList(skippedNames)}）` : ''}`);
+    toastr.success(`✅ 全部角色同步完成：成功 ${ok}，失败 ${fail}${skipped ? `，跳过 ${skipped}` : ''} / 共 ${total}${failedNames.length ? `（失败：${csShortList(failedNames)}）` : ''}${skippedNames.length ? `（跳过：${csShortList(skippedNames)}）` : ''}`);
     } finally { window.__csAllPushRunning = false; }
 }
 
@@ -1170,7 +1170,7 @@ async function importAllCharacters() {
     }
     setStatus('');
     hideBusy();
-    toastr.success(`云端导入完成：成功 ${ok}，失败 ${fail} / 共 ${total}${failedNames.length ? `（失败：${failedNames.join('、')}）` : ''}`);
+    toastr.success(`✅ 云端导入完成：成功 ${ok}，失败 ${fail} / 共 ${total}${failedNames.length ? `（失败：${failedNames.join('、')}）` : ''}`);
     } finally { __csReleaseBusy(); }
 }
 
@@ -1519,7 +1519,7 @@ async function pullCharacterChats(charName) {
         }
     }
     saveSettingsDebounced();
-    toastr.success(`已拉取 ${charName} 的聊天：新增/更新 ${importedCount} 个${skipped ? `，已最新跳过 ${skipped} 个` : ''} ✅`);
+    toastr.success(`✅ 已拉取 ${charName} 的聊天：新增/更新 ${importedCount} 个${skipped ? `，已最新跳过 ${skipped} 个` : ''}`);
 
     // 把最新成功导入的聊天直接加载进当前聊天窗口楼层（替换当前显示）
     // 注意：仅普通酒馆(ST)走 reloadCurrentChat——TT 上 chat 文件是旧 shim 可能没真正落盘到 Rust 认的目录，
@@ -1595,7 +1595,7 @@ async function pushCurrentChat() {
         saveSettingsDebounced();
     hideBusy(); // 0.12.64: 内部成功路径也清浮层(自动上传 pushAuto 不走按钮 handler)
     setStatus('');
-    toastr.success(`已同步当前聊天「${localName}」✅`);
+    toastr.success(`✅ 已同步当前聊天「${localName}」`);
     } finally { __csReleaseBusy(); }
 }
 
@@ -1630,7 +1630,7 @@ async function pullCurrentChat() {
         const merged = await pullMergeCloudSuperset(avatar, localName, cloud, p);
         hideBusy(); setStatus('');
         if (merged && merged.blocked) { toastr.warning('检测到可能正在生成，已暂停自动补楼（等生成结束再导入一次即可）'); return; }
-        if (merged) { const nowN = __csFloorCount(ctx().chat); const localN = merged.localCount ?? 0; const addedN = Math.max(0, nowN - localN); toastr.success(`已从云端补回当前聊天 ${addedN} 楼 ✅（补回前本地 ${localN} 楼 → 当前 ${nowN} 楼）`); return; }
+        if (merged) { const nowN = __csFloorCount(ctx().chat); const localN = merged.localCount ?? 0; const addedN = Math.max(0, nowN - localN); toastr.success(`✅ 已从云端补回当前聊天 ${addedN} 楼（补回前本地 ${localN} 楼 → 当前 ${nowN} 楼）`); return; }
         toastr.info('当前聊天已是最新');
         return;
     }
@@ -1667,7 +1667,7 @@ async function pullCurrentChat() {
                 await loadImportedChat(result[0], ctx().characterId);
             }
         } catch (e) { console.warn('[chat-sync] 导入后加载楼层失败', e); }
-        toastr.success('已从云端拉取当前聊天 ✅（已加载到当前楼层）');
+        toastr.success('✅ 已从云端拉取当前聊天（已加载到当前楼层）');
     } else {
         hideBusy(); setStatus('');
         toastr.error('当前聊天导入失败');
@@ -1989,6 +1989,8 @@ async function deleteBothSidesWorldbooks(names) {
     const ok = [], skipLocal = [], skipCloud = [], fail = [];
     for (let i = 0; i < names.length; i++) {
         const name = names[i];
+        // 0.12.133 逐条进度: 让用户知道正在删哪个、删到第几个
+        try { showBusy(i + 1, names.length, `正在删除双端世界书「${name}」`); } catch { }
         try {
             // ── 本地 ──
             const existed = Array.isArray(world_names) && world_names.includes(name);
@@ -2010,6 +2012,7 @@ async function deleteBothSidesWorldbooks(names) {
         } catch (e) { fail.push({ name, reason: (e && e.message) || String(e) }); }
     }
     saveSettingsDebounced();
+    hideBusy();
     return { ok: ok.length, skipLocal, skipCloud, fail };
 }
 
@@ -2111,6 +2114,8 @@ async function getCleanerPreviewFull(charName, fileName) {
 // 删除选中聊天：本地 /api/chats/delete + 云端 deleteFile + 更新 chat-list.json + 清 syncMap/lastCloudSha 记忆
 async function deleteChatsBothSides(charName, fileNames) {
     if (!Array.isArray(fileNames) || !fileNames.length) return null;
+    // 0.12.133 逐条进度(每条涉及本地+云端多次请求, 可能耗时): 让用户知道删到第几条
+    try { showBusy(0, fileNames.length, `正在删除「${charName}」的聊天`); } catch { }
     const avatar = getAvatarFor(charName);
     const base = `sync/${charName}/chats/`;
     const ok = [], fail = []; const failReasons = [];
@@ -2122,6 +2127,7 @@ async function deleteChatsBothSides(charName, fileNames) {
     if (lc) { try { listObj = JSON.parse(lc.content || '{}'); } catch { listObj = null; } }
     const cloudEntries = await Gitee.listEntries(base).catch(() => []);
     for (const fn of fileNames) {
+        try { showBusy(fileNames.indexOf(fn) + 1, fileNames.length, `正在删除聊天「${fn}」(本地+云端)`); } catch { }
         try {
             const stem = String(fn).replace(/\.jsonl$/i, '');
             // 仅云端行不删本地(避免 File not found 噪音); 本地/双端才走本地删除
@@ -2196,6 +2202,7 @@ async function deleteChatsBothSides(charName, fileNames) {
         } catch (e) { console.warn('[chat-sync] 清单重传失败', e); }
     }
     saveSettingsDebounced();
+    hideBusy(); // 0.12.133 结束进度
     return { ok: ok.length, fail: fail.length, okNames: ok, failReasons };
 }
 // ============ 酒馆配置 分项同步（2026-08-21,按用户纯前端+多选选择单） ============
@@ -2827,6 +2834,8 @@ async function backupUserToCloud() {
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
     try {
         const o = await _parseSettingsObj();
+        // 0.12.133 开头提示: 让用户知道正在备份 User 资料(资料上传→头像列表→头像照片逐张)
+        try { showBusy(0, 0, '正在备份 User 资料与头像…'); } catch { }
         // ⚠️ 人物资料真实位置(2026-08-22 用户真机踩坑修正): power_user.personas(头像文件→人设名 对照表) +
         //    power_user.persona_descriptions(人设描述) —— 顶层 personas 不存在, 旧版备份成空导致恢复出 Unnamed Persona
         const userData = {
@@ -4206,7 +4215,7 @@ async function resolveCloudChatImport(charName, cardAvatar, cloudPath, cloud, lo
                 }),
             });
             if (r.ok) {
-                toastr.success(`聊天「${knownLocal}」云端有新楼层，已自动补进本地（+${decision.added} 层）`);
+                toastr.success(`✅ 聊天「${knownLocal}」云端有新楼层，已自动补进本地（+${decision.added} 层）`);
                 return { action: 'fastforward', added: decision.added, count: 1 };
             }
             console.warn('[chat-sync] 云端合并写回本地失败，回退为跳过', knownLocal, r.status);
@@ -4347,7 +4356,7 @@ async function deleteLocalCharacter(charName, skipConfirm = false, silent = fals
         const success = await deleteCharacter(avatar, { deleteChats: true });
         if (suppressDelete && restoreDelete) Pdel.show.confirm = restoreDelete;
         if (success) {
-            if (!silent) toastr.success(`已删除本地角色「${charName}」`);
+            if (!silent) toastr.success(`✅ 已删除本地角色「${charName}」`);
             // 0.12.98 角色级身份映射一并清(与云端删除侧同口径), 防同名角色重导入串到已删云路径
             if (settings.syncMap && settings.syncMap[charName]) { delete settings.syncMap[charName]; saveSettingsDebounced(); }
             // 官方函数已 removeCharacterFromUI 刷新列表；再补一次插件自己的列表刷新
@@ -4597,7 +4606,11 @@ window.__csCheckUpdate = async function (opts) {
             if (opts && opts.auto && settings.autoUpdate) {
                 toastr.info('🌐 检测到新版本 v' + remoteVer + '，自动更新中…', null, { timeOut: 4000 });
                 __csDoSelfUpdate(null, remoteVer);
-            } else __csRenderUpdateBtn(remoteVer);
+            } else {
+                __csRenderUpdateBtn(remoteVer);
+                // 0.12.133 启动时发现新版但没开自动更新 → 提示一次(用户不在面板也能知道), 避免静默
+                if (opts && opts.notify) toastr.info('ℹ️ 发现新版本 v' + remoteVer + '——插件设置里点「⬆ 可更新」即可升级', null, { timeOut: 6000 });
+            }
         }
     } catch { }
 };
@@ -4699,6 +4712,8 @@ window.__csManualCheck = async function (btn) {
         title2 = String(e).slice(0, 80) + '\n（再点一次按钮＝直接执行官方更新，无需令牌/检测）';
         cls = 'fail';
         btn.dataset.forceUpdate = '1';
+        // 0.12.133 失败也弹 toast(带原因), 不只按钮四态(3秒后还原用户可能没看到)
+        try { toastr.error(`❌ 检测更新失败：${String((e && e.message) || e).slice(0, 120)}（可再点一次直接尝试更新）`, null, { timeOut: 6000 }); } catch { }
     }
     btn.textContent = txt;
     btn.title = title2;
@@ -5183,13 +5198,15 @@ function wirePanelEvents() {
     $('cs_roles_clr')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_role_sel"]').forEach((c) => { c.checked = false; }));
     $('cs_push_sel')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
-        try { const r = await pushSelectedCharacters(sel); if (r && typeof r.ok === 'number') toastr.info(`上传角色完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}（${csShortList((r.failReasons || []).map(x => x.name + ':' + x.reason).slice(0, 3))}）` : ''}`); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
-        catch (e) { toastr.error('上传选中角色失败：' + e.message); }
+        // 0.12.133 去重: 结果汇总由 pushSelectedCharacters 内部统一给(函数可能被多处调用), 按钮层不再重复弹
+        try { await pushSelectedCharacters(sel); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
+        catch (e) { toastr.error('❌ 上传选中角色失败：' + (e.message || e)); }
     });
     $('cs_pull_sel')?.addEventListener('click', async () => {
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
-        try { const r = await importSelectedCharacters(sel); if (r && typeof r.ok === 'number') toastr.info(`导入角色完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}（${csShortList((r.failReasons || []).map(x => x.name + ':' + x.reason).slice(0, 3))}）` : ''}`); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
-        catch (e) { toastr.error('导入选中角色失败：' + e.message); }
+        // 0.12.133 去重同上(importSelectedCharacters 内部统一汇总)
+        try { await importSelectedCharacters(sel); try { window.__renderRoleMultiList(window.__csListMode); } catch { } }
+        catch (e) { toastr.error('❌ 导入选中角色失败：' + (e.message || e)); }
     });
     // 拖拽划选：按住左键拖动，经过的 checkbox 切换（首次经过=勾选；再次经过同一项=取消）。同一项一次拖动只toggle一次。
     // ⚠️ 绑定幂等: TT 手机端切换界面会【销毁重建】扩展面板 DOM, 重建出的按钮无事件。
@@ -7488,7 +7505,7 @@ ext: {
         }
         hideBusy();
         if (st2) st2.textContent = `更新完成：成功 ${okN} / 共 ${sel.length}${failN ? `，失败 ${failN}` : ''}——刷新页面后生效`;
-        toastr.success(`⬆ 拓展更新完成(成功 ${okN}/${sel.length})——刷新一次页面全部生效`);
+        toastr.success(`✅ 拓展更新完成(成功 ${okN}/${sel.length})——刷新一次页面全部生效`);
     });
     $('cs_cfg_del')?.addEventListener('click', async () => {
         const st2 = $('cs_cfg2_status');
@@ -8293,14 +8310,21 @@ async function autoConnectIfConfigured() {
         const url = `${base}/user${isGh ? '' : (isGl ? '?private_token=' : '?access_token=') + encodeURIComponent(settings.token)}`;
         const headers = isGl ? { 'PRIVATE-TOKEN': settings.token } : (isGh ? { 'Authorization': 'Bearer ' + settings.token, 'Accept': 'application/vnd.github+json' } : { 'Authorization': 'token ' + settings.token });
         const r = await fetch(url, { headers, cache: 'no-store' });
-        if (!r.ok) return;
+        if (!r.ok) {
+            // 0.12.133 启动自动连接失败也给提示(用户有配置却连不上时不该无声)——轻量 warning 非 error
+            toastr.warning(`⚠️ 启动自动连接失败（HTTP ${r.status}）——点插件设置里的「连接」可重试`, null, { timeOut: 6000 });
+            return;
+        }
         const u = await r.json();
         settings.lastConnectAt = Date.now();
         saveSettingsDebounced();
         __refreshCurRepoLine();
         const st = document.getElementById('cs_testresult');
         if (st) st.textContent = `✅ 已自动连接：${u.login || u.username}`;
-    } catch { /* 静默：不打扰，用户可点「连接」 */ }
+    } catch (e) {
+        // 0.12.133 同上: 网络异常也给一条轻提示
+        try { toastr.warning(`⚠️ 启动自动连接失败：${String((e && e.message) || e).slice(0, 80)}（点「连接」可重试）`, null, { timeOut: 6000 }); } catch { }
+    }
 }
 
 // 面板自愈: TT 手机端切界面会销毁重建 #extensions_settings 的 DOM(按钮事件全丢)——
@@ -8838,7 +8862,7 @@ jQuery(() => {
     __csUpdateFloat();
     __csUpdateMenuEntries();
     // 检测远程新版本(面板稳定后); 勾选了「自动更新」则启动即自动升级
-    setTimeout(() => { try { if (settings.autoUpdate) { window.__csCheckUpdate && window.__csCheckUpdate({ auto: true }); } else { window.__csCheckUpdate && window.__csCheckUpdate(); } } catch { } }, 500);
+    setTimeout(() => { try { if (settings.autoUpdate) { window.__csCheckUpdate && window.__csCheckUpdate({ auto: true }); } else { window.__csCheckUpdate && window.__csCheckUpdate({ notify: true }); } } catch { } }, 500);
     // 0.12.5 自愈刷新: 磁盘上的插件版本 > 本页正在运行的旧代码 → 说明此前一次更新的自动刷新没完成(手机WebView/协调函数失效/脚本缓存)
     // → 本次加载直接自刷新拉齐。sessionStorage 防抖: 磁盘版本与运行版本持续不一致(半写/开发版)时不反复刷
     setTimeout(() => {
