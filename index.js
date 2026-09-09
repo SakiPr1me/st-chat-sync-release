@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.128'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.129'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -821,10 +821,18 @@ async function __csCardJsonFromPng(pngBytes) {
 // 0.12.128 角色卡语义复核: 本地卡(u8) vs 云端卡, 都转 JSON、剥运行时噪音后比实质。
 //   localU8=本地 export PNG 字节; cloudParts=分块[{rest,sha}] 或 charNameForSingle=单文件角色名(二选一)。
 //   云端字节仅在需要复核时下载一次。返回 true=实质一致(假本地新); false=解析失败或实质不同(由调用方判 local)。
-async function __csCardRecheck(localU8, cloudParts, charNameForSingle) {
+// 0.12.129: cloudSig=云端卡内容签名(分块=各块sha join / 单文件=cardSha)——复核结果缓存键。
+//   角色卡因ST保存噪音长期字节不一致, 无缓存则每次刷新都重下载云端卡(用户质疑消耗大); 云端sha不变→30分钟内复用判定零下载。
+async function __csCardRecheck(localU8, cloudParts, charNameForSingle, cloudSig) {
     try {
         const localJ = await __csCardJsonFromPng(localU8);
         if (!localJ) return false;
+        const localSem = jsonStableString(__csStripCardRuntime(localJ)); // 本地剥噪语义指纹(chat/tavern_helper噪音被剥→稳定)
+        // 缓存命中: 云端sha未变 且 本地剥噪指纹未变 → 复用上次结论零下载。本地真改内容→指纹变→miss→重新复核(不漏报)。
+        if (cloudSig) {
+            const __ck = __recheckCache['card:' + (charNameForSingle || '') + ':' + cloudSig];
+            if (__ck && Date.now() - __ck.ts < 1800000 && __ck.sha === cloudSig && __ck.localSem === localSem) return !!__ck.val;
+        }
         let cloudU8b = null;
         try {
             if (cloudParts && cloudParts.length) {
@@ -844,7 +852,9 @@ async function __csCardRecheck(localU8, cloudParts, charNameForSingle) {
         if (!cloudU8b) return false;
         const cloudJ = await __csCardJsonFromPng(cloudU8b);
         if (!cloudJ) return false;
-        return jsonStableString(__csStripCardRuntime(localJ)) === jsonStableString(__csStripCardRuntime(cloudJ));
+        const same = localSem === jsonStableString(__csStripCardRuntime(cloudJ));
+        if (cloudSig) __recheckCache['card:' + (charNameForSingle || '') + ':' + cloudSig] = { val: same ? 1 : 0, ts: Date.now(), sha: cloudSig, localSem };
+        return same;
     } catch { return false; }
 }
 async function exportCharacter(charName, worldName) {
@@ -5069,14 +5079,17 @@ function wirePanelEvents() {
                                         if (bytesSame) { det.card = 'same'; }
                                         else {
                                             // 0.12.128 字节不同 → 复核: 拼云端分块 PNG, 与本地卡剥"运行时噪音"后比语义(假本地新: 本地扩展写卡)
-                                            det.card = (await __csCardRecheck(u8, cparts)) ? 'same' : 'local';
+                                            // 0.12.129 复核结果入 __recheckCache(键=云端各块sha组合, 30min): 此类卡因ST保存噪音长期不一致,
+                                            //   无缓存则每次刷新都重下载云端卡(消耗大)。云端sha不变→直接复用判定, 零下载。
+                                            const csig = cparts.map((p2) => p2.sha).join(',');
+                                            det.card = (await __csCardRecheck(u8, cparts, null, csig)) ? 'same' : 'local';
                                         }
                                     } else if (e.cardSha) {
                                         const bytesSame = ((await gitBlobSha(u8)) === e.cardSha);
                                         if (bytesSame) { det.card = 'same'; }
                                         else {
-                                            // 0.12.128 单文件复核: 下载云端 character.png, 剥噪音语义比
-                                            det.card = (await __csCardRecheck(u8, null, name)) ? 'same' : 'local';
+                                            // 0.12.128 单文件复核: 下载云端 character.png, 剥噪音语义比(0.12.129 同样缓存)
+                                            det.card = (await __csCardRecheck(u8, null, name, e.cardSha)) ? 'same' : 'local';
                                         }
                                     }
                                 }
