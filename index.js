@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.137'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.138'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4669,31 +4669,44 @@ async function __csDoSelfUpdate(btn, remoteVer) {
     // 用自身实际文件夹名调接口(不硬编码)
     const selfName = window.__csSelfFolder || 'st-chat-sync';
     let lastErr_s = ''; // 0.12.119 声明局部(原代码 lastErr_g/lastErr_s 未声明泄漏到全局)
-    // 阶段1: 官方 update 接口
-    for (const g of [true, false]) {
-        try {
-            const r = await fetch('/api/extensions/update', {
-                method: 'POST', headers: getRequestHeaders(),
-                body: JSON.stringify({ extensionName: selfName, global: g }),
-            });
-            if (r.status === 404) continue;
-            if (!r.ok) { lastErr_s = 'HTTP ' + r.status; continue; }
-            const j = await r.json().catch(() => ({}));
-            if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return; }
-            if (btn) btn.textContent = '✅ 已更新';
-            // 0.12.124 更新接口成功 = git pull 完成，不再做 manifest 自校验(HTTP 拼路径易 404 误报，
-            // 误判会让用户卡在"已更新但提示校验失败")。官方 update 成功即可信，统一走协调刷新。
-            toastr.success('🌐 一键云同步：已更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
-            window.__csDoReload(); // 协调刷新(多插件并发由最后完成者统一) + watchdog兜底必刷
-            return;
-        } catch (e2) { }
+    // 阶段1: 官方 update 接口(git pull 当前目录 remote; 全局/用户两种位置都试)
+    // 0.12.138 自动重试: 首次全灭后等 2s 再试一轮(救瞬时抖动/代理短暂不可用), 仍失败才提示
+    const __tryUpdateOnce = async () => {
+        for (const g of [true, false]) {
+            try {
+                const r = await fetch('/api/extensions/update', {
+                    method: 'POST', headers: getRequestHeaders(),
+                    body: JSON.stringify({ extensionName: selfName, global: g }),
+                });
+                if (r.status === 404) continue;
+                if (!r.ok) { lastErr_s = 'HTTP ' + r.status; continue; }
+                const j = await r.json().catch(() => ({}));
+                if (j.isUpToDate) { if (btn) btn.textContent = '✓ 已是最新'; return 'uptodate'; }
+                if (btn) btn.textContent = '✅ 已更新';
+                // 0.12.124 更新接口成功 = git pull 完成，不再做 manifest 自校验(HTTP 拼路径易 404 误报
+                // 误判会让用户卡在"已更新但提示校验失败")。官方 update 成功即可信，统一走协调刷新。
+                toastr.success('🌐 一键云同步：已更新到 v' + remoteVer + '，即将自动刷新', null, { timeOut: 4000 });
+                window.__csDoReload(); // 协调刷新(多插件并发由最后完成者统一) + watchdog兜底必刷
+                return 'ok';
+            } catch (e2) { }
+        }
+        return 'fail';
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) {
+            if (btn) btn.textContent = '⏳ 重试中…';
+            await new Promise((r) => setTimeout(r, 2000));
+        }
+        const res = await __tryUpdateOnce();
+        if (res === 'ok' || res === 'uptodate') return;
     }
     // 0.12.119 移除"update 全灭 → 自动 delete+install 重装兜底"(同 kimi 修因): 弱网下 delete/install 中断→目录残缺/manifest损坏
     //   → 插件从扩展列表消失且重装报"已存在"(用户实报现象); 且原兜底 delete 试 [true,false] 而 install 硬编码 global:true,
     //   实际装 user 目录时会删掉 user 副本却装到全局 → 位置错乱。正常 git 直装形态官方 /update 即可更新, 该兜底本不该触发;
     //   update 全灭时只明确报错, 让用户手动到扩展管理删除后重装。
     if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新'; }
-    toastr.error('🌐 一键云同步：自动更新失败（常规 git 更新不可用' + (lastErr_s ? '：' + lastErr_s : '') + '）。为避免插件损坏不再自动重装——若持续失败，请到「管理扩展」删除本插件后重新安装。', null, { timeOut: 8000 });
+    // 0.12.138 失败提示人性化: 点明最常见原因(VPN/代理致 Gitee 不可达——git pull 走的是插件仓库地址 Gitee)
+    toastr.error('🌐 一键云同步：更新失败(' + (lastErr_s || '网络错误') + ')。常见原因: 开了 VPN/代理时无法访问 Gitee 仓库——请关闭 VPN 后重启酒馆/重试；仍失败可到「管理扩展」手动重装。', null, { timeOut: 10000 });
 }
 // 🔍 手动检测: 四态结果直接显示在按钮上(有新版/最新/本地更高/失败), 3 秒后还原待机
 window.__csManualCheck = async function (btn) {
