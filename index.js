@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.138'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.139'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -368,8 +368,9 @@ function currentCharName() {
     const c = ctx();
     if (c.groupId) return null; // 群聊暂不支持角色级整包
     if (c.characterId === undefined || c.characterId < 0) {
-        // 0.12.62 ST1.14-web 兜底: 官方 ST 部分状态下 characterId 未就绪但 name1 已有当前角色名
-        return c.name1 || null;
+        // ST1.14-web 兜底: 官方 ST 部分状态下 characterId 未就绪 → 退回角色名 name2
+        // 修正: ST 里 name1=用户名、name2=角色名; 此前误用 name1 会把"用户名"当角色名
+        return c.name2 || null;
     }
     return c.characters[c.characterId]?.name;
 }
@@ -750,6 +751,40 @@ function planPushTargets(charName, localFileNames) {
     return plans;
 }
 
+// ── 聊天云端枚举 / 清单维护（修复：聊天域不再只依赖可能过期的 chat-list.json）──
+// 从云端目录直接推导「逻辑聊天名」集合（权威来源；语义与 chat-list.json.files 一致）
+//  - 普通聊天: Y.jsonl → Y
+//  - 分段聊天: X.p000.jsonl/X.p001.jsonl(+X.manifest.json/X.meta.json) → 折叠回 X
+//  - 排除 .manifest.json / .meta.json / 其它非 .jsonl 文件
+async function listCloudChatFiles(charName) {
+    const entries = await Gitee.listEntries(`sync/${charName}/chats`).catch(() => []);
+    const stems = new Set();
+    for (const e of entries) {
+        if (!e || e.type !== 'file') continue;
+        const n = String(e.name || '');
+        if (!/\.jsonl$/i.test(n)) continue;
+        const m = n.match(/^(.*)\.p\d+\.jsonl$/i);
+        stems.add(m ? m[1] : n.replace(/\.jsonl$/i, ''));
+    }
+    return [...stems].map((s) => s + '.jsonl');
+}
+// 把某条本地聊天文件名并入云端清单 sync/<角色>/chat-list.json（幂等增量）。
+// 「上传当前聊天」/ 自动上传只传一条，也必须维护清单 —— 否则其它设备“导入角色 / 拉全部聊天”枚举不到它。
+async function upsertCloudChatList(charName, localName) {
+    if (!charName || !localName) return;
+    const listPath = `sync/${charName}/chat-list.json`;
+    let files = [];
+    try {
+        const cur = await Gitee.getText(listPath);
+        if (cur && cur.content) { const p = JSON.parse(cur.content); if (Array.isArray(p.files)) files = p.files.slice(); }
+    } catch { /* 清单不存在/损坏 → 重建 */ }
+    if (files.includes(localName)) return;
+    files.push(localName);
+    const sha = (await Gitee.getText(listPath).catch(() => null))?.sha;
+    await Gitee.putText(listPath, JSON.stringify({ files }, null, 2), sha, `chat list + ${localName}`);
+    settings.lastCloudSha[listPath] = (await Gitee.getText(listPath).catch(() => null))?.sha;
+}
+
 // ===================== 角色级同步 =====================
 
 // 世界书上传决策（纯函数, 便于单测; 返回 {action:'upload'|'skip'|'skipCloudEdited', cloudSha?}）
@@ -919,8 +954,9 @@ async function getCharChatFileNames(charName) {
 // 按角色名解析 avatar（批量操作任意角色时不依赖「当前打开的 characterId」）
 function getAvatarFor(charName) {
     const c = ctx();
-    // 0.12.62 ST1.14-web: 传空时退回当前 name1（官方 ST 的 characterId 可能未就绪）
-    const target = charName || (c && c.name1) || '';
+    // ST1.14-web: 传空时退回当前角色名 name2（官方 ST 的 characterId 可能未就绪）
+    // 修正: name1=用户名, name2=角色名
+    const target = charName || (c && c.name2) || '';
     if (c.characters && Array.isArray(c.characters)) {
         // 0.12.63 先按当前 characterId 精确匹配——同名角色存在多个实例(如两个"祝惊安": 祝惊安.png/祝惊安1.png),
         // find 只取第一个同名, 但当前聊天可能属于另一个同名实例(不同头像目录), 取错头像→读聊天为空
@@ -939,7 +975,7 @@ function getAvatarFor(charName) {
 // 按原字段 json 化，尽量保真（不再丢 chat_metadata / swipe_info / disable_date / bookmark 等）。
 async function getChatContent(fileName, charName) {
     const avatar = getAvatarFor(charName || '');
-    const name = charName || (ctx().characters?.[ctx().characterId]?.name) || (ctx().name1) || ''; // 0.12.62 末尾 name1 兜底(ST1.14-web characterId 可能未就绪)
+    const name = charName || (ctx().characters?.[ctx().characterId]?.name) || (ctx().name2) || ''; // 末尾退回角色名 name2（修正: name1 是用户名）
     const r = await fetch('/api/chats/get', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -1440,15 +1476,17 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
 async function pullCharacterChats(charName) {
     const base = `sync/${charName}/chats`;
     const avatar = ctx().characters?.[ctx().characterId]?.avatar || '';
-    // 优先读清单（云端记录了全部聊天文件名）
-    let fileNameList = [];
-    try {
-        const listCloud = await Gitee.getText(`sync/${charName}/chat-list.json`);
-        if (listCloud) {
-            const parsed = JSON.parse(listCloud.content);
-            if (Array.isArray(parsed.files)) fileNameList = parsed.files;
-        }
-    } catch { /* 清单损坏则忽略 */ }
+    // 优先直接数云端目录（权威，不看可能过期的清单）；为空再回退旧 chat-list.json（兼容未升级设备写入的清单）
+    let fileNameList = await listCloudChatFiles(charName).catch(() => []);
+    if (!fileNameList.length) {
+        try {
+            const listCloud = await Gitee.getText(`sync/${charName}/chat-list.json`);
+            if (listCloud) {
+                const parsed = JSON.parse(listCloud.content);
+                if (Array.isArray(parsed.files)) fileNameList = parsed.files;
+            }
+        } catch { /* 清单损坏则忽略 */ }
+    }
 
     if (fileNameList.length === 0) {
         // 没有清单 → 回退：只处理当前打开的聊天文件
@@ -1502,7 +1540,6 @@ async function pullCharacterChats(charName) {
         const jsonlContent = ensureChatJsonlHeader(cloud.content, ctx().name1, ctx().name2);
         const blob = new Blob([jsonlContent], { type: 'application/octet-stream' });
         const file = new File([blob], `import-${i}.jsonl`, { type: 'application/octet-stream' });
-        i++;
         const formData = new FormData();
         formData.set('file_type', 'jsonl');
         formData.set('avatar', file);
@@ -1592,6 +1629,7 @@ async function pushCurrentChat() {
         }
         settings.lastCloudSha[p] = newSha || settings.lastCloudSha[p]; // 分段时=manifest sha
         setLocalName(charName, p, localName);
+        await upsertCloudChatList(charName, localName); // 单条/自动上传也补维护云端清单(修复: 否则其它设备枚举不到本聊天)
         saveSettingsDebounced();
     hideBusy(); // 0.12.64: 内部成功路径也清浮层(自动上传 pushAuto 不走按钮 handler)
     setStatus('');
@@ -3494,11 +3532,14 @@ async function importCharFromCloud(charName, opts = {}) {
         importedCount = await importChatsTtNative(charName, cardAvatar);
     } else {
         try {
-            const listCloud = await Gitee.getText(`sync/${charName}/chat-list.json`);
-            let fileList = [];
-            if (listCloud) {
-                const parsed = JSON.parse(listCloud.content || '{}');
-                if (Array.isArray(parsed.files)) fileList = parsed.files;
+            // 优先直接数云端目录（权威）；为空再回退旧 chat-list.json（兼容未升级设备写入的清单）
+            let fileList = await listCloudChatFiles(charName).catch(() => []);
+            if (!fileList.length) {
+                const listCloud = await Gitee.getText(`sync/${charName}/chat-list.json`);
+                if (listCloud) {
+                    const parsed = JSON.parse(listCloud.content || '{}');
+                    if (Array.isArray(parsed.files)) fileList = parsed.files;
+                }
             }
             const c = getContext();
             const importAvatar = cardAvatar || c.characters?.[c.characterId]?.avatar || '';
@@ -3679,11 +3720,14 @@ async function importChatsTtNative(charName, cardAvatar) {
         // 1) ⚠️ 不再 select_selected_character / 不切换当前角色：TT 批量导入时渲染真实卡会冻结主线程(实测)，
         //    且违背「导入=复制文件，点卡才进」的交互。导入只做纯文件级写入(/api/chats/save 按 avatar_url 定位，不依赖当前角色/表单)。
         // 2) 读云端清单
-        const listCloud = await Gitee.getText(`sync/${charName}/chat-list.json`);
-        let fileList = [];
-        if (listCloud) {
-            const parsed = JSON.parse(listCloud.content || '{}');
-            if (Array.isArray(parsed.files)) fileList = parsed.files;
+        // 优先直接数云端目录（权威）；为空再回退旧 chat-list.json（兼容未升级设备写入的清单）
+        let fileList = await listCloudChatFiles(charName).catch(() => []);
+        if (!fileList.length) {
+            const listCloud = await Gitee.getText(`sync/${charName}/chat-list.json`);
+            if (listCloud) {
+                const parsed = JSON.parse(listCloud.content || '{}');
+                if (Array.isArray(parsed.files)) fileList = parsed.files;
+            }
         }
         // 3) 逐个走 TT 手动导入同款流程（new FormData(表单) 而不是手动 set avatar/character_name）
         //    待办A：先对每条云端聊天查本地是否已有同聊天，走「与双端实时同一套」冲突判定 + 聪明版合并。
@@ -4194,6 +4238,12 @@ function decideImportMerge(localMsgs, cloudMsgs) {
         const sigs = new Set((localMsgs || []).map(messageSignature));
         const cloudTail = diff.cloudTail && diff.cloudTail.length ? diff.cloudTail : (cloudMsgs || []).slice(diff.common || 0);
         const newOnes = cloudTail.filter((m) => !sigs.has(messageSignature(m)));
+        // 与 pullMergeCloudSuperset 对齐: 本地删了中间楼(顺序不连续) → 按云端全量重建(云端⊇本地, 顺序权威),
+        // 否则缺失的中间楼会被 concat 到末尾、造成楼层顺序错乱
+        if (diff.middleGap || !diff.localContig) {
+            const cloudArr = cloudMsgs || [];
+            return { action: 'fastforward', diff, merged: cloudArr.slice(), added: Math.max(0, cloudArr.length - (localMsgs || []).length) };
+        }
         return { action: 'fastforward', diff, merged: (localMsgs || []).concat(newOnes), added: newOnes.length };
     }
     return { action: 'diverged', diff };
@@ -8934,6 +8984,8 @@ window.__stChatSyncDebug = {
     deleteCharFromCloud,
     deleteChatsBothSides,
     exportChats,
+    listCloudChatFiles,
+    upsertCloudChatList,
     backupConfigToCloud,
     restoreConfigFromCloud,
     listConfigBackups,
@@ -8956,6 +9008,7 @@ window.__stChatSyncDebug = {
     getLocalConnPresetDebug: _getLocalConnPreset,
     stripPresetSensitiveFields,
     classifyChatDiff,
+    decideImportMerge,
     readLocalChatMsgs,
     parseJsonlMessages,
     messageSignature,
