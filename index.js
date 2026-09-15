@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.140'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.141'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4551,7 +4551,7 @@ function __refreshCurRepoLine() {
     const platName = String(settings.server || '').includes('github') ? 'GitHub' : (String(settings.server || '').includes('gitlab.com') ? 'GitLab' : 'Gitee');
     let lastConn = '—';
     try { if (settings.lastConnectAt) { const d = new Date(settings.lastConnectAt); lastConn = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } } catch { }
-    el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:5px">📦 云端占用统计中…</div><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label>`;
+    el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div id="cs_usage" style="opacity:.75;margin-top:5px">📦 云端占用统计中…</div><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label>`;
     const slot2 = document.getElementById('cs_slot2');
     if (slot2) {
         const arr = Array.isArray(settings.connSlots) ? settings.connSlots : [];
@@ -4881,7 +4881,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-comments cs-ico" aria-hidden="true"></i>当前聊天 / 角色同步</summary>
+                    <summary><i class="fa-solid fa-comments cs-ico" aria-hidden="true"></i>当前聊天 / 角色</summary>
                     <div class="cs-body">
                         <div id="${id}_char_display" class="cs-current">当前角色：<b>${escapeHtml(charName || '（未打开单人角色）')}</b>${worldName ? `<br>绑定世界书：<b>${escapeHtml(worldName)}</b>` : ''}</div>
                         <p class="cs-hint" style="margin:6px 0 2px">当前聊天（增量上传 / 导入）</p>
@@ -4900,7 +4900,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-cloud-arrow-up cs-ico" aria-hidden="true"></i>其它聊天/角色同步</summary>
+                    <summary><i class="fa-solid fa-cloud-arrow-up cs-ico" aria-hidden="true"></i>其它聊天 / 角色</summary>
                     <div class="cs-body">
                         <p class="cs-hint" style="margin-bottom:4px">把本地角色整包/聊天上传到云端，或从云端导入/删除。</p>
                         <div class="cs-row" style="margin-top:6px">
@@ -4943,7 +4943,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-book cs-ico" aria-hidden="true"></i>独立全局世界书同步</summary>
+                    <summary><i class="fa-solid fa-book cs-ico" aria-hidden="true"></i>独立全局世界书</summary>
                     <div class="cs-body">
                         <div class="cs-row" style="align-items:center;margin-top:4px;flex-wrap:wrap">
                             <button id="${id}_wb_local" type="button" class="cs-btn cs-btn-local"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 本地世界书</button>
@@ -5006,7 +5006,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-database cs-ico" aria-hidden="true"></i>酒馆配置同步（预设/主题/正则/插件等设置）</summary>
+                    <summary><i class="fa-solid fa-database cs-ico" aria-hidden="true"></i>酒馆配置</summary>
                     <div class="cs-body">
                         <p id="${id}_cfg_status" class="cs-hint" style="margin-top:4px"></p>
                         <div class="cs-label">分项部分同步（内容一致自动跳过；不同时可选 替换/另存副本）：</div>
@@ -7246,15 +7246,15 @@ ext: {
         box.addEventListener('toggle', (e) => {
             const d = e.target;
             if (!d || d.tagName !== 'DETAILS' || !d.open || !d.classList || !d.classList.contains('cs-fold')) return;
-            if (d.querySelector('#cs_cfg_list')) { // 酒馆配置同步卡
+            if (d.querySelector('#cs_cfg_list')) { // 酒馆配置卡
                 if (window.__csOnce('card:cfg')) { window.__cfgMode = 'local'; try { __updateCfgViewBtns(); } catch { } try { window.__renderCfgList('local'); } catch { } }
                 return;
             }
-            if (d.querySelector('#cs_roles_list')) { // 其它聊天/角色同步卡
+            if (d.querySelector('#cs_roles_list')) { // 其它聊天 / 角色卡
                 if (window.__csOnce('card:roles')) { window.__csListMode = 'local'; try { window.__renderRoleMultiList && window.__renderRoleMultiList('local'); } catch { } }
                 return;
             }
-            if (d.querySelector('#cs_wb_list')) { // 独立全局世界书同步卡
+            if (d.querySelector('#cs_wb_list')) { // 独立全局世界书卡
                 if (window.__csOnce('card:wb')) { window.__wbListMode = 'local'; try { window.__renderWorldbookList && window.__renderWorldbookList('local'); } catch { } }
             }
         }, true);
@@ -8481,11 +8481,11 @@ async function autoConnectIfConfigured() {
 // 条目: 功能区(直接执行, 彩色, 最前, 分隔线) + 面板区(打开对应页面, 橙); 勾选控制见 settings.floatPages
 const CS_FLOAT_PAGES = [
     { key: 'conn', ico: 'fa-plug', label: '连接配置', kw: '连接配置' },
-    { key: 'roles', ico: 'fa-comments', label: '当前聊天·角色', kw: '当前聊天 / 角色同步' },
-    { key: 'char', ico: 'fa-user', label: '角色卡', kw: '其它聊天/角色同步' },
-    { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书同步' },
+    { key: 'roles', ico: 'fa-comments', label: '当前聊天·角色', kw: '当前聊天 / 角色' },
+    { key: 'char', ico: 'fa-user', label: '角色卡', kw: '其它聊天 / 角色' },
+    { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书' },
     { key: 'cln', ico: 'fa-broom', label: '聊天清理器', kw: '聊天记录清理器' },
-    { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置同步' },
+    { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置' },
     { key: 'asy', ico: 'fa-gear', label: '自动同步/备份', kw: '自动同步/备份' },
 ];
 function csFloatPageEnabled(key) {
