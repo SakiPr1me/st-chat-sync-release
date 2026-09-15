@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.139'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.12.140'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4538,7 +4538,7 @@ async function __fillCloudUsage() {
     try {
         const u = await __cloudUsage();
         if (!u) { el.textContent = ''; return; }
-        el.textContent = `📦 云端已用 ${__fmtBytes(u.bytes)} · ${u.files} 个文件（Gitee/GitHub 未开放空间配额接口，故不显示百分比）`;
+        el.textContent = `📦 云端已用 ${__fmtBytes(u.bytes)} · ${u.files} 个文件`;
     } catch (e) {
         el.textContent = '📦 云端占用读取失败：' + ((e && e.message) || e);
     }
@@ -4551,7 +4551,7 @@ function __refreshCurRepoLine() {
     const platName = String(settings.server || '').includes('github') ? 'GitHub' : (String(settings.server || '').includes('gitlab.com') ? 'GitLab' : 'Gitee');
     let lastConn = '—';
     try { if (settings.lastConnectAt) { const d = new Date(settings.lastConnectAt); lastConn = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } } catch { }
-    el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label><br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:2px">📦 云端占用统计中…</div><small style="opacity:.75">每台设备各自保存连接配置；「云端没有」≠「获取失败」，可先点「连接」看各目录数量</small>`;
+    el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div id="cs_usage" style="opacity:.75;font-size:.82em;margin-top:5px">📦 云端占用统计中…</div><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label>`;
     const slot2 = document.getElementById('cs_slot2');
     if (slot2) {
         const arr = Array.isArray(settings.connSlots) ? settings.connSlots : [];
@@ -4900,7 +4900,7 @@ window.__csManualCheck = async function (btn) {
 
                 <div class="cs-card">
                     <details class="cs-fold">
-                    <summary><i class="fa-solid fa-cloud-arrow-up cs-ico" aria-hidden="true"></i>角色卡+绑定世界书+聊天同步</summary>
+                    <summary><i class="fa-solid fa-cloud-arrow-up cs-ico" aria-hidden="true"></i>其它聊天/角色同步</summary>
                     <div class="cs-body">
                         <p class="cs-hint" style="margin-bottom:4px">把本地角色整包/聊天上传到云端，或从云端导入/删除。</p>
                         <div class="cs-row" style="margin-top:6px">
@@ -5990,6 +5990,8 @@ function wirePanelEvents() {
     // ── 酒馆配置 分项部分同步（多选选择单） ──
     window.__cfgTab = window.__cfgTab || 'conn';
     window.__cfgMode = window.__cfgMode || 'local';
+    // 列表数据缓存(每分项 tab): {local:[]|null, cloud:[]|null, ts} —— 命中则秒开; 「刷新」按钮/增删改后强制重拉
+    window.__cfgListCache = window.__cfgListCache || {};
     // 每类: {label, listLocal(), listCloud(), push(names), pull(names), del(names, mode)}
 // ═══ 第五/第六分项: 扩展本体与配置 + 酒馆助手插件 ═══
 const EXT_MANIFEST_PATH = 'config-sync/extensions/manifest.json';
@@ -6142,7 +6144,7 @@ async function __extMetaFillAsync() {
         await Promise.all(jobs);
     })).then(() => {
         window.__extMetaReady = true;
-        if (window.__cfgTab === 'ext') { try { window.__renderCfgList(window.__cfgMode); } catch { } }
+        if (window.__cfgTab === 'ext') { try { window.__renderCfgList(window.__cfgMode, { force: true }); } catch { } }
     }).catch(() => { });
     return out.sort();
 }
@@ -7073,7 +7075,19 @@ ext: {
     };
     function parseCfgItem(v) { const s = String(v); const i = s.indexOf('|'); if (i > 0 && CONN_PRESET_GROUPS.some((g) => g.apiId === s.slice(0, i))) return { apiId: s.slice(0, i), name: s.slice(i + 1) }; return { apiId: 'openai', name: s }; }
     window.__cfgRenderGen = 0;
-    window.__renderCfgList = async function (mode) {
+    // 列表缓存取数: 命中缓存直接返回; 未命中或 force 才真拉并写缓存。永不抛错(失败返回 null)。
+    async function __cfgGetList(tab, drv, which, force) {
+        try {
+            const c = window.__cfgListCache[tab];
+            if (!force && c && Array.isArray(c[which])) return c[which];
+            const v = await (which === 'cloud' ? drv.listCloud() : drv.listLocal());
+            const prev = window.__cfgListCache[tab] || { local: null, cloud: null };
+            window.__cfgListCache[tab] = { local: prev.local, cloud: prev.cloud, [which]: v, ts: Date.now() };
+            return v;
+        } catch { return null; }
+    }
+    window.__renderCfgList = async function (mode, opts) {
+        const __force = !!(opts && opts.force);
         mode = mode || window.__cfgMode;
         window.__cfgMode = mode;
         const list = $('cs_cfg_list'); const tgt = $('cs_cfg_target'); const st2 = $('cs_cfg2_status');
@@ -7091,6 +7105,15 @@ ext: {
         //    旧集合会被渲染到新列表上("点了预设没出双端, 再点一次就好了")
         const renderId = ++window.__cfgRenderGen;
         const whereSets = { localSet: new Set(), cloudSet: new Set() };
+        let __lc = null, __cc = null; // 本 tab 的 本地/云端 列表(供随后列表渲染复用, 免重复拉取)
+        try {
+            const __needCloud = (tab !== 'user');
+            const __r = await Promise.all([
+                __cfgGetList(tab, drv, 'local', __force),
+                __needCloud ? __cfgGetList(tab, drv, 'cloud', __force) : Promise.resolve(null),
+            ]);
+            __lc = __r[0]; __cc = __r[1];
+        } catch { }
         try {
             if (tab !== 'user') {
                 // 0.12.102 统一归一: 剥 apiId|/third-party/ 前缀 + 剥 thp 类型前缀; 仅 thp 额外过 __safeName——
@@ -7098,9 +7121,7 @@ ext: {
                 //   含空格/符号的脚本两边永远对不上(用户实测"部分插件仍仅本地/仅云端")
                 const _thpNorm = (v) => __safeName(String(v).replace(/^\[(脚本|文件夹)\]/, ''));
                 const _nm = (v) => (tab === 'thp' ? _thpNorm(v) : __stripApiId(String(v).replace(/^third-party\//, '').replace(/^\[(脚本|文件夹)\]/, ''))).toLowerCase();
-                let lc = null, cc = null;
-                try { lc = await drv.listLocal(); } catch { }
-                try { cc = await drv.listCloud(); } catch { }
+                const lc = __lc, cc = __cc;
                 if (lc) lc.forEach((n) => whereSets.localSet.add(_nm(n)));
                 if (cc) cc.forEach((n) => whereSets.cloudSet.add(_nm(n)));
                 if (lc && cc) { // 双边都成功才更新缓存
@@ -7169,8 +7190,8 @@ ext: {
                 ? '<p class="cs-hint">⏳ 正在获取云端列表…（云端响应慢时请稍候，最多约 45 秒）</p>'
                 : '<p class="cs-hint">⏳ 正在读取本地拓展…（逐个读取版本/仓库地址，拓展多时稍慢，请稍候）</p>';
         }
-        let names = [];
-        try { names = mode === 'cloud' ? await drv.listCloud() : await drv.listLocal(); }
+        let names = (mode === 'cloud' ? __cc : __lc);
+        try { if (!Array.isArray(names)) names = mode === 'cloud' ? await drv.listCloud() : await drv.listLocal(); }
         catch (e) {
             const why = (e && e.message) || e;
             if (st2) __csSetStatus(st2, '读取失败：' + why, 'err');
@@ -7181,7 +7202,7 @@ ext: {
         if (st2 && st2.textContent.startsWith('正在切换至')) { st2.textContent = ''; }
         if (st2) st2.style.color = '';
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
-        if (tgt) tgt.textContent = (mode === 'cloud' ? '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端' : '当前为本地视图，将上传本地选中 ｜ 🗑 删除本地');
+        if (tgt) tgt.textContent = (mode === 'cloud' ? '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端' : '当前为本地视图，将上传本地选中 ｜ 🗑 删除本地') + (__force ? '' : '（缓存 · 点上方「刷新」获取最新）');
         list.innerHTML = names.length
             ? names.map((n) => `<label class="cs-role-item" data-id="${escapeHtml(n)}"><input type="checkbox" value="${escapeHtml(n)}" name="cs_cfg_sel" ${prevChecked.has(n) ? 'checked' : ''}>${drv.rowHtml ? drv.rowHtml(n, mode) : `${__whereOf(n)}${__cfgStatusChip(drv, n, mode)}${__cfgTypeTag(drv, n)}${__cfgUpdTag(drv, n, mode)}<span>${escapeHtml(drv.displayOf ? drv.displayOf(n) : (drv.label === '预设' ? __stripApiId(n) : n))}</span>`}</label>`).join('')
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
@@ -7211,13 +7232,37 @@ ext: {
     }
     window.__updateCfgViewBtns = __updateCfgViewBtns;
     document.querySelectorAll('#chat_sync_settings .cs-tab').forEach((b) => {
+        // 切分页: 保持当前视图(本地/云端), 仅按需拉取(命中缓存则秒开); 「自动切到本地」只在"卡片首次展开"时发生一次
         b.addEventListener('click', () => { window.__cfgTab = b.getAttribute('data-cfgtab'); window.__renderCfgList(window.__cfgMode); __updateCfgViewBtns(); });
     });
     __updateCfgViewBtns();
+    // 展开卡片: 仅"首次展开"时自动切到本地并获取一次; 之后不再自动切换(保持用户当前视图)
+    window.__csFirst = window.__csFirst || {};
+    window.__csOnce = window.__csOnce || function (key) { if (window.__csFirst[key]) return false; window.__csFirst[key] = 1; return true; };
+    (function () {
+        const box = $('chat_sync_settings'); if (!box) return;
+        if (box.dataset.csToggleHook === '1') return; // 防重复安装
+        box.dataset.csToggleHook = '1';
+        box.addEventListener('toggle', (e) => {
+            const d = e.target;
+            if (!d || d.tagName !== 'DETAILS' || !d.open || !d.classList || !d.classList.contains('cs-fold')) return;
+            if (d.querySelector('#cs_cfg_list')) { // 酒馆配置同步卡
+                if (window.__csOnce('card:cfg')) { window.__cfgMode = 'local'; try { __updateCfgViewBtns(); } catch { } try { window.__renderCfgList('local'); } catch { } }
+                return;
+            }
+            if (d.querySelector('#cs_roles_list')) { // 其它聊天/角色同步卡
+                if (window.__csOnce('card:roles')) { window.__csListMode = 'local'; try { window.__renderRoleMultiList && window.__renderRoleMultiList('local'); } catch { } }
+                return;
+            }
+            if (d.querySelector('#cs_wb_list')) { // 独立全局世界书同步卡
+                if (window.__csOnce('card:wb')) { window.__wbListMode = 'local'; try { window.__renderWorldbookList && window.__renderWorldbookList('local'); } catch { } }
+            }
+        }, true);
+    })();
     if (__sentinel) __sentinel.dataset.csWired = '1'; // 本轮 DOM 绑定完成
     window.__csWireNow = () => { const r2 = $('chat_sync_settings'); wirePanelEvents(); if (r2) r2.dataset.wired = r2.dataset.wired || '1'; };
-    $('cs_cfg_local')?.addEventListener('click', () => window.__renderCfgList('local'));
-    $('cs_cfg_cloud')?.addEventListener('click', () => window.__renderCfgList('cloud'));
+    $('cs_cfg_local')?.addEventListener('click', () => window.__renderCfgList('local', { force: true }));
+    $('cs_cfg_cloud')?.addEventListener('click', () => window.__renderCfgList('cloud', { force: true }));
     $('cs_cfg_selall')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_cfg_sel"]').forEach((c) => { if (c.closest('label') && c.closest('label').style.display === 'none') return; c.checked = true; })); // 筛选隐藏的不勾
     $('cs_cfg_clr')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_cfg_sel"]').forEach((c) => { c.checked = false; }));
     // User tab: 点行(非勾选框) → 人设描述预览弹窗
@@ -7279,7 +7324,7 @@ ext: {
         if (!drv || typeof drv.toggleStatus !== 'function') return;
         btn.disabled = true;
         try { await drv.toggleStatus(n); } catch (e) { console.warn('[chat-sync] 开关切换失败', e); }
-        try { window.__renderCfgList(window.__cfgMode); } catch (e2) { console.warn(e2); }
+        try { window.__renderCfgList(window.__cfgMode, { force: true }); } catch (e2) { console.warn(e2); }
     });
     // 筛选: 按行内徽章文本过滤(与显示一致, 不重算); 差异徽章异步填充后需重放
     window.__cfgFilter = '全部';
@@ -7378,7 +7423,7 @@ ext: {
             const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
             hideBusy();
             if (!(r && typeof r.ok === 'number')) { if (st2) __csSetStatus(st2, '❌ 上传出错：没有返回结果', 'err'); return; }
-            try { await window.__renderCfgList(window.__cfgMode); } catch { } // 先刷新(刷新会清状态行), 再写完成文案
+            try { await window.__renderCfgList(window.__cfgMode, { force: true }); } catch { } // 先刷新(刷新会清状态行), 再写完成文案
             if (st2) __csSetStatus(st2, `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}`, r.fail ? 'err' : 'ok');
         } catch (e) {
             hideBusy();
@@ -7401,7 +7446,7 @@ ext: {
             const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
             hideBusy();
             if (!(r && typeof r.ok === 'number')) { if (st2) __csSetStatus(st2, '❌ 导入出错：没有返回结果', 'err'); return; }
-            try { await window.__renderCfgList(window.__cfgMode); } catch { }
+            try { await window.__renderCfgList(window.__cfgMode, { force: true }); } catch { }
             if (st2) __csSetStatus(st2, `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}`, r.fail ? 'err' : 'ok');
         } catch (e) {
             hideBusy();
@@ -7626,7 +7671,7 @@ ext: {
         if (!ok) { if (st2) st2.textContent = '已取消'; return; }
         if (st2) st2.textContent = '删除中…';
         const r = await window.__cfgDrivers[window.__cfgTab].del(sel, mode);
-        try { await window.__renderCfgList(window.__cfgMode); } catch { } // 先刷新
+        try { await window.__renderCfgList(window.__cfgMode, { force: true }); } catch { } // 先刷新
         if (st2) __csSetStatus(st2, `删除完成：成功 ${r ? r.ok : 0} / 共 ${sel.length}${r && r.fail ? `，失败 ${r.fail}` : ''}`, (r && r.fail) ? 'err' : 'ok');
         // 精确失效(不整清缓存): 云端删→目录剔除被删文件; 本地删→只清差异缓存
         const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas', api: () => API_CLOUD_DIR };
@@ -7643,7 +7688,7 @@ ext: {
                 for (const k of Object.keys(__diffCache)) delete __diffCache[k];
             }
         } catch { }
-        window.__renderCfgList(mode === 'cloud' ? 'cloud' : 'local');
+        window.__renderCfgList(mode === 'cloud' ? 'cloud' : 'local', { force: true });
     });
     // 删除双端配置项（0.12.99）：当前分项 tab 下，勾选项 本地+云端 一并删。
     // 口径与角色/世界书双端一致：先本地后云端；仅一端存在→删存在端，另一端 del 返回"该端无"→跳过(不计失败)。
@@ -7704,7 +7749,7 @@ ext: {
                 if (localOk && cloudOk) okN++;
                 else failN++;
             }
-            try { await window.__renderCfgList(window.__cfgMode); } catch { }
+            try { await window.__renderCfgList(window.__cfgMode, { force: true }); } catch { }
             // 缓存失效: 云端删 → 目录剔除; 本地删 → 清差异缓存(同 cfg_del 惯例)
             const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas', api: () => API_CLOUD_DIR };
             try {
@@ -7716,7 +7761,7 @@ ext: {
             if (skipLocalN) noteParts.push(`仅云端 ${skipLocalN} 跳过本地`);
             if (skipCloudN) noteParts.push(`仅本地/本地失败 ${skipCloudN} 跳过云端`);
             if (st2) __csSetStatus(st2, `双端删除完成：成功 ${okN} / 共 ${sel.length}${noteParts.length ? '；' + noteParts.join('；') : ''}${failed.length ? `，失败 ${failN}（${failed.join('、')}）` : ''}`, failed.length ? 'err' : 'ok');
-            window.__renderCfgList(mode === 'cloud' ? 'cloud' : 'local');
+            window.__renderCfgList(mode === 'cloud' ? 'cloud' : 'local', { force: true });
         } finally { __csReleaseBusy(); }
     });
     function __bindCfgDragSelect(box2, chkName) {
@@ -8437,7 +8482,7 @@ async function autoConnectIfConfigured() {
 const CS_FLOAT_PAGES = [
     { key: 'conn', ico: 'fa-plug', label: '连接配置', kw: '连接配置' },
     { key: 'roles', ico: 'fa-comments', label: '当前聊天·角色', kw: '当前聊天 / 角色同步' },
-    { key: 'char', ico: 'fa-user', label: '角色卡', kw: '角色卡+绑定世界书+聊天同步' },
+    { key: 'char', ico: 'fa-user', label: '角色卡', kw: '其它聊天/角色同步' },
     { key: 'wb', ico: 'fa-book', label: '世界书', kw: '独立全局世界书同步' },
     { key: 'cln', ico: 'fa-broom', label: '聊天清理器', kw: '聊天记录清理器' },
     { key: 'cfg', ico: 'fa-database', label: '酒馆配置', kw: '酒馆配置同步' },
