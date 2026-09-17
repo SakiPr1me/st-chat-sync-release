@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -931,6 +931,15 @@ async function exportCharacter(charName, worldName, opts = {}) {
 
     // ── 卡级模式：先确定"本地这张卡 = 云端哪条记录" ──
     let idx = idx0;
+    // 老数据兜底（关键）：云端只有旧版本的 character.png、还没有 cards.json 时，
+    // 必须**先把它登记成一条卡记录**再解析——否则会误判成"云端没有这张卡"而新建条目、把已备份的老卡覆盖掉。
+    const entries0 = await Gitee.listEntries(base).catch(() => []);
+    const hasLegacyFile = entries0.some((e) => e.type === 'file' && (e.name === 'character.png' || e.name === 'character.png.manifest.json'));
+    if (hasLegacyFile && !(idx && Array.isArray(idx.cards) && idx.cards.some((c) => c.mirror))) {
+        if (!idx) idx = { v: 1, primary: '', cards: [], chatOwners: {} };
+        const legacy = await __legacyMaterialize(charName, idx, cardB64, localCardSha);
+        if (legacy) { if (!idx.primary) idx.primary = legacy.id; try { await __cardsSave(charName, idx); } catch (e) { console.warn('[chat-sync] 写回老卡索引失败(继续)', e); } }
+    }
     const res = await __resolveCard(charName, avatar, localCardSha, idx);
     if (res.pending) {
         __cardPendingMark(charName, avatar, res.reason);
@@ -940,6 +949,7 @@ async function exportCharacter(charName, worldName, opts = {}) {
     }
     if (res.id) __cardPendingClear(charName, avatar);
     if (!idx) idx = { v: 1, primary: '', cards: [], chatOwners: {} };
+    __cardPendingClear(charName, avatar); // 上传成功（含新建卡）→ 标记一律清掉
     let entry = res.entry || null;
     if (!entry) {
         // 云端该名字下还没有这条记录：先把老路径 character.png 物化成第一条（保住老数据的身份），再登记新卡
@@ -953,8 +963,8 @@ async function exportCharacter(charName, worldName, opts = {}) {
     entry.hint = `${stem}.png`;
     entry.name = charName;
     entry.mirror = primary;
-    // 卡文件：权威副本固定 card/<id>.png（主卡也一样，老路径只作镜像）
-    const entries = await Gitee.listEntries(base).catch(() => []);
+    // 卡文件：权威副本固定 cards/<id>.png（主卡也一样，老路径只作镜像）
+    const entries = entries0;
     const filePath = __entryPath(charName, entry);
     const cloudSha = __entryCloudSha(entries, entry);
     if (!cloudSha || cloudSha !== localCardSha) {
@@ -1000,9 +1010,9 @@ async function __uploadWorldFor(charName, worldName, wp, entry) {
 
 // 把云端的 character.png（老数据 / 旧版本产物）登记成一条卡记录，并补一份权威副本 cards/<id>.png。
 // 传入的 localB64 只有确认"正在上传的就是这张老卡"（sha 相同）时才会被复用，避免把新卡内容当成老卡。
-async function __legacyMaterialize(charName, idx, localB64, localSha) {
+async function __legacyMaterialize(charName, idx, localB64, localSha, entriesIn) {
     const base = `sync/${charName}`;
-    const entries = await Gitee.listEntries(base).catch(() => []);
+    const entries = entriesIn || await Gitee.listEntries(base).catch(() => []);
     const single = entries.find((e) => e.type === 'file' && e.name === 'character.png');
     const hasMan = entries.some((e) => e.type === 'file' && e.name === 'character.png.manifest.json');
     if (!single && !hasMan) return null;
@@ -1204,6 +1214,20 @@ async function __resolveCard(charName, avatar, localSha, idxIn) {
     const claimed = new Set(Object.values(settings.cardBind || {}).filter((id) => __entryOf(idx, id)));
     const unclaimed = cards.filter((c) => !claimed.has(c.id));
     if (!cards.length || !unclaimed.length) return { createNew: true, idx };
+    // 排除法（老用户升级迁移的关键）：还有没被认领的条目时，先看它能不能被**本机别的同名卡**按内容认领
+    //   —— 能 → 那条记录归别人，这张卡就是新卡（否则会出现"两张都判待确认、必须手工点一下"）
+    if (stem) {
+        const others = __cardsNamed(charName).filter((c) => __stemOf(c.avatar) !== stem);
+        for (const e of unclaimed) {
+            if (!e || !e.sha) continue;
+            for (const o of others) {
+                try {
+                    const b = await getCharacterCardB64(charName, o.avatar);
+                    if (await __cardShaOfB64(b) === e.sha) return { createNew: true, idx };
+                } catch { /* 读不出这张就跳过 */ }
+            }
+        }
+    }
     if (cards.length === 1 && __cardsNamed(charName).length === 1) {
         // 名字下唯一一张卡（老数据/单卡用户）→ 就是它，允许更新覆盖（与 0.12.x 行为一致）
         const e = cards[0];
