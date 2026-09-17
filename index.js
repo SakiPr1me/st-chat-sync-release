@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.12.141'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.0'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -400,15 +400,20 @@ async function getWorldContent(name) {
 // 目的: 绕过 GitHub contents API 单文件 1MB 限制(Gitee 同样适用, 减少大请求)
 const CARD_CHUNK_CHARS = 640 * 1024; // base64 字符数/块(API body 限额内)
 
-async function __cardPutSmart(dir, b64) {
-    const singlePath = `${dir}/character.png`;
+// dirOrFile: 传目录(旧调用) → 目录下 character.png；传以 .png 结尾的完整路径(0.13.0 卡级) → 直接用
+function __cardFileOf(dirOrFile) {
+    const s = String(dirOrFile || '');
+    return /\.png$/i.test(s) ? s : `${s}/character.png`;
+}
+async function __cardPutSmart(dirOrFile, b64) {
+    const singlePath = __cardFileOf(dirOrFile);
     if (b64.length <= CARD_CHUNK_CHARS) {
         const prev = await Gitee.getBase64(singlePath).catch(() => null);
         const sha = await Gitee.putBase64(singlePath, b64, prev && prev.sha ? prev.sha : undefined, 'sync card');
         return { mode: 'single', sha };
     }
     // 大卡 → 分块: 清理旧 manifest 后逐块 PUT + 写新 manifest
-    const partsDir = `${dir}/character.png.parts`;
+    const partsDir = `${singlePath}.parts`;
     let oldParts = [];
     try {
         (await __cachedListEntries(partsDir)).filter(e => e.type === 'file').forEach(e => oldParts.push({ path: e.path, sha: e.sha }));
@@ -425,30 +430,31 @@ async function __cardPutSmart(dir, b64) {
         if (!isNaN(idx) && idx >= total) { try { await Gitee.deleteFile(x.path, x.sha, 'chunk cleanup'); } catch { } }
     }
     const man = JSON.stringify({ chunks: total, chars: b64.length });
-    const manC = await Gitee.getText(`${dir}/character.png.manifest.json`).catch(() => null);
-    await Gitee.putText(`${dir}/character.png.manifest.json`, man, manC ? manC.sha : undefined, 'card chunked manifest');
+    const manC = await Gitee.getText(`${singlePath}.manifest.json`).catch(() => null);
+    await Gitee.putText(`${singlePath}.manifest.json`, man, manC ? manC.sha : undefined, 'card chunked manifest');
     return { mode: 'chunked', chunks: total };
 }
 
-async function __cardGetSmart(dir) {
+async function __cardGetSmart(dirOrFile) {
+    const base = __cardFileOf(dirOrFile);
     // 分块优先(manifest 存在即分块), 否则单文件
-    const manC = await Gitee.getText(`${dir}/character.png.manifest.json`).catch(() => null);
+    const manC = await Gitee.getText(`${base}.manifest.json`).catch(() => null);
     if (manC && manC.content) {
         const man = JSON.parse(manC.content);
         let b64 = '';
         for (let i = 0; i < man.chunks; i++) {
-            const pc = await Gitee.getText(`${dir}/character.png.parts/part-${String(i).padStart(4, '0')}`);
+            const pc = await Gitee.getText(`${base}.parts/part-${String(i).padStart(4, '0')}`);
             if (!pc) throw new Error(`角色卡分块缺失 part-${i}(上传不完整?)`);
             b64 += pc.content;
         }
         return { b64 };
     }
-    const single = await Gitee.getBase64(`${dir}/character.png`);
+    const single = await Gitee.getBase64(base);
     return single; // null 或 {b64, sha}
 }
 
-async function getCharacterCardB64(charName) {
-    const avatar = getAvatarFor(charName);
+async function getCharacterCardB64(charName, avatarHint) {
+    const avatar = getAvatarFor(charName, avatarHint);
     if (!avatar) throw new Error('无法解析角色头像，找不到角色「' + charName + '」');
     const format = 'png';
     const r = await fetch('/api/characters/export', {
@@ -770,7 +776,7 @@ async function listCloudChatFiles(charName) {
 }
 // 把某条本地聊天文件名并入云端清单 sync/<角色>/chat-list.json（幂等增量）。
 // 「上传当前聊天」/ 自动上传只传一条，也必须维护清单 —— 否则其它设备“导入角色 / 拉全部聊天”枚举不到它。
-async function upsertCloudChatList(charName, localName) {
+async function upsertCloudChatList(charName, localName, avatar = '') {
     if (!charName || !localName) return;
     const listPath = `sync/${charName}/chat-list.json`;
     let files = [];
@@ -783,6 +789,8 @@ async function upsertCloudChatList(charName, localName) {
     const sha = (await Gitee.getText(listPath).catch(() => null))?.sha;
     await Gitee.putText(listPath, JSON.stringify({ files }, null, 2), sha, `chat list + ${localName}`);
     settings.lastCloudSha[listPath] = (await Gitee.getText(listPath).catch(() => null))?.sha;
+    // 0.13.0：单条上传也记归属（否则同名卡导入时这条会被当成"归属未知"）
+    try { const cid = avatar ? await __cardIdForAvatar(charName, avatar) : ''; if (cid) await __chatOwnerSet(charName, String(localName).split('/').pop(), cid); } catch { }
 }
 
 // ===================== 角色级同步 =====================
@@ -858,14 +866,14 @@ async function __csCardJsonFromPng(pngBytes) {
 //   云端字节仅在需要复核时下载一次。返回 true=实质一致(假本地新); false=解析失败或实质不同(由调用方判 local)。
 // 0.12.129: cloudSig=云端卡内容签名(分块=各块sha join / 单文件=cardSha)——复核结果缓存键。
 //   角色卡因ST保存噪音长期字节不一致, 无缓存则每次刷新都重下载云端卡(用户质疑消耗大); 云端sha不变→30分钟内复用判定零下载。
-async function __csCardRecheck(localU8, cloudParts, charNameForSingle, cloudSig) {
+async function __csCardRecheck(localU8, cloudParts, charNameForSingle, cloudSig, cloudFile) {
     try {
         const localJ = await __csCardJsonFromPng(localU8);
         if (!localJ) return false;
         const localSem = jsonStableString(__csStripCardRuntime(localJ)); // 本地剥噪语义指纹(chat/tavern_helper噪音被剥→稳定)
         // 缓存命中: 云端sha未变 且 本地剥噪指纹未变 → 复用上次结论零下载。本地真改内容→指纹变→miss→重新复核(不漏报)。
         if (cloudSig) {
-            const __ck = __recheckCache['card:' + (charNameForSingle || '') + ':' + cloudSig];
+            const __ck = __recheckCache['card:' + (cloudFile || charNameForSingle || '') + ':' + cloudSig];
             if (__ck && Date.now() - __ck.ts < 1800000 && __ck.sha === cloudSig && __ck.localSem === localSem) return !!__ck.val;
         }
         let cloudU8b = null;
@@ -878,9 +886,9 @@ async function __csCardRecheck(localU8, cloudParts, charNameForSingle, cloudSig)
                     if (g && g.content) all += g.content;
                 }
                 if (all) { const bin = atob(all.replace(/\s/g, '')); cloudU8b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) cloudU8b[i] = bin.charCodeAt(i); }
-            } else if (charNameForSingle) {
-                // 单文件卡: getBase64 返回 {b64, sha}
-                const g = await Gitee.getBase64('sync/' + charNameForSingle + '/character.png').catch(() => null);
+            } else if (cloudFile || charNameForSingle) {
+                // 单文件卡: getBase64 返回 {b64, sha}（0.13.0: 同名卡按各自 cards/<id>.png 复核）
+                const g = await Gitee.getBase64(cloudFile || ('sync/' + charNameForSingle + '/character.png')).catch(() => null);
                 if (g && g.b64) { const bin = atob(String(g.b64).replace(/\s/g, '')); cloudU8b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) cloudU8b[i] = bin.charCodeAt(i); }
             }
         } catch { }
@@ -888,56 +896,135 @@ async function __csCardRecheck(localU8, cloudParts, charNameForSingle, cloudSig)
         const cloudJ = await __csCardJsonFromPng(cloudU8b);
         if (!cloudJ) return false;
         const same = localSem === jsonStableString(__csStripCardRuntime(cloudJ));
-        if (cloudSig) __recheckCache['card:' + (charNameForSingle || '') + ':' + cloudSig] = { val: same ? 1 : 0, ts: Date.now(), sha: cloudSig, localSem };
+        if (cloudSig) __recheckCache['card:' + (cloudFile || charNameForSingle || '') + ':' + cloudSig] = { val: same ? 1 : 0, ts: Date.now(), sha: cloudSig, localSem };
         return same;
     } catch { return false; }
 }
-async function exportCharacter(charName, worldName) {
+// 上传单张角色卡（0.13.0 卡级）。
+//  单卡模式（名字下只有这一张卡）：与 0.12.x 完全一致——写 sync/<名>/character.png，不产 cards.json / cards/ 文件。
+//  卡级模式（名字下 ≥2 张卡）：每张卡各有云端身份 cards/<id>.png；主卡额外镜像一份到老路径 character.png。
+async function exportCharacter(charName, worldName, opts = {}) {
+    const avatar = getAvatarFor(charName, opts.avatar);
+    if (!avatar) throw new Error('无法解析角色头像，找不到角色「' + charName + '」');
+    const stem = __stemOf(avatar);
     const base = `sync/${charName}`;
-    const cardPath = `${base}/character.png`;
-    // 卡增量（2026-08-22）：本地算 blob sha vs 云端目录列表 sha（仅元数据，不下载 PNG）
-    // —— 一致则跳过上传；不同才传；上传用 putBase64 返回的新 sha 记忆，不再多下载一次
-    const cardB64 = await getCharacterCardB64(charName);
-    const bin = atob(String(cardB64).replace(/\s/g, ''));
-    const cardBytes = new Uint8Array(bin.length);
-    for (let j = 0; j < bin.length; j++) cardBytes[j] = bin.charCodeAt(j);
-    const localCardSha = await gitBlobSha(cardBytes);
-    let cloudCardSha = null;
-    try { for (const e of await Gitee.listEntries(base)) if (e.type === 'file' && e.name === 'character.png') cloudCardSha = e.sha; } catch { }
-    if (!cloudCardSha || cloudCardSha !== localCardSha) {
-        // 智能写卡: 小卡单文件 / 大卡分块(绕 GitHub 1MB)
-        await __cardPutSmart(base, cardB64.replace(/\s/g, ''));
-        settings.lastCloudSha[cardPath] = localCardSha;
-    } else {
-        settings.lastCloudSha[cardPath] = cloudCardSha; // 卡没变 → 不上传（之前每次推送都重传几MB PNG）
+    const cardB64 = String(await getCharacterCardB64(charName, avatar)).replace(/\s/g, '');
+    const localCardSha = await __cardShaOfB64(cardB64);
+    const idx0 = await __cardsLoad(charName);
+    const multi = __isMultiCard(charName, idx0);
+
+    // ── 单卡模式：路径/文件/行为与 0.12.x 完全一致（老用户零感知）──
+    if (!multi) {
+        const cardPath = `${base}/character.png`;
+        let cloudCardSha = null;
+        try { for (const e of await Gitee.listEntries(base)) if (e.type === 'file' && e.name === 'character.png') cloudCardSha = e.sha; } catch { }
+        if (!cloudCardSha || cloudCardSha !== localCardSha) {
+            await __cardPutSmart(base, cardB64); // 智能写卡: 小卡单文件 / 大卡分块
+            settings.lastCloudSha[cardPath] = localCardSha;
+        } else {
+            settings.lastCloudSha[cardPath] = cloudCardSha; // 卡没变 → 不上传
+        }
+        if (worldName) await __uploadWorldFor(charName, worldName, `${base}/world.json`, null);
+        saveSettingsDebounced();
+        return true;
     }
 
-    if (worldName) {
-        const wc = await getWorldContent(worldName);
-        if (wc) {
-            const wp = `${base}/world.json`;
-            const wCloud = await Gitee.getText(wp);
-            const rememberSha = settings.lastCloudSha ? settings.lastCloudSha[wp] : undefined;
-            const dec = decideWorldUpload(wc, wCloud, rememberSha);
-            if (dec.action === 'upload') {
-                await Gitee.putText(wp, wc, wCloud?.sha, `sync world ${worldName}`);
-                settings.lastCloudSha[wp] = (await Gitee.getText(wp)).sha;
-                console.log(`[chat-sync] 世界书「${worldName}」已上传云端`);
-            } else if (dec.action === 'skip') {
-                console.log(`[chat-sync] 世界书「${worldName}」已与云端一致, 跳过`);
-                settings.lastCloudSha[wp] = wCloud.sha;
-            } else { // skipCloudEdited
-                console.warn(`[chat-sync] 世界书「${worldName}」云端在上次同步后已被修改, 跳过覆盖(保留云端更新版)`);
-            }
-        }
+    // ── 卡级模式：先确定"本地这张卡 = 云端哪条记录" ──
+    let idx = idx0;
+    const res = await __resolveCard(charName, avatar, localCardSha, idx);
+    if (res.pending) {
+        __cardPendingMark(charName, avatar, res.reason);
+        const err = new Error(`「${charName}」的卡面 ${stem}.png 分不清对应云端哪一张卡，已跳过上传（在「其它聊天 / 角色」列表里点「确认配对」后可继续）`);
+        err.csPending = true;
+        throw err;
     }
+    if (res.id) __cardPendingClear(charName, avatar);
+    if (!idx) idx = { v: 1, primary: '', cards: [], chatOwners: {} };
+    let entry = res.entry || null;
+    if (!entry) {
+        // 云端该名字下还没有这条记录：先把老路径 character.png 物化成第一条（保住老数据的身份），再登记新卡
+        if (!idx.cards.length) { const legacy = await __legacyMaterialize(charName, idx, cardB64, localCardSha); if (legacy) entry = legacy; }
+        if (!entry) { entry = { id: __cardIdGen(), file: '', hint: '', name: charName, sha: '', updated: '' }; idx.cards.push(entry); }
+    }
+    if (!idx.primary) idx.primary = entry.id;
+    const primary = idx.primary === entry.id;
+    if (!entry.file) entry.file = `cards/${entry.id}.png`;
+    if (entry.id) __cardBindSet(avatar, entry.id); // 本机绑定：这张卡面 ↔ 这条云端记录（下次同步认得出，不会重复建）
+    entry.hint = `${stem}.png`;
+    entry.name = charName;
+    entry.mirror = primary;
+    // 卡文件：权威副本固定 card/<id>.png（主卡也一样，老路径只作镜像）
+    const entries = await Gitee.listEntries(base).catch(() => []);
+    const filePath = __entryPath(charName, entry);
+    const cloudSha = __entryCloudSha(entries, entry);
+    if (!cloudSha || cloudSha !== localCardSha) {
+        await __cardPutSmart(filePath, cardB64);
+        settings.lastCloudSha[filePath] = localCardSha;
+    } else {
+        settings.lastCloudSha[filePath] = cloudSha;
+    }
+    entry.sha = localCardSha;
+    entry.updated = new Date().toISOString();
+    // 主卡镜像：老路径 character.png 始终等于主卡内容（老版本设备/老数据仍读它；被旧版本改写后这里会自动修回来）
+    if (primary) {
+        const m = entries.find((e) => e.type === 'file' && e.name === 'character.png');
+        if (!m || m.sha !== localCardSha) await __cardPutSmart(base, cardB64);
+        settings.lastCloudSha[`${base}/character.png`] = localCardSha;
+    }
+    if (worldName) await __uploadWorldFor(charName, worldName, primary ? `${base}/world.json` : `${base}/cards/${entry.id}.world.json`, entry);
+    await __cardsSave(charName, idx);
     saveSettingsDebounced();
     return true;
 }
 
+// 上传世界书（卡级）：主卡写老路径 world.json；非主卡写 cards/<id>.world.json（同名卡各绑不同世界书也不会互相覆盖）
+async function __uploadWorldFor(charName, worldName, wp, entry) {
+    const wc = await getWorldContent(worldName);
+    if (!wc) return;
+    const wCloud = await Gitee.getText(wp);
+    const rememberSha = settings.lastCloudSha ? settings.lastCloudSha[wp] : undefined;
+    const dec = decideWorldUpload(wc, wCloud, rememberSha);
+    if (dec.action === 'upload') {
+        await Gitee.putText(wp, wc, wCloud?.sha, `sync world ${worldName}`);
+        settings.lastCloudSha[wp] = (await Gitee.getText(wp)).sha;
+        if (entry) { entry.world = wp.slice(`sync/${charName}/`.length); entry.worldName = worldName; }
+        console.log(`[chat-sync] 世界书「${worldName}」已上传云端`);
+    } else if (dec.action === 'skip') {
+        console.log(`[chat-sync] 世界书「${worldName}」已与云端一致, 跳过`);
+        settings.lastCloudSha[wp] = wCloud.sha;
+        if (entry) { entry.world = wp.slice(`sync/${charName}/`.length); entry.worldName = worldName; }
+    } else { // skipCloudEdited
+        console.warn(`[chat-sync] 世界书「${worldName}」云端在上次同步后已被修改, 跳过覆盖(保留云端更新版)`);
+    }
+}
+
+// 把云端的 character.png（老数据 / 旧版本产物）登记成一条卡记录，并补一份权威副本 cards/<id>.png。
+// 传入的 localB64 只有确认"正在上传的就是这张老卡"（sha 相同）时才会被复用，避免把新卡内容当成老卡。
+async function __legacyMaterialize(charName, idx, localB64, localSha) {
+    const base = `sync/${charName}`;
+    const entries = await Gitee.listEntries(base).catch(() => []);
+    const single = entries.find((e) => e.type === 'file' && e.name === 'character.png');
+    const hasMan = entries.some((e) => e.type === 'file' && e.name === 'character.png.manifest.json');
+    if (!single && !hasMan) return null;
+    const id = __cardIdGen();
+    const entry = { id, file: `cards/${id}.png`, hint: '', name: charName, sha: '', updated: '', mirror: true, legacy: true };
+    let b64 = '';
+    if (single && localSha && single.sha === localSha && localB64) b64 = localB64;
+    if (!b64) {
+        try { const got = await __cardGetSmart(base); b64 = (got && got.b64) || ''; } catch (e) { console.warn('[chat-sync] 读取老角色卡失败', e); }
+    }
+    if (!b64) return null;
+    await __cardPutSmart(`${base}/cards/${id}.png`, b64.replace(/\s/g, ''));
+    entry.sha = localSha && single && single.sha === localSha ? localSha : await __cardShaOfB64(b64);
+    entry.updated = new Date().toISOString();
+    idx.cards.push(entry);
+    console.log(`[chat-sync] 老角色卡「${charName}」已登记为卡片记录 id=${id}（权威副本 cards/${id}.png）`);
+    return entry;
+}
+
 // 取角色全部聊天列表（ST 官方接口；last_mes = 磁盘修改毫秒时间戳，用作增量粗筛）
-async function getCharChatFileNames(charName) {
-    const avatar = getAvatarFor(charName);
+async function getCharChatFileNames(charName, avatarHint) {
+    const avatar = getAvatarFor(charName, avatarHint);
     if (!avatar) return [];
     const r = await fetch('/api/characters/chats', {
         method: 'POST',
@@ -952,12 +1039,19 @@ async function getCharChatFileNames(charName) {
 }
 
 // 按角色名解析 avatar（批量操作任意角色时不依赖「当前打开的 characterId」）
-function getAvatarFor(charName) {
+function getAvatarFor(charName, avatarHint) {
     const c = ctx();
     // ST1.14-web: 传空时退回当前角色名 name2（官方 ST 的 characterId 可能未就绪）
     // 修正: name1=用户名, name2=角色名
     const target = charName || (c && c.name2) || '';
     if (c.characters && Array.isArray(c.characters)) {
+        // 0.13.0 卡级身份: 给了 avatar(卡面文件名) 就按它精确定位。
+        // 同名多卡时"按名找第一张"会张冠李戴(导出/读聊天都取到错的那张卡)。
+        if (avatarHint) {
+            const stemH = __stemOf(avatarHint);
+            const hitH = c.characters.find((x) => x && __stemOf(x.avatar) === stemH);
+            if (hitH) return __stemOf(hitH.avatar) + '.png';
+        }
         // 0.12.63 先按当前 characterId 精确匹配——同名角色存在多个实例(如两个"祝惊安": 祝惊安.png/祝惊安1.png),
         // find 只取第一个同名, 但当前聊天可能属于另一个同名实例(不同头像目录), 取错头像→读聊天为空
         const cur = c.characters?.[c.characterId];
@@ -969,12 +1063,304 @@ function getAvatarFor(charName) {
     return '';
 }
 
+// ===================== 卡级身份（v0.13.0：同名角色卡不再互相覆盖） =====================
+// 背景：云端原按「角色名」归档，多张同名卡(张三.png/张三1.png/张三2.png)全挤进 sync/<名>/ 互相覆盖。
+// 模型：本地卡身份 = avatar 文件名（ST 保证唯一：src/endpoints/characters.js getPngName 同名自动加序号）
+//       云端卡身份 = cardId（写进 sync/<名>/cards.json）
+// 兼容：名字下只有一张卡时一切照旧（不产 cards.json、不多传文件、路径不变）；只有「名字下 ≥2 张卡」才启用卡级模式。
+const __cardsCache = Object.create(null); // { 名字: { idx, sha, ts } }
+
+function __stemOf(avatar) { return String(avatar || '').replace(/\.png$/i, ''); }
+function __cardIdGen() { return (Math.random().toString(16).slice(2, 10) + '00000000').slice(0, 8); }
+function __cardsPath(charName) { return `sync/${charName}/cards.json`; }
+// 云端某条卡记录的完整路径（entry.file 相对角色目录，如 cards/ab12cd34.png）
+function __entryPath(charName, entry) { return `sync/${charName}/${(entry && entry.file) || 'character.png'}`; }
+
+// 名字下本地全部卡（含同名多张，保持 characters 数组顺序）
+function __cardsNamed(charName) {
+    return (ctx().characters || []).filter((x) => x && x.name === charName && x.avatar);
+}
+// 按卡面文件名取角色对象（0.13.0 卡级定位的统一入口）
+function __charByAvatar(avatar) {
+    const stem = __stemOf(avatar);
+    if (!stem) return null;
+    return (ctx().characters || []).find((x) => x && __stemOf(x.avatar) === stem) || null;
+}
+// 本机「卡面 → cardId」绑定（换设备/重装后靠内容 sha 自愈）
+function __cardBindOf(avatar) {
+    const stem = __stemOf(avatar);
+    if (!settings.cardBind) settings.cardBind = {};
+    return stem ? (settings.cardBind[stem] || null) : null;
+}
+function __cardBindSet(avatar, id) {
+    const stem = __stemOf(avatar);
+    if (!stem || !id) return;
+    if (!settings.cardBind) settings.cardBind = {};
+    if (settings.cardBind[stem] !== id) { settings.cardBind[stem] = id; saveSettingsDebounced(); }
+}
+function __cardBindClear(avatar) {
+    const stem = __stemOf(avatar);
+    if (!stem || !settings.cardBind || settings.cardBind[stem] === undefined) return;
+    delete settings.cardBind[stem];
+    saveSettingsDebounced();
+}
+// 「待确认配对」标记：拿不准是哪张卡时**不写云端**，让用户在界面上点一下选（绝不猜、绝不覆盖）
+function __cardPendingOf(charName, avatar) {
+    const st = ((settings.cardPending || {})[String(charName)] || {})[__stemOf(avatar)];
+    return st || null;
+}
+function __cardPendingMark(charName, avatar, reason) {
+    if (!settings.cardPending) settings.cardPending = {};
+    const k = String(charName);
+    if (!settings.cardPending[k]) settings.cardPending[k] = {};
+    settings.cardPending[k][__stemOf(avatar)] = { reason: reason || 'ambiguous', ts: Date.now() };
+    saveSettingsDebounced();
+}
+function __cardPendingClear(charName, avatar) {
+    const k = String(charName);
+    if (!settings.cardPending || !settings.cardPending[k]) return;
+    delete settings.cardPending[k][__stemOf(avatar)];
+    if (!Object.keys(settings.cardPending[k]).length) delete settings.cardPending[k];
+    saveSettingsDebounced();
+}
+
+// 云端卡索引：无 cards.json → null（老数据/单卡用户，走老路径）；损坏 → 也按 null（绝不猜）
+async function __cardsLoad(charName, force) {
+    const key = String(charName || '');
+    if (!key) return null;
+    const hit = __cardsCache[key];
+    if (!force && hit && Date.now() - hit.ts < 60000) return hit.idx;
+    let idx = null, sha = null;
+    try {
+        const c = await Gitee.getText(__cardsPath(key));
+        if (c && c.content) {
+            sha = c.sha;
+            const p = JSON.parse(c.content);
+            if (p && Array.isArray(p.cards)) idx = p;
+        }
+    } catch { /* 无索引/解析失败 → 按无索引处理 */ }
+    if (idx) { idx.chatOwners = idx.chatOwners || {}; idx.v = idx.v || 1; }
+    __cardsCache[key] = { idx, sha, ts: Date.now() };
+    return idx;
+}
+function __cardsDropCache(charName) { delete __cardsCache[String(charName || '')]; }
+async function __cardsSave(charName, idx) {
+    const key = String(charName || '');
+    idx.v = 1;
+    idx.cards = Array.isArray(idx.cards) ? idx.cards : [];
+    idx.chatOwners = idx.chatOwners || {};
+    idx.updated = new Date().toISOString();
+    const prev = await Gitee.getText(__cardsPath(key)).catch(() => null);
+    await Gitee.putText(__cardsPath(key), JSON.stringify(idx, null, 2), prev && prev.sha ? prev.sha : undefined, `cards index ${key}`);
+    const after = await Gitee.getText(__cardsPath(key)).catch(() => null);
+    __cardsCache[key] = { idx, sha: after ? after.sha : null, ts: Date.now() };
+    return idx;
+}
+function __entryOf(idx, id) { return idx && Array.isArray(idx.cards) && id ? (idx.cards.find((c) => c.id === id) || null) : null; }
+// 卡级模式判定：本地同名 ≥2 张，或云端索引已有 ≥2 条（跨设备时也成立）
+function __isMultiCard(charName, idx) {
+    if (__cardsNamed(charName).length >= 2) return true;
+    return !!(idx && Array.isArray(idx.cards) && idx.cards.length >= 2);
+}
+// 本地卡的 git blob sha（传 base64 PNG）
+async function __cardShaOfB64(b64) {
+    const bin = atob(String(b64).replace(/\s/g, ''));
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return await gitBlobSha(u8);
+}
+// 云端某条卡记录当前的真实 sha（单文件取列表 sha；分块卡取 manifest 的 chunks:chars 指纹）
+function __entryCloudSha(entries, entry) {
+    const file = (entry && entry.file) || 'character.png';
+    const single = (entries || []).find((e) => e.type === 'file' && e.name === file);
+    if (single) return single.sha;
+    const man = (entries || []).find((e) => e.type === 'file' && e.name === `${file}.manifest.json`);
+    return man ? ('chunked:' + man.sha) : null;
+}
+// 解析「本地这张卡」在云端对应的记录：
+//   { id, entry }        命中（绑定 / 内容 sha 认领 / 名字下唯一一张卡的旧行为）
+//   { createNew: true }  云端该名字下没有这条记录 → 新建
+//   { pending: true }    认不出 → 不写云端，交用户在界面上确认
+async function __resolveCard(charName, avatar, localSha, idxIn) {
+    const idx = idxIn === undefined ? await __cardsLoad(charName) : idxIn;
+    const stem = __stemOf(avatar);
+    const cards = idx && Array.isArray(idx.cards) ? idx.cards : [];
+    const boundId = __cardBindOf(avatar);
+    if (boundId) {
+        const e = __entryOf(idx, boundId);
+        if (e) return { id: e.id, entry: e, primary: idx.primary === e.id, idx };
+        __cardBindClear(avatar); // 绑定失效（云端那条已没了）→ 清掉重新认
+    }
+    if (localSha && stem) {
+        const cands = cards.filter((c) => c.sha && c.sha === localSha);
+        if (cands.length) {
+            const taken = new Set(Object.values(settings.cardBind || {}));
+            const pick = cands.find((c) => !taken.has(c.id)) || cands[0];
+            if (pick.id) __cardBindSet(avatar, pick.id);
+            return { id: pick.id, entry: pick, primary: idx.primary === pick.id, idx, claimedBySha: true };
+        }
+    }
+    // 云端条目是不是已经全被本机别的同名卡认领了？——是 → 这张卡一定是"还没上传过的新卡"（如同名卡的第 2、3 张）
+    const claimed = new Set(Object.values(settings.cardBind || {}).filter((id) => __entryOf(idx, id)));
+    const unclaimed = cards.filter((c) => !claimed.has(c.id));
+    if (!cards.length || !unclaimed.length) return { createNew: true, idx };
+    if (cards.length === 1 && __cardsNamed(charName).length === 1) {
+        // 名字下唯一一张卡（老数据/单卡用户）→ 就是它，允许更新覆盖（与 0.12.x 行为一致）
+        const e = cards[0];
+        if (e.id) __cardBindSet(avatar, e.id);
+        return { id: e.id, entry: e, primary: true, idx, legacySingle: true };
+    }
+    return { pending: true, reason: 'ambiguous', idx };
+}
+
+// 本机某张卡在云端的 cardId（绑定优先 → 单条索引 → 内容 sha 认领）。单卡名字返回 ''（不维护归属，保持老数据干净）
+const __cardIdCache = Object.create(null);
+async function __cardIdForAvatar(charName, avatar) {
+    const stem = __stemOf(avatar);
+    if (!stem) return '';
+    const hit = __cardIdCache[stem];
+    if (hit && Date.now() - hit.ts < 60000) return hit.id;
+    let id = '';
+    const idx = await __cardsLoad(charName);
+    const bound = __cardBindOf(avatar);
+    if (bound && __entryOf(idx, bound)) id = bound;
+    if (!id && idx && idx.cards.length === 1 && idx.cards[0].id && __cardsNamed(charName).length === 1) id = idx.cards[0].id;
+    if (!id && idx && idx.cards.length) {
+        try {
+            const sha = await __cardShaOfB64(await getCharacterCardB64(charName, avatar));
+            const e = idx.cards.find((c) => c.sha && c.sha === sha);
+            if (e && e.id) { id = e.id; __cardBindSet(avatar, id); }
+        } catch { }
+    }
+    __cardIdCache[stem] = { id, ts: Date.now() };
+    return id;
+}
+// 记一次聊天归属（只有名字下 ≥2 张卡时才维护，单卡用户不产生额外文件）
+async function __chatOwnerSet(charName, cloudFileName, cardId) {
+    if (!cardId || !cloudFileName) return;
+    const idx = await __cardsLoad(charName, true);
+    if (!idx || !Array.isArray(idx.cards) || !idx.cards.length) return;
+    if (!__isMultiCard(charName, idx)) return; // 单卡名字不记归属（保持老数据干净）
+    idx.chatOwners = idx.chatOwners || {};
+    if (idx.chatOwners[cloudFileName] === cardId) return;
+    idx.chatOwners[cloudFileName] = cardId;
+    await __cardsSave(charName, idx);
+}
+// 安全弹窗：ST 里 Popup 未必是全局（window.Popup 可能 undefined 且裸标识符不存在）→ 取不到就退回原生 confirm
+function __csPopup() {
+    try { if (typeof window !== 'undefined' && window.Popup) return window.Popup; } catch { }
+    try { if (typeof Popup !== 'undefined' && Popup) return Popup; } catch { }
+    return null;
+}
+async function __csPopupChoice(title, html, buttons, defaultResult) {
+    const P = __csPopup();
+    if (P && P.show && typeof P.show.confirm === 'function') {
+        try { return await P.show.confirm(title, html, { defaultResult, okButton: false, cancelButton: false, customButtons: buttons }); }
+        catch (e) { console.warn('[chat-sync] 弹窗异常，按默认项继续', e); return defaultResult; }
+    }
+    try { return window.confirm(String(title) + '\n' + String(html).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')) ? defaultResult : 4999; }
+    catch { return 4999; }
+}
+// 老聊天认领：先按「本机各同名卡的聊天文件名」自动匹配；认不出的问一次（默认主卡），用户可跳过
+async function __askLegacyOwner(charName, idx, count) {
+    const cards = (idx && idx.cards) || [];
+    if (!cards.length || !count) return '';
+    const asked = (window.__csLegacyOwnerAsked = window.__csLegacyOwnerAsked || {});
+    if (asked[charName] !== undefined) return asked[charName];
+    const opts = cards.slice(0, 4).map((c, i) => ({ c, i }));
+    const buttons = opts.map(({ c, i }) => ({
+        text: `${i + 1}. ${c.hint ? __stemOf(c.hint) : c.id}${idx.primary === c.id ? '（主卡）' : ''}`,
+        result: 4000 + i, classes: [idx.primary === c.id ? 'popup-button-ok' : 'popup-button-cancel'],
+    }));
+    buttons.push({ text: '⏭ 跳过这些聊天（不导入）', result: 4999, classes: ['popup-button-cancel'] });
+    const choice = await __csPopupChoice('❓ 这些老聊天属于哪张卡？',
+        `云端有 <b>${count}</b> 条聊天是旧版本上传的（没记归属），而这个角色名下有 <b>${cards.length}</b> 张同名卡。<br>请选它们属于哪一张（选错不影响卡，只影响聊天落到哪张卡下）：`,
+        buttons, 4000);
+    const picked = (choice >= 4000 && choice < 4000 + opts.length) ? (opts[choice - 4000].c.id || '') : '';
+    asked[charName] = picked;
+    return picked;
+}
+// 把云端聊天按归属分给某张卡，返回「这张卡该导入的文件列表」
+async function __filterChatsForCard(charName, fileList, cardId, avatar) {
+    const idx = await __cardsLoad(charName);
+    if (!idx || !Array.isArray(idx.cards) || !fileList.length) return fileList;
+    // 本地同名 ≥2 张也算卡级（云端可能只剩 1 条，但本地仍是多张同名卡 → 归属必须继续过滤）
+    if (!__isMultiCard(charName, idx)) return fileList;
+    const mine = [], unassigned = [];
+    for (const f of fileList) {
+        const owner = (idx.chatOwners || {})[f] || '';
+        if (!owner) unassigned.push(f);
+        else if (owner === cardId) mine.push(f);
+    }
+    if (unassigned.length) {
+        // ① 自动认领：本机某张同名卡的聊天目录里有同名文件 → 判给它
+        const claims = {};
+        for (const c of idx.cards) {
+            const av = c.hint ? __stemOf(c.hint) + '.png' : '';
+            if (!av || !__charByAvatar(av)) continue;
+            try {
+                const names = new Set((await getCharChatFileNames(charName, av)).map((x) => x.file_name));
+                for (const f of unassigned) if (!claims[f] && names.has(f)) claims[f] = c.id;
+            } catch { }
+        }
+        const rest = unassigned.filter((f) => !claims[f]);
+        let fallback = '';
+        if (rest.length) fallback = await __askLegacyOwner(charName, idx, rest.length);
+        for (const f of unassigned) {
+            const owner = claims[f] || fallback || '';
+            if (!owner) continue;
+            idx.chatOwners = idx.chatOwners || {};
+            idx.chatOwners[f] = owner;
+            if (owner === cardId) mine.push(f);
+        }
+        if (Object.keys(claims).length || fallback) { try { await __cardsSave(charName, idx); } catch (e) { console.warn('[chat-sync] 写回聊天归属失败', e); } }
+    }
+    return mine;
+}
+
+// ── 卡级选择键：本地卡 'L:<卡面stem>'；云端卡 'C:<名字>#<cardId>'（老数据为 'C:<名字>#character.png'）──
+function __cardKeyLocal(avatar) { return 'L:' + __stemOf(avatar); }
+function __cardKeyCloud(name, idOrFile) { return 'C:' + name + '#' + (idOrFile || 'character.png'); }
+function __parseCardKey(k) {
+    const s = String(k || '');
+    if (s.startsWith('L:')) {
+        const ch = __charByAvatar(s.slice(2));
+        return ch ? { kind: 'local', name: ch.name, avatar: __stemOf(ch.avatar) + '.png' } : null;
+    }
+    if (s.startsWith('C:')) {
+        const rest = s.slice(2);
+        const i = rest.lastIndexOf('#');
+        const name = i >= 0 ? rest.slice(0, i) : rest;
+        const idOrFile = i >= 0 ? rest.slice(i + 1) : 'character.png';
+        return { kind: 'cloud', name, cardId: idOrFile === 'character.png' ? '' : idOrFile, legacy: idOrFile === 'character.png' };
+    }
+    return s ? { kind: 'name', name: s } : null; // 兼容旧值（纯角色名）
+}
+// 同名卡显示名：名字 +（卡面 xxx）
+function __labelForCard(name, avatar) {
+    const dup = __cardsNamed(name).length > 1;
+    return dup && avatar ? `${name}（卡面 ${__stemOf(avatar)}）` : name;
+}
+// 云端某条卡记录 → 本机对应的卡（绑定优先，其次 hint；都没有返回 ''）
+function __localAvatarForCardId(name, cardId) {
+    const same = __cardsNamed(name);
+    if (!same.length) return '';
+    if (cardId) {
+        const bound = same.find((c) => __cardBindOf(c.avatar) === cardId);
+        if (bound) return __stemOf(bound.avatar) + '.png';
+        const cached = __cardsCache[String(name)] && __cardsCache[String(name)].idx;
+        const e = cached ? __entryOf(cached, cardId) : null;
+        if (e && e.hint) { const hit = same.find((c) => __stemOf(c.avatar) === __stemOf(e.hint)); if (hit) return __stemOf(hit.avatar) + '.png'; }
+    }
+    return '';
+}
+
 // 读单个聊天内容并转成标准 ST jsonl（保留完整字段，避免字段丢失）
 // 注意：不要只挑少数字段重序列化——ST/TT 的 jsonl 首行 header 带 chat_metadata/user_name/character_name，
 // 消息行带 name/is_user/send_date/mes/swipes/swipe_id/extra/chat_metadata 等。这里把后端返回的消息对象
 // 按原字段 json 化，尽量保真（不再丢 chat_metadata / swipe_info / disable_date / bookmark 等）。
-async function getChatContent(fileName, charName) {
-    const avatar = getAvatarFor(charName || '');
+async function getChatContent(fileName, charName, avatarHint) {
+    const avatar = getAvatarFor(charName || '', avatarHint);
     const name = charName || (ctx().characters?.[ctx().characterId]?.name) || (ctx().name2) || ''; // 末尾退回角色名 name2（修正: name1 是用户名）
     const r = await fetch('/api/chats/get', {
         method: 'POST',
@@ -1021,7 +1407,7 @@ async function getChatContent(fileName, charName) {
 const UPLOAD_CONCURRENCY = 1; // 保留：写仓串行的窗口大小(恒1)。实测并发写必踩400 → 阶段B按 plan 顺序一个接一个 putText。
 // 单聊天「读+冲突决策+算好要写文本」→ 返回 job 或 null(跳过)。被 exportChats 阶段A 并行(或 __benchSerial 时串行)调用。
 // 只读不写; 跳过/新增只记 skipped 或返回 job 由阶段B串行写。
-async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuard, skipped) {
+async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuard, skipped, avatar = '') {
     const item = chatItems.find((x) => x.file_name === plan.localName);
     if (!item) return null;
     const p = plan.path;
@@ -1043,7 +1429,7 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
     }
     return { plan, p, text: chatText, cloudSha: undefined, cloud: null, decision: 'new' };
 }
-async function exportChats(charName, chatItems, preDecisions = null) {
+async function exportChats(charName, chatItems, preDecisions = null, avatar = '') {
     const uploaded = [];
     const skipped = [];
     // 并发写盘时绝不现场弹窗（避免多窗叠加）：无 preDecisions 的差异一律按「覆盖」处理。
@@ -1060,10 +1446,10 @@ async function exportChats(charName, chatItems, preDecisions = null) {
     const jobs = benchSerial
         ? await (async () => {
             const out = [];
-            for (const plan of plans) out.push(await readJobForPlan(plan, chatItems, charName, preDecisions, batchGuard, skipped));
+            for (const plan of plans) out.push(await readJobForPlan(plan, chatItems, charName, preDecisions, batchGuard, skipped, avatar));
             return out;
         })()
-        : await Promise.all(plans.map(async (plan) => readJobForPlan(plan, chatItems, charName, preDecisions, batchGuard, skipped)));
+        : await Promise.all(plans.map(async (plan) => readJobForPlan(plan, chatItems, charName, preDecisions, batchGuard, skipped, avatar)));
     // ── 阶段B：串行写 Gitee（严格保序 + 单写不 400），每个聊天先处理「另行保存」再覆盖主 ──
     for (const job of jobs) {
         if (!job) continue;
@@ -1071,7 +1457,7 @@ async function exportChats(charName, chatItems, preDecisions = null) {
         if (plans.length > 1) { setStatus(`正在同步角色「${charName}」聊天：${++doneCount}/${plans.length}…`); showBusy(doneCount, plans.length, `上传 ${charName}`); }
         // save_elsewhere → 先【另行保存】：把云端当前内容另存到新云端路径(两边都留)，再覆盖为主
         if (decision === 'save_elsewhere' && cloud) {
-            const backupPath = p.replace(/\\.jsonl$/i, `-另行保存-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.jsonl`);
+            const backupPath = p.replace(/\.jsonl$/i, `-另行保存-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.jsonl`);
             try {
                 const bakCloud = await Gitee.getText(backupPath);
                 await Gitee.putText(backupPath, cloud.content, bakCloud?.sha, `另行保存(上传冲突) ${plan.localName}`);
@@ -1090,6 +1476,11 @@ async function exportChats(charName, chatItems, preDecisions = null) {
     const listCloud = await Gitee.getText(listPath);
     await Gitee.putText(listPath, JSON.stringify({ files: listNames }, null, 2), listCloud?.sha, 'chat list');
     settings.lastCloudSha[listPath] = (await Gitee.getText(listPath)).sha;
+    // 0.13.0 卡级归属：记下这些聊天属于哪张卡（同名卡各导各的，导入时不会串卡）
+    try {
+        const cid = avatar ? await __cardIdForAvatar(charName, avatar) : '';
+        if (cid) for (const plan of plans) { if (uploaded.includes(plan.localName)) await __chatOwnerSet(charName, plan.path.split('/').pop(), cid); }
+    } catch (e) { console.warn('[chat-sync] 记录聊天归属失败(忽略)', e); }
     saveSettingsDebounced();
     return { uploaded, skipped };
 }
@@ -1131,19 +1522,30 @@ async function pushAuto() {
 async function pushCurrentCharacter(charName, opts = {}) {
     const name = charName || currentCharName();
     if (!name) { toastr.warning('当前没有打开的单人角色聊天，或未指定要上传的角色'); throw new Error('未指定角色'); }
-    if (!getAvatarFor(name)) { const e = new Error('找不到本地角色「' + name + '」'); toastr.error(e.message); throw e; }
+    // 0.13.0 卡级：给了 avatar 就按卡面精确定位——同名多卡时"按名取第一张"会传错卡
+    const avatar = getAvatarFor(name, opts.avatar);
+    if (!avatar) { const e = new Error('找不到本地角色「' + name + '」'); toastr.error(e.message); throw e; }
+    const label = __cardsNamed(name).length > 1 ? `${name}（卡面 ${__stemOf(avatar)}）` : name;
     // 锁外预扫上传冲突（弹窗在拿锁前完成，避免弹窗持锁卡死其他同步）：传入空 Map 供收集
     const preDecisions = new Map();
-    const chatItems0 = await getCharChatFileNames(name);
-    await preResolveUploadConflicts(name, chatItems0, preDecisions, (opts && opts.presetDecision) || null);
+    const chatItems0 = await getCharChatFileNames(name, avatar);
+    await preResolveUploadConflicts(name, chatItems0, preDecisions, (opts && opts.presetDecision) || null, avatar);
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中，本次跳过，稍后再试'); return false; }
     try {
-        const worldName = (name === (currentCharName() || '')) ? currentWorldName() : ((getContext().characters.find((x) => x.name === name) || {}).data?.extensions?.world || '');
-        showBusy(0, 0, `上传 ${name}`);
-        await exportCharacter(name, worldName);
-        const chatItems = chatItems0 || await getCharChatFileNames(name);
-        const { uploaded, skipped } = await exportChats(name, chatItems, preDecisions);
-        const msg = `已同步角色「${name}」：卡 + ${worldName ? '世界书 + ' : ''}${uploaded.length} 个聊天已同步${skipped.length ? `，${skipped.length} 个已是最新` : ''} ✅`;
+        // 世界书：按「这张卡」取绑定（同名多卡各绑不同世界书时，原来 find 名字会取到第一张的世界书）
+        const cur = getContext().characters?.[getContext().characterId];
+        const isCur = cur && __stemOf(cur.avatar) === __stemOf(avatar);
+        const worldName = isCur ? (currentWorldName() || '') : (((__charByAvatar(avatar) || {}).data?.extensions?.world) || '');
+        showBusy(0, 0, `上传 ${label}`);
+        try {
+            await exportCharacter(name, worldName, { avatar });
+        } catch (e) {
+            if (e && e.csPending) { toastr.warning(e.message); return false; } // 待确认配对 = 跳过，不算失败
+            throw e;
+        }
+        const chatItems = chatItems0 || await getCharChatFileNames(name, avatar);
+        const { uploaded, skipped } = await exportChats(name, chatItems, preDecisions, avatar);
+        const msg = `已同步角色「${label}」：卡 + ${worldName ? '世界书 + ' : ''}${uploaded.length} 个聊天已同步${skipped.length ? `，${skipped.length} 个已是最新` : ''} ✅`;
         toastr.success(msg);
         return true;
     } catch (e) {
@@ -1160,23 +1562,27 @@ async function pushAllCharacters(skipConfirm = false, presetDecision = null) {
     if (window.__csAllPushRunning) { toastr.warning('全部角色上传已在进行中，本次忽略'); return; }
     window.__csAllPushRunning = true;
     try {
+    // 0.13.0：遍历「卡」而不是「名字」——同名多卡会被展开成多条，各传各的（原先两张同名卡都会解析到第一张）
     const chars = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group'));
     const total = chars.length;
     if (!total) { toastr.warning('本地没有可上传的角色'); return; }
+    const dupNames = new Set(chars.map((x) => x.name).filter((n, i, a) => a.indexOf(n) !== i));
     // 防误点：全部级操作先确认一次（增量机制会跳过已最新的，不会重复上传）
-    if (!await csConfirm('⚠ 上传全部角色', `将把本地 <b>${total}</b> 个角色同步到云端（内容一致的会自动跳过，不会重复上传）。<br>确定开始吗？`)) return;
+    if (!await csConfirm('⚠ 上传全部角色', `将把本地 <b>${total}</b> 张角色卡同步到云端（内容一致的会自动跳过，不会重复上传）。${dupNames.size ? `<br>其中 <b>${dupNames.size}</b> 个名字有多张卡（同名卡），会按卡面分开各存各的。` : ''}<br>确定开始吗？`)) return;
     setStatus(`正在同步全部角色：0/${total}…`);
     let ok = 0, fail = 0, skipped = 0;
     const failedNames = []; const skippedNames = [];
     for (let i = 0; i < total; i++) {
         const name = chars[i].name;
-        setStatus(`正在同步全部角色：${i + 1}/${total}（${name}）…`);
-        showBusy(i + 1, total, `正在上传全部角色「${name}」`); // 0.12.134 进度卡片名带上当前角色
+        const avatar = __stemOf(chars[i].avatar) + '.png';
+        const label = dupNames.has(name) ? `${name}（卡面 ${__stemOf(avatar)}）` : name;
+        setStatus(`正在同步全部角色：${i + 1}/${total}（${label}）…`);
+        showBusy(i + 1, total, `正在上传全部角色「${label}」`); // 0.12.134 进度卡片名带上当前角色
         try {
-            const r = await pushCurrentCharacter(name, { presetDecision });
-            if (r === false) { skipped++; skippedNames.push(name); } // 内部抢锁失败=被跳过, 如实计
+            const r = await pushCurrentCharacter(name, { presetDecision, avatar });
+            if (r === false) { skipped++; skippedNames.push(label); } // 内部抢锁失败/待确认配对=被跳过, 如实计
             else ok++;
-        } catch (e) { fail++; failedNames.push(name); console.warn('[chat-sync] 角色同步失败', name, e); setStatus(`角色「${name}」同步失败`); }
+        } catch (e) { fail++; failedNames.push(label); console.warn('[chat-sync] 角色同步失败', label, e); setStatus(`角色「${label}」同步失败`); }
     }
     setStatus('');
     toastr.success(`✅ 全部角色同步完成：成功 ${ok}，失败 ${fail}${skipped ? `，跳过 ${skipped}` : ''} / 共 ${total}${failedNames.length ? `（失败：${csShortList(failedNames)}）` : ''}${skippedNames.length ? `（跳过：${csShortList(skippedNames)}）` : ''}`);
@@ -1191,7 +1597,7 @@ async function importAllCharacters() {
     try { names = await Gitee.listDir('sync'); } catch (e) { toastr.error('读取云端角色失败：' + e.message); return; }
     if (!names || !names.length) { toastr.info('云端暂无角色可导入'); return; }
     // 防误点：全部级操作先确认一次（本地已最新的会自动跳过）
-    if (!await csConfirm('⚠ 导入全部云端角色', `将从云端导入 <b>${names.length}</b> 个角色（本地已有且内容一致的会自动跳过，不会重复刷）。<br>确定开始吗？`)) return;
+    if (!await csConfirm('⚠ 导入全部云端角色', `将从云端导入 <b>${names.length}</b> 个角色（同名卡会按卡面逐张导入；本地已有的一律跳过，不会重复刷、不会生成复制卡）。<br>确定开始吗？`)) return;
     const total = names.length;
     setStatus(`正在导入云端角色：0/${total}…`);
     showBusy(0, total, `导入全部云端角色`);
@@ -1213,24 +1619,43 @@ async function importAllCharacters() {
 // 部分角色上传：只上传用户勾选的角色（逐个按名字同步，不切换当前聊天/角色）
 // 支持 云端视图 场景：勾的是云端角色名 → 上传本地同名角色；本地没同名 → 记"跳过(本地无同名)"
 async function pushSelectedCharacters(charNames) {
-    const names = (charNames || []).filter(Boolean);
-    const total = names.length;
+    const selKeys = (charNames || []).filter(Boolean);
+    // 0.13.0：选中项是「卡键」('L:卡面' / 'C:名字#cardId')，展开成「卡」逐张上传；旧版纯名字值也兼容
+    const jobs = [];
+    for (const k of selKeys) {
+        const kk = __parseCardKey(k);
+        if (!kk) continue;
+        if (kk.kind === 'local') { jobs.push({ name: kk.name, avatar: kk.avatar, label: __labelForCard(kk.name, kk.avatar) }); continue; }
+        if (kk.kind === 'cloud') {
+            const av = __localAvatarForCardId(kk.name, kk.cardId);
+            const cs = __cardsNamed(kk.name);
+            if (av) { jobs.push({ name: kk.name, avatar: av, label: __labelForCard(kk.name, av) }); continue; }
+            if (cs.length) { for (const c of cs) { const av2 = __stemOf(c.avatar) + '.png'; jobs.push({ name: kk.name, avatar: av2, label: __labelForCard(kk.name, av2) }); } continue; }
+            jobs.push({ name: kk.name, avatar: '', label: kk.name });
+            continue;
+        }
+        const cs2 = __cardsNamed(kk.name);
+        if (!cs2.length) { jobs.push({ name: kk.name, avatar: '', label: kk.name }); continue; }
+        for (const c of cs2) { const av3 = __stemOf(c.avatar) + '.png'; jobs.push({ name: kk.name, avatar: av3, label: __labelForCard(kk.name, av3) }); }
+    }
+    const total = jobs.length;
     if (!total) { toastr.warning('未选择要上传的角色'); return; }
+    if (total > selKeys.length) setStatus(`选中项里有同名卡，已展开成 ${total} 张卡…`);
     setStatus(`正在上传选中角色：0/${total}…`);
     showBusy(0, total, `上传选中角色`);
     let ok = 0, fail = 0, skipLocal = 0;
     const skipReasons = []; // {name, reason}
     const failReasons = [];
     for (let i = 0; i < total; i++) {
-        const name = names[i];
-        setStatus(`正在上传选中角色：${i + 1}/${total}（${name}）…`);
+        const { name, avatar, label } = jobs[i];
+        setStatus(`正在上传选中角色：${i + 1}/${total}（${label}）…`);
         showBusy(i + 1, total, `上传选中角色`);
         // 本地没有这张卡（云端视图勾了云端名但本地无同名）→ 跳过并说明
-        if (!getAvatarFor(name)) { skipLocal++; skipReasons.push({ name, reason: '本地无同名角色' }); continue; }
+        if (!avatar) { skipLocal++; skipReasons.push({ name, reason: '本地无同名角色' }); continue; }
         try {
-            await pushCurrentCharacter(name);
-            ok++;
-        } catch (e) { fail++; failReasons.push({ name, reason: (e && e.message) || String(e) }); console.warn('[chat-sync] 角色上传失败', name, e); }
+            const r = await pushCurrentCharacter(name, { avatar });
+            if (r === false) { skipLocal++; skipReasons.push({ name: label, reason: '待确认配对或同步锁占用' }); } else ok++;
+        } catch (e) { fail++; failReasons.push({ name: label, reason: (e && e.message) || String(e) }); console.warn('[chat-sync] 角色上传失败', label, e); }
     }
     setStatus('');
     hideBusy();
@@ -1244,8 +1669,10 @@ async function pushSelectedCharacters(charNames) {
 async function importSelectedCharacters(charNames) {
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中，本次跳过，稍后再试'); return; }
     try {
-    const names = (charNames || []).filter(Boolean);
-    const total = names.length;
+    // 0.13.0：选中项是「卡键」→ 只导入那一张卡（同名卡互不牵连）；旧版纯名字值兼容
+    const selKeys = (charNames || []).filter(Boolean);
+    const items = selKeys.map((k) => __parseCardKey(k)).filter(Boolean);
+    const total = items.length;
     if (!total) { toastr.warning('未选择要导入的云端角色'); return; }
     // 记住导入前的当前角色，批量结束后恢复（TT 批量内会用 loadImportedChat 每个角色切一次来落盘 .chat）
     let prevCharIdx = undefined;
@@ -1255,15 +1682,20 @@ async function importSelectedCharacters(charNames) {
     let ok = 0, fail = 0, skipCloud = 0;
     const failedNames = []; const failedReasons = []; const skipCloudNames = [];
     for (let i = 0; i < total; i++) {
-        const name = names[i];
-        setStatus(`正在导入选中角色：${i + 1}/${total}（${name}）…`);
+        const it = items[i];
+        const name = it.name;
+        let label = it.avatar ? __labelForCard(name, it.avatar) : name;
+        try {
+            if (it.kind === 'cloud' && it.cardId) { const idx = await __cardsLoad(name); const e = idx ? __entryOf(idx, it.cardId) : null; if (e && e.hint) label = `${name}（卡面 ${__stemOf(e.hint)}）`; }
+        } catch { }
+        setStatus(`正在导入选中角色：${i + 1}/${total}（${label}）…`);
         showBusy(i + 1, total, `导入选中角色`);
         try {
-            const r = await importCharFromCloud(name, { noJump: true });
+            const r = await importCharFromCloud(name, { noJump: true, cardId: it.cardId || '', avatar: it.avatar || '' });
             if (r && r.skippedNoCloud) { skipCloud++; skipCloudNames.push(name); }
             else ok++;
         }
-        catch (e) { fail++; failedNames.push(name); failedReasons.push({ name, reason: (e && e.message) || String(e) }); console.warn('[chat-sync] 导入失败', name, e); }
+        catch (e) { fail++; failedNames.push(label); failedReasons.push({ name: label, reason: (e && e.message) || String(e) }); console.warn('[chat-sync] 导入失败', label, e); }
     }
     // 批量结束：恢复导入前的当前角色（避免 TT 批量落盘 .chat 时切到最后一个导入角色）
     try {
@@ -1493,6 +1925,11 @@ async function pullCharacterChats(charName) {
         const cur = currentChatFileName();
         if (cur) fileNameList = [cur];
     }
+    // 0.13.0 卡级归属：同名多卡时只拉属于当前这张卡的聊天
+    if (fileNameList.length && avatar) {
+        try { fileNameList = await __filterChatsForCard(charName, fileNameList, await __cardIdForAvatar(charName, avatar), avatar); }
+        catch (e) { console.warn('[chat-sync] 聊天归属过滤失败(按不过滤继续)', e); }
+    }
     if (fileNameList.length === 0) { toastr.info(`云端没有 ${charName} 的聊天`); return; }
 
     let importedCount = 0, skipped = 0;
@@ -1597,9 +2034,10 @@ async function pushCurrentChat() {
     if (!charName) { toastr.warning('当前没有打开的单人角色'); return; }
     const localName = currentChatFileName();
     if (!localName) { toastr.warning('无法确定当前聊天'); return; }
+    const curAvatar = ctx().characters?.[ctx().characterId]?.avatar || '';
     const p = cloudPathOfLocal(charName, localName) || `sync/${charName}/chats/${localName.replace(/[\\\\/\\\\]/g, '_')}`;
     // 锁外预扫冲突抉择（弹窗在拿锁前完成，避免弹窗持锁卡死其他同步）
-    const chatText = await getChatContent(localName, charName);
+    const chatText = await getChatContent(localName, charName, curAvatar);
     if (!chatText) { toastr.warning('读取当前聊天失败'); return; }
     const cloud = await getCloudChat(p);
     const localMsgs = parseJsonlMessages(chatText);
@@ -1629,7 +2067,7 @@ async function pushCurrentChat() {
         }
         settings.lastCloudSha[p] = newSha || settings.lastCloudSha[p]; // 分段时=manifest sha
         setLocalName(charName, p, localName);
-        await upsertCloudChatList(charName, localName); // 单条/自动上传也补维护云端清单(修复: 否则其它设备枚举不到本聊天)
+        await upsertCloudChatList(charName, localName, curAvatar); // 单条/自动上传也补维护云端清单+卡级归属
         saveSettingsDebounced();
     hideBusy(); // 0.12.64: 内部成功路径也清浮层(自动上传 pushAuto 不走按钮 handler)
     setStatus('');
@@ -1891,7 +2329,11 @@ async function persistChatPointerStt(charName, cardAvatar, chatStem) {
             resp = await fetch('/api/characters/edit', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(body) });
         }
         // 内存同步
-        const idx = (getContext().characters || []).findIndex(x => (x.name || '') === charName || String(x.avatar || '').replace(/\\.png$/,'') === String(cardAvatar || '').replace(/\\.png$/,''));
+        // 0.13.0：avatar 优先——同名卡按名字先匹配会指到第一张（写错卡的 .chat 指针）
+        const __av0 = String(cardAvatar || '').replace(/\.png$/, '');
+        const idx = (getContext().characters || []).findIndex(x => __av0
+            ? String(x.avatar || '').replace(/\.png$/, '') === __av0
+            : (x.name || '') === charName);
         if (idx >= 0) getContext().characters[idx].chat = stem;
         if (resp.ok) { console.log(`[chat-sync] 已服务端持久化「${charName}」.chat → ${stem}`); return true; }
         console.warn('[chat-sync] /api/characters/edit 持久化 .chat 失败', resp.status);
@@ -2071,8 +2513,8 @@ async function deleteBothSidesWorldbooks(names) {
 // ============ 聊天记录清理器（2026-08-23 用户需求：选角色→列历史(预览/时间)→勾选→本地+云端同名同删） ============
 // 列出某角色 本地+云端 全部聊天（本地走官方 /api/characters/chats 一次拿全: 楼数/大小/最后一楼预览/mtime；
 // 云端走目录列表拿 name/size/sha；按文件名对齐，同名=双端都有）
-async function listCleanerRows(charName) {
-    const avatar = getAvatarFor(charName);
+async function listCleanerRows(charName, avatarHint) {
+    const avatar = getAvatarFor(charName, avatarHint);
     let localRows = [];
     if (avatar) {
         try {
@@ -2081,8 +2523,18 @@ async function listCleanerRows(charName) {
         } catch { }
     }
     const cloudEntries = await Gitee.listEntries(`sync/${charName}/chats`).catch(() => []);
+    // 0.13.0 卡级：同名多卡时，云端只列「属于这张卡」的聊天（归属未知的老聊天照列，避免"看不见"）
+    let ownedSet = null;
+    try {
+        const idxC = await __cardsLoad(charName);
+        if (idxC && Array.isArray(idxC.cards) && idxC.cards.length > 1 && avatarHint) {
+            const cidC = await __cardIdForAvatar(charName, avatarHint);
+            const owners = idxC.chatOwners || {};
+            ownedSet = new Set(cloudEntries.filter((c) => c.type === 'file' && (!owners[c.name] || owners[c.name] === cidC)).map((c) => c.name));
+        }
+    } catch { }
     const byName = new Map();
-    for (const c of cloudEntries) if (c.type === 'file' && !/\.p\d{3}\.jsonl$/i.test(c.name) && !/\.manifest\.json$/i.test(c.name)) byName.set(c.name, { cloudSize: c.size, where: 'cloud' });
+    for (const c of cloudEntries) if (c.type === 'file' && !/\.p\d{3}\.jsonl$/i.test(c.name) && !/\.manifest\.json$/i.test(c.name) && (!ownedSet || ownedSet.has(c.name))) byName.set(c.name, { cloudSize: c.size, where: 'cloud' });
     for (const l of localRows) {
         const e = byName.get(l.file_name);
         if (e) { e.local = l; e.where = 'both'; }
@@ -2132,8 +2584,8 @@ function previewAfterContent(mes) {
     if (j >= 0) t = t.slice(0, j);
     return t.trim();
 }
-async function getCleanerPreviewFull(charName, fileName) {
-    const avatar = getAvatarFor(charName);
+async function getCleanerPreviewFull(charName, fileName, avatarHint) {
+    const avatar = getAvatarFor(charName, avatarHint);
     let msgs = null;
     // 0.12.29 本地读取复用 readLocalChatMsgs(自动补.png——TT /api/chats/get 严格校验 avatar_url, 裸stem会返回空数组=读不到;
     // 内部已兼容两端返回形态)。此前裸 fetch 用未补.png 的 avatar → 本地有内容也"读不到"。
@@ -2164,7 +2616,7 @@ async function getCleanerPreviewFull(charName, fileName) {
     return { charName, fileName, mesCount: floors.length, floors, defIdx };
 }
 // 删除选中聊天：本地 /api/chats/delete + 云端 deleteFile + 更新 chat-list.json + 清 syncMap/lastCloudSha 记忆
-async function deleteChatsBothSides(charName, fileNames) {
+async function deleteChatsBothSides(charName, fileNames, avatarHint) {
     if (!Array.isArray(fileNames) || !fileNames.length) return null;
     // 0.12.133 逐条进度(每条涉及本地+云端多次请求, 可能耗时): 让用户知道删到第几条
     try { showBusy(0, fileNames.length, `正在删除「${charName}」的聊天`); } catch { }
@@ -2183,6 +2635,7 @@ async function deleteChatsBothSides(charName, fileNames) {
         try {
             const stem = String(fn).replace(/\.jsonl$/i, '');
             // 仅云端行不删本地(避免 File not found 噪音); 本地/双端才走本地删除
+            const __avCln = avatarHint || window.__clnAvatar || '';
             const rowInfo = (window.__clnRows || []).find((x) => x.fileName === fn);
             const isCloudOnly = rowInfo && rowInfo.where === 'cloud';
             if (!isCloudOnly) {
@@ -3381,7 +3834,7 @@ function buildCloudUploadText(localMsgs, cloudMsgs, headerObj, decision) {
 // 遍历所有聊天的云路径，对本地更新(local_superset/diverged)的逐条弹窗，把 decision 收集到 preDecisions Map。
 // decision 取值: 'skip'(一致/云端更新) | 'new'(云端无,直传) | 'overwrite' | 'append' | 'cancel'
 // 返回 void；调用方把 preDecisions 传给 exportChats 复用。
-async function preResolveUploadConflicts(charName, chatItems, preDecisions, presetDecision = null) {
+async function preResolveUploadConflicts(charName, chatItems, preDecisions, presetDecision = null, avatar = '') {
     // presetDecision: 全量上传等串联场景预先定好的冲突策略('save_elsewhere'最安全=两边都留), 非空时不逐个弹窗
     const batch = presetDecision
         ? { applyAll: true, decision: presetDecision }
@@ -3390,7 +3843,7 @@ async function preResolveUploadConflicts(charName, chatItems, preDecisions, pres
     for (const plan of plans) {
         const item = chatItems.find((x) => x.file_name === plan.localName);
         if (!item) continue;
-        const chatText = await getChatContent(item.file_name, charName);
+        const chatText = await getChatContent(item.file_name, charName, avatar);
         if (!chatText) { preDecisions.set(plan.localName, 'skip'); continue; }
         const cloud = await getCloudChat(plan.path); // 分段感知
         if (!cloud) { preDecisions.set(plan.localName, 'new'); continue; }
@@ -3416,6 +3869,28 @@ function textToFile(text, fileName, mime = 'application/json') {
 }
 
 // 从云端导入一个完整角色（卡 + 世界书 + 聊天），手机端从0搬入用
+// 云端某条卡记录 ↔ 本机已有卡 的配对（绑定优先，其次内容 sha；老数据单条 + 本地单张 → 视为同一张）
+// 命中返回本地角色对象，没命中返回 null（= 需要导入）
+async function __localCardForEntry(charName, entry, cloudCardCount) {
+    const same = __cardsNamed(charName);
+    if (!same.length) return null;
+    if (entry && entry.id) {
+        const bound = same.find((c) => __cardBindOf(c.avatar) === entry.id);
+        if (bound) return bound;
+    }
+    if (entry && entry.sha) {
+        for (const c of same) {
+            try {
+                const b64 = await getCharacterCardB64(charName, c.avatar);
+                if (await __cardShaOfB64(b64) === entry.sha) { if (entry.id) __cardBindSet(c.avatar, entry.id); return c; }
+            } catch { /* 读不出来就跳过这张 */ }
+        }
+    }
+    // 老数据（云端只有一条 character.png，没有 sha 记录）：本地也刚好只有一张同名卡 → 视为同一张（老行为）
+    if (entry && entry.legacy && same.length === 1) return same[0];
+    return null;
+}
+
 async function importCharFromCloud(charName, opts = {}) {
     // opts.noJump=true 表示「只导入不跳转」（批量导入时用：不切换当前角色、不加载聊天进窗口）
     if (!settings.owner || !settings.repo || !settings.token) { toastr.error('请先配置'); return; }
@@ -3423,75 +3898,75 @@ async function importCharFromCloud(charName, opts = {}) {
     suppressImportModals();
     toastr.info(`开始从云端导入角色「${charName}」…`);
 
-    // 1) 角色卡：若本地已有同名卡则【不重复导入】直接复用(避免每次拉取都生成一张 dk方亦楷N 复制卡，
-    //    且让聊天导入定位到规范目录 chats/<名>/，而不是散落到 chats/<名>N/)。否则下载 base64 → /api/characters/import。
+    // 1) 角色卡（0.13.0 卡级）：
+    //    · 云端有 cards.json → 逐条导入；已在本机（绑定 / 内容 sha 命中）的不重复导入，缺哪张补哪张。
+    //    · 云端无 cards.json（老数据）→ 与 0.12.x 完全一致：本地已有同名卡则复用，否则导入 character.png。
     let cardImported = false;
-    let cardReused = false; // 本地已有同名卡 → 复用（不是失败！之前误报黄色"导入失败或不存在"）
-    let cardAvatar = ''; // 目标卡 avatar(stem)，本地已有则用已有卡的；新导则用响应 file_name
-    const existingIdx = (getContext().characters || []).findIndex(x => (x.name || '') === charName);
-    if (existingIdx >= 0) {
-        const ex = getContext().characters[existingIdx];
-        cardAvatar = String(ex.avatar || '').replace(/\.png$/, '');
-        cardReused = true;
-        console.log(`[chat-sync] 本地已有同名卡「${charName}」(${ex.avatar})，跳过卡导入，复用其 avatar=${cardAvatar}`);
-    } else {
-        const cardCloud = await __cardGetSmart(`sync/${charName}`);
+    let cardReused = false; // 本地已有该卡 → 复用（不是失败）
+    let cardAvatar = '';    // 聊天导入要落到哪张卡（多卡时取主卡/第一张）
+    let importedAny = 0, reusedAny = 0; const failedCards = [];
+    const idxCloud = await __cardsLoad(charName);
+    const cloudCards = (idxCloud && Array.isArray(idxCloud.cards)) ? idxCloud.cards.slice() : [];
+    const targets = cloudCards.length
+        ? cloudCards.filter((e) => !opts.cardId || e.id === opts.cardId)
+        : [{ id: '', file: 'character.png', legacy: true }];
+    for (const entry of targets) {
+        const label = `${charName}${entry.hint ? '（卡面 ' + __stemOf(entry.hint) + '）' : ''}`;
+        // 本机已有这张卡？(绑定命中 / 内容 sha 命中) → 不重复导入（避免生成"复制卡"）
+        const localHit = await __localCardForEntry(charName, entry, cloudCards.length);
+        if (localHit) {
+            reusedAny++;
+            if (!cardAvatar) cardAvatar = __stemOf(localHit.avatar);
+            console.log(`[chat-sync] 本地已有「${label}」(${localHit.avatar})，跳过卡导入（不会生成复制卡）`);
+            continue;
+        }
+        const cardCloud = await __cardGetSmart(__entryPath(charName, entry));
         if (!cardCloud?.b64) {
-            // 云端没有该角色的卡 → 不是有效的云端角色（本地独有或云端从未上传），跳过并明示，避免静默失败
-            console.warn('[chat-sync] 云端没有该角色卡，跳过导入', charName);
-            return { skippedNoCloud: true };
+            if (!cloudCards.length) {
+                // 云端没有该角色的卡 → 不是有效的云端角色（本地独有或云端从未上传），跳过并明示，避免静默失败
+                console.warn('[chat-sync] 云端没有该角色卡，跳过导入', charName);
+                return { skippedNoCloud: true };
+            }
+            failedCards.push(label); console.warn('[chat-sync] 云端该卡缺失，跳过', label);
+            continue;
         }
         try {
             const file = base64ToFile(cardCloud.b64, `${charName}.png`, 'image/png');
-                const formData = new FormData();
-                formData.append('avatar', file);
-                formData.append('file_type', 'png');
-                formData.append('user_name', getContext().name1);
-                const res = await fetch('/api/characters/import', {
-                    method: 'POST',
-                    headers: getRequestHeaders({ omitContentType: true }),
-                    body: formData,
-                    cache: 'no-cache',
-                });
-                if (res.ok) {
-                    cardImported = true;
-                    // 响应 file_name 就是新卡的 avatar（ST/TT /api/characters/import 都返回这个，不带 .png）
-                    const j = await res.json().catch(() => null);
-                    if (j && j.file_name) cardAvatar = String(j.file_name).replace(/\\.png$/, '');
-                }
-            } catch (e) { console.warn('[chat-sync] 角色卡导入失败', e); }
+            const formData = new FormData();
+            formData.append('avatar', file);
+            formData.append('file_type', 'png');
+            formData.append('user_name', getContext().name1);
+            const res = await fetch('/api/characters/import', {
+                method: 'POST',
+                headers: getRequestHeaders({ omitContentType: true }),
+                body: formData,
+                cache: 'no-cache',
+            });
+            if (res.ok) {
+                cardImported = true; importedAny++;
+                // 响应 file_name 就是新卡的 avatar（ST/TT /api/characters/import 都返回这个，不带 .png）
+                const j = await res.json().catch(() => null);
+                const newStem = j && j.file_name ? String(j.file_name).replace(/\.png$/, '') : '';
+                if (newStem && entry.id) __cardBindSet(newStem + '.png', entry.id); // 绑定：下次同步认得出是同一张
+                if (!cardAvatar) cardAvatar = newStem;
+            } else { failedCards.push(label); }
+        } catch (e) { failedCards.push(label); console.warn('[chat-sync] 角色卡导入失败', label, e); }
     }
-    // diag: 卡导入后立刻查这张卡的内容是否完整（定位“空卡壳”在哪一步产生）
-    try {
-        const ci = (getContext().characters || []).findIndex(x => (x.name || '') === charName);
-        const cd = ci >= 0 ? getContext().characters[ci] : null;
-        diag.lastRun = { ...(diag.lastRun || {}), cardImportDone: true, cardImported, cardAvatar,
-            cardDescLenAfterImport: cd ? (cd.description || '').length : -1, cardFirstMesAfterImport: cd ? (cd.first_mes || '').length : -1,
-            cardIdxAfterImport: ci };
-    } catch (e) { console.warn('[chat-sync] diag 卡检查失败', e); }
-    // 刷新角色列表，让刚导入的卡进数组（后续聊天导入用它当 avatar_url 定位目录）
-    try { await getCharacters(); } catch { /* 忽略 */ }
-    // 关键：把当前打开角色切到刚导入的卡——ST 的 /api/chats/search 与聊天显示都依赖 this_chid / #form_import_chat 的 avatar。
-    // 若不切换，this_chid 仍指向导入前的角色 → displayPastChats 疯狂报 "could not load chat data"、聊天也显示不到新角色下。
-    if (cardAvatar) {
-        try {
-            const freshC = getContext();
-            const idx = (freshC.characters || []).findIndex(x => String(x.avatar || '').replace(/\.png$/,'') === cardAvatar);
-            if (idx >= 0) {
-                if (!opts.noJump) {
-                    select_selected_character(idx, { switchMenu: false });
-                    await getCharacters(); // 切角色后再刷一次，确保后续 getContext() 拿到对的 characterId
-                }
-            }
-        } catch (e) { console.warn('[chat-sync] 切换到导入角色失败', e); }
-    }
-    if (cardImported) toastr.success('✅ 角色卡已导入');
-    else if (cardReused) console.log(`[chat-sync] 本地已有「${charName}」卡，复用（无需重复导入）`);
-    else toastr.warning('⚠️ 角色卡导入失败');
+    if (reusedAny) cardReused = true;
+    if (importedAny > 1) toastr.success(`✅ 已导入 ${importedAny} 张同名角色卡（各是各的卡面）`);
+    if (failedCards.length) toastr.warning(`⚠️ 有 ${failedCards.length} 张卡导入失败：${csShortList(failedCards)}`);
 
     // 2) 世界书：world.json → importWorldInfo
     let worldImported = false;
-    const wText = (await Gitee.getText(`sync/${charName}/world.json`))?.content;
+    // 0.13.0 卡级：主卡世界书在老路径 world.json；非主卡在 cards/<id>.world.json（同名卡各绑不同世界书也不互相覆盖）
+    let wRelPath = 'world.json';
+    try {
+        const idxW = await __cardsLoad(charName);
+        const cidW = opts.cardId || (opts.avatar ? await __cardIdForAvatar(charName, opts.avatar) : '');
+        const eW = cidW ? __entryOf(idxW, cidW) : null;
+        if (eW && eW.world) wRelPath = eW.world;
+    } catch { }
+    const wText = (await Gitee.getText(`sync/${charName}/${wRelPath}`))?.content;
     if (wText) {
         try {
             // 书真实名字在 world.json 的 originalData.name（如「🌸方亦楷和高中生活_2.0」），不是固定的 world。
@@ -3543,6 +4018,11 @@ async function importCharFromCloud(charName, opts = {}) {
             }
             const c = getContext();
             const importAvatar = cardAvatar || c.characters?.[c.characterId]?.avatar || '';
+            // 0.13.0 卡级归属：同名多卡时只导入属于这张卡的聊天（不会把别的同名卡的聊天导进来）
+            if (importAvatar && fileList.length) {
+                try { fileList = await __filterChatsForCard(charName, fileList, await __cardIdForAvatar(charName, importAvatar), importAvatar); }
+                catch (e) { console.warn('[chat-sync] 聊天归属过滤失败(按不过滤继续)', e); }
+            }
             // 先 GET /api/chats/get 建出该角色聊天目录（ST 只在此时 mkdir；import 直接写文件不建目录 → 否则全失败）
             try {
                 await fetch('/api/chats/get', { method: 'POST', headers: getRequestHeaders(), cache: 'no-cache', body: JSON.stringify({ avatar_url: importAvatar, file_name: '' }) });
@@ -3623,7 +4103,7 @@ async function importCharFromCloud(charName, opts = {}) {
         if (importedFileName && !opts.noJump) {
             let targetIdx = getContext().characterId;
             if (cardAvatar && getContext().characters) {
-                const found = getContext().characters.findIndex(x => String(x.avatar || '').replace(/\\.png$/, '') === cardAvatar);
+                const found = getContext().characters.findIndex(x => String(x.avatar || '').replace(/\.png$/, '') === cardAvatar);
                 if (found >= 0) targetIdx = found;
             }
             const loaded = await loadImportedChat(importedFileName, targetIdx);
@@ -3640,7 +4120,10 @@ async function importCharFromCloud(charName, opts = {}) {
                     const sorted = (arr || []).filter(x => x && x.file_name).sort((a, b) => (Date.parse(b.last_mes) || 0) - (Date.parse(a.last_mes) || 0));
                     const target = sorted.length ? String(sorted[0].file_name).replace(/\.jsonl$/i, '') : (importedFileName ? String(importedFileName).replace(/\.jsonl$/i, '') : '');
                     if (target) {
-                        const ci = (getContext().characters || []).findIndex(x => (x.name || '') === charName || String(x.avatar || '').replace(/\\.png$/,'') === cardAvatar);
+                        const __av1 = String(cardAvatar || '').replace(/\.png$/, '');
+                        const ci = (getContext().characters || []).findIndex(x => __av1
+                            ? String(x.avatar || '').replace(/\.png$/, '') === __av1
+                            : (x.name || '') === charName);
                         if (ci >= 0) getContext().characters[ci].chat = target;
                         await persistChatPointerStt(charName, cardAvatar, target);
                         console.log(`[chat-sync] ST 持久化「${charName}」.chat → ${target}`);
@@ -3728,6 +4211,11 @@ async function importChatsTtNative(charName, cardAvatar) {
                 const parsed = JSON.parse(listCloud.content || '{}');
                 if (Array.isArray(parsed.files)) fileList = parsed.files;
             }
+        }
+        // 0.13.0 卡级归属：同名多卡时只导入属于这张卡的聊天
+        if (cardAvatar && fileList.length) {
+            try { fileList = await __filterChatsForCard(charName, fileList, await __cardIdForAvatar(charName, cardAvatar + '.png'), cardAvatar + '.png'); }
+            catch (e) { console.warn('[chat-sync] TT 聊天归属过滤失败(按不过滤继续)', e); }
         }
         // 3) 逐个走 TT 手动导入同款流程（new FormData(表单) 而不是手动 set avatar/character_name）
         //    待办A：先对每条云端聊天查本地是否已有同聊天，走「与双端实时同一套」冲突判定 + 聪明版合并。
@@ -4380,9 +4868,11 @@ function ensureChatJsonlHeader(jsonlText, userName, charName2) {
 // 删除云端某个角色的整条记录（卡+世界书+聊天+清单，递归删 sync/<角色>/ 下所有文件）
 // silent=true：批量删除用（0.12.97 双端删除）。此时不弹 info/success toast（汇总由调用方给），
 //   并返回 {deleted, missing} 供调用方统计；默认 false 行为与历史一致（各自 toast + 无返回值）。
-async function deleteCharFromCloud(charName, silent = false) {
+async function deleteCharFromCloud(charName, silent = false, opts = {}) {
     if (!settings.owner || !settings.repo || !settings.token) { if (!silent) toastr.error('请先配置'); return { deleted: 0, missing: true, unconfigured: true }; }
     if (!charName) { if (!silent) toastr.error('未选择要删除的角色'); return { deleted: 0, missing: true }; }
+    // 0.13.0 卡级：指定 cardId 时只删那一张卡（同名卡的另一张不能受连累）
+    if (opts && opts.cardId) return await deleteCardFromCloud(charName, opts.cardId, silent);
     const base = `sync/${charName}`;
     const files = await Gitee.listAllFiles(base);
     if (files.length === 0) { if (!silent) toastr.info(`云端没有 ${charName} 的记录`); return { deleted: 0, missing: true }; }
@@ -4404,19 +4894,79 @@ async function deleteCharFromCloud(charName, silent = false) {
     return { deleted, missing: false };
 }
 
+// 删除云端「一张卡」（0.13.0 同名卡支持）：只删这张卡的文件与索引条目，绝不删整个 sync/<名>/ 目录。
+//   · 删的是主卡 → 从剩下的卡里提升一张为主卡，并把它的内容重写成老路径镜像 character.png（老设备不会读到已删的卡）
+//   · 一张都不剩 → 删掉老路径镜像与 cards.json（回到"云端没有这个角色"的干净状态）
+//   · 聊天不跟着删（聊天是名字下的共享资产，删卡不删聊天；要清理聊天走「聊天记录清理器」）
+async function deleteCardFromCloud(charName, cardId, silent = false) {
+    const base = `sync/${charName}`;
+    const idx = await __cardsLoad(charName, true);
+    const entry = __entryOf(idx, cardId);
+    if (!idx || !entry) { if (!silent) toastr.info(`云端没有这张卡的记录（${charName}）`); return { deleted: 0, missing: true }; }
+    const cardFile = __entryPath(charName, entry);
+    let deleted = 0;
+    try {
+        const all = await Gitee.listAllFiles(base);
+        const targets = all.filter((f) => f.path === cardFile || f.path.startsWith(cardFile + '.parts/') || f.path === cardFile + '.manifest.json'
+            || (entry.world && f.path === `${base}/${entry.world}`));
+        for (const f of targets) {
+            try { await Gitee.deleteFile(f.path, f.sha, `delete card ${f.path}`); deleted++; }
+            catch (e) { console.warn('[chat-sync] 删卡文件失败', f.path, e); }
+        }
+    } catch (e) { console.warn('[chat-sync] 列目录失败', e); }
+    // 索引：移除该条 + 清掉它的聊天归属
+    idx.cards = (idx.cards || []).filter((c) => c.id !== cardId);
+    if (idx.chatOwners) for (const [k, v] of Object.entries(idx.chatOwners)) if (v === cardId) delete idx.chatOwners[k];
+    const label = entry.hint ? __stemOf(entry.hint) : cardId;
+    if (idx.primary === cardId) {
+        const next = idx.cards[0] || null;
+        idx.primary = next ? next.id : '';
+        if (next) {
+            next.mirror = true;
+            // 重写老路径镜像：把新主卡的权威副本内容写回 character.png
+            try {
+                const got = await __cardGetSmart(__entryPath(charName, next));
+                if (got && got.b64) { await __cardPutSmart(base, String(got.b64).replace(/\s/g, '')); console.log('[chat-sync] 主卡已换成', next.hint || next.id); }
+            } catch (e) { console.warn('[chat-sync] 重写主卡镜像失败(下次同步会补)', e); }
+        } else {
+            try {
+                const m = (await Gitee.listEntries(base).catch(() => [])).find((e) => e.type === 'file' && e.name === 'character.png');
+                if (m) await Gitee.deleteFile(m.path, m.sha, 'delete card mirror');
+                const pm = (await Gitee.listEntries(base).catch(() => [])).find((e) => e.type === 'file' && e.name === 'character.png.manifest.json');
+                if (pm) await Gitee.deleteFile(pm.path, pm.sha, 'delete card mirror manifest');
+                try { for (const f of await Gitee.listAllFiles(`${base}/character.png.parts`)) await Gitee.deleteFile(f.path, f.sha, 'delete mirror part'); } catch { }
+            } catch (e) { console.warn('[chat-sync] 清理老路径镜像失败', e); }
+        }
+    }
+    // 本机记忆清理
+    for (const key of Object.keys(settings.lastCloudSha || {})) if (key === cardFile || key.startsWith(cardFile)) delete settings.lastCloudSha[key];
+    if (settings.cardBind) for (const [av, id] of Object.entries(settings.cardBind)) if (id === cardId) { delete settings.cardBind[av]; }
+    // 写回索引；一张不剩 → 连 cards.json 一起删（回到干净状态）
+    if (idx.cards.length) await __cardsSave(charName, idx);
+    else {
+        try { const c = await Gitee.getText(__cardsPath(charName)); if (c && c.sha) await Gitee.deleteFile(__cardsPath(charName), c.sha, 'delete empty cards index'); } catch { }
+        __cardsDropCache(charName);
+    }
+    saveSettingsDebounced();
+    if (!silent) toastr.success(`已从云端删除「${charName}」的一张卡（卡面 ${label}）✅`);
+    return { deleted, missing: false };
+}
+
 // 删除本地角色（含卡+全部聊天）。
 // 依据：script.js:10768 官方 deleteCharacter(characterKey,{deleteChats=true}) —— 它删卡(10701)+删聊天+清理缓存/标签/触发
 //      CHARACTER_DELETED/CHAT_DELETED 事件，并 removeCharacterFromUI()(10832) 刷新前端角色列表(clearChat/getCharacters/printMessages)。
 //      本地裸 fetch('/api/characters/delete') 只删磁盘但前端 characters 数组/UI 不更新 → 列表残留（用户见"删除成功但一点不变"）。必须用官方函数。
 // 注意 deleteCharacter 按 character.avatar（文件名）查找，avatar 用 getAvatarFor 取真实文件名。
 // silent=true：批量删除时用，跳过每条成功 toast（批量已有汇总提示，避免「已删除+角色已删除」重复刷屏）。
-async function deleteLocalCharacter(charName, skipConfirm = false, silent = false) {
+async function deleteLocalCharacter(charName, skipConfirm = false, silent = false, avatarHint = '') {
     if (!charName) { toastr.error('未选择要删除的角色'); return; }
     if (!skipConfirm) {
-        const ok = await csConfirm('⚠ 删除本地角色', `将删除本地角色 <b>「${escapeHtml(charName)}」</b> 及其全部聊天。<br>若还没上传备份，将无法找回，确定？`);
+        const dup = __cardsNamed(charName).length > 1;
+        const tip = avatarHint && dup ? `（只删这一张，卡面 ${escapeHtml(__stemOf(avatarHint))}；其它同名卡不动）` : (dup ? '（该名字下有多张同名卡，会逐张确认）' : '');
+        const ok = await csConfirm('⚠ 删除本地角色', `将删除本地角色 <b>「${escapeHtml(charName)}」</b>${tip} 及其全部聊天。<br>若还没上传备份，将无法找回，确定？`);
         if (!ok) return;
     }
-    const avatar = getAvatarFor(charName);
+    const avatar = getAvatarFor(charName, avatarHint);
     if (!avatar) { toastr.error('找不到本地角色「' + charName + '」，无法删除'); return; }
     // 临时聊天态下官方 deleteCharacter 会弹「您当前处于临时聊天中…将丢失未保存的消息」确认(script.js:10773)，
     // 该确认要"确定(1)"才会真删。skipConfirm=true 说明用户已在批量确认过；临时接管 confirm 自动返回 AFFIRMATIVE(1/确定)
@@ -4435,8 +4985,12 @@ async function deleteLocalCharacter(charName, skipConfirm = false, silent = fals
         if (suppressDelete && restoreDelete) Pdel.show.confirm = restoreDelete;
         if (success) {
             if (!silent) toastr.success(`✅ 已删除本地角色「${charName}」`);
+            // 0.13.0 卡级：只清「这一张卡」的绑定/待确认标记（同名还有别的卡时不能误伤）
+            try { __cardBindClear(avatar); __cardPendingClear(charName, avatar); } catch { }
             // 0.12.98 角色级身份映射一并清(与云端删除侧同口径), 防同名角色重导入串到已删云路径
-            if (settings.syncMap && settings.syncMap[charName]) { delete settings.syncMap[charName]; saveSettingsDebounced(); }
+            // 0.13.0 注意：同名还有别的卡时**不能清**——syncMap 是名字级共享的，清了会让留下的那张卡重复新建云端聊天文件
+            const stillSameName = __cardsNamed(charName).length > 0;
+            if (!stillSameName && settings.syncMap && settings.syncMap[charName]) { delete settings.syncMap[charName]; saveSettingsDebounced(); }
             // 官方函数已 removeCharacterFromUI 刷新列表；再补一次插件自己的列表刷新
             window.__renderRoleMultiList && window.__renderRoleMultiList('local');
             return true;
@@ -5126,10 +5680,13 @@ function wirePanelEvents() {
         const list = $('cs_roles_list');
         const src = $('cs_delete_target');
         if (!list) return;
-        let names = [];
+        // 0.13.0 卡级列表：一行 = 一张卡（同名卡各占一行，靠卡面缩略图 + 「卡面 xxx」分辨，勾选也精确到卡）
+        let rows = [];          // { key, name, avatar?, cardId?, hint?, primary?, legacy?, cloudFile? }
+        let cloudFiles = null;  // 云端文件列表（云端视图拉一次，徽章复用，避免每名字一个请求）
         if (mode === 'cloud') {
             // 立即给出可见反馈(用户点名要的"获取中"), 慢网络不再像"没反应/啥也不出"
             list.innerHTML = '<p class="cs-hint">⏳ 获取云端角色中…（云端响应慢时请稍候，最多约 45 秒）</p>';
+            let names = [];
             try { names = await Gitee.listDir('sync'); }
             catch (e) {
                 const why = (e && e.message) || e;
@@ -5137,14 +5694,34 @@ function wirePanelEvents() {
                 list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ 读取云端失败：${escapeHtml(why)}<br>请点设置里的「连接」自查（网络/仓库/token），修好后再点「云端角色」</p>`;
                 return;
             }
-            if (src) src.textContent = '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端';
+            if (src) src.textContent = '当前为云端视图，将导入云端选中的卡 ｜ 🗑 删除云端（只删这一张）';
+            cloudFiles = await Gitee.listAllFiles('sync').catch(() => []);
+            // 只有存在 cards/ 或 cards.json 的名字才需要拉卡级索引（单卡用户零额外请求）
+            const withCards = new Set();
+            for (const f of cloudFiles) {
+                const m = String(f.path).match(/^sync\/([^/]+)\/(.+)$/);
+                if (!m) continue;
+                if (m[2] === 'cards.json' || m[2].startsWith('cards/')) withCards.add(m[1]);
+            }
+            for (const nm of names) {
+                if (withCards.has(nm)) {
+                    const idx = await __cardsLoad(nm).catch(() => null);
+                    const cards = (idx && Array.isArray(idx.cards)) ? idx.cards.filter((c) => c.id) : [];
+                    if (cards.length) {
+                        for (const c of cards) rows.push({ key: __cardKeyCloud(nm, c.id), name: nm, cardId: c.id, hint: c.hint || '', primary: idx.primary === c.id, cloudFile: c.file || `cards/${c.id}.png` });
+                        continue;
+                    }
+                }
+                rows.push({ key: __cardKeyCloud(nm, 'character.png'), name: nm, legacy: true, cloudFile: 'character.png' });
+            }
         } else {
-            names = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group')).map((x) => x.name);
-            if (src) src.textContent = '当前为本地视图，将上传本地选中 ｜ 🗑 删除本地';
+            const chars = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group'));
+            for (const ch of chars) rows.push({ key: __cardKeyLocal(ch.avatar), name: ch.name, avatar: __stemOf(ch.avatar) + '.png', hint: __stemOf(ch.avatar) });
+            if (src) src.textContent = '当前为本地视图，将上传本地选中的卡 ｜ 🗑 删除本地（只删这一张）';
         }
         const delBtn = $('cs_del_sel');
-        if (delBtn) delBtn.title = mode === 'cloud' ? '删除云端选中角色（整条：卡+世界书+聊天）' : '删除本地选中角色（卡+全部聊天）';
-        // 【勾选记忆】渲染前保留当前已勾选的名字，渲染后按名回填勾选，刷新不丢勾选
+        if (delBtn) delBtn.title = mode === 'cloud' ? '删除云端选中的卡（只删这一张：卡+它自己的世界书；同名卡不受影响）' : '删除本地选中的卡（只删这一张卡及其聊天）';
+        // 【勾选记忆】渲染前保留当前已勾选的卡键，渲染后按卡键回填，刷新不丢勾选
         const prevChecked = new Set([...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value));
         // 存在性徽章: 拿对侧名单做交集(仅本地/仅云端/双端), 列目录一次不下载内容
         let sideSet = new Set();
@@ -5153,76 +5730,126 @@ function wirePanelEvents() {
         } else {
             sideSet = new Set((getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group')).map((x) => x.name));
         }
-        // 行内头像: 本地有→官方缩略图; 仅云端→仓库卡PNG直链(master失败自动试main再隐藏); 加载失败显示占位符
-        const avMap = new Map((getContext().characters || []).filter((x) => x && x.name && x.avatar).map((x) => [x.name, x.avatar]));
+        // 行内头像: 本地卡→官方缩略图; 云端卡→仓库卡PNG直链(分块卡没有单文件→占位); 加载失败→占位
         const isGh = String(settings.server || '').includes('github');
-        const avSrcFor = (n) => {
-            const a = avMap.get(n);
-            if (a) return '/thumbnail?type=avatar&file=' + encodeURIComponent(a);
-            const enc = encodeURIComponent(n);
-            return isGh
-                ? `https://raw.githubusercontent.com/${settings.owner}/${settings.repo}/master/sync/${enc}/character.png`
-                : `https://gitee.com/${settings.owner}/${settings.repo}/raw/master/sync/${enc}/character.png?access_token=${encodeURIComponent(settings.token || '')}`;
+        const rawUrl = (p) => (isGh
+            ? `https://raw.githubusercontent.com/${settings.owner}/${settings.repo}/master/${p}`
+            : `https://gitee.com/${settings.owner}/${settings.repo}/raw/master/${p}?access_token=${encodeURIComponent(settings.token || '')}`);
+        const chunkedSet = new Set();
+        for (const f of (cloudFiles || [])) { const m = String(f.path).match(/^sync\/[^/]+\/(.+)\.manifest\.json$/); if (m) chunkedSet.add(m[1]); }
+        const rowSrc = (r) => {
+            if (r.avatar) return '/thumbnail?type=avatar&file=' + encodeURIComponent(r.avatar);
+            const enc = encodeURIComponent(r.name);
+            if (!r.legacy && chunkedSet.has(r.cloudFile)) return ''; // 分块卡：没有单文件直链
+            return rawUrl(`sync/${enc}/${r.cloudFile}`);
         };
-        list.innerHTML = names.length
-            ? names.map((n) => {
-                const both = sideSet.has(n);
+        const dupSet = {}; for (const r of rows) dupSet[r.name] = (dupSet[r.name] || 0) + 1;
+        list.innerHTML = rows.length
+            ? rows.map((r) => {
+                const both = sideSet.has(r.name);
                 const whereCls = mode === 'local' ? (both ? 'both' : 'local') : (both ? 'both' : 'cloud');
-                return `<label class="cs-role-item"><input type="checkbox" value="${escapeHtml(n)}" name="cs_role_sel" ${prevChecked.has(n) ? 'checked' : ''}><img class="cs-role-avatar" loading="lazy" src="${escapeHtml(avSrcFor(n))}" title="${escapeHtml(n)}" onerror="if(!this.dataset.f){this.dataset.f=1;this.src=this.src.replace('/master/','/main/');}else{this.style.visibility='hidden';}"><b class="cs-cln-where cs-cln-where-${whereCls}">${both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端')}<span class="cs-where-diff" data-where-diff=""></span></b><span>${escapeHtml(n)}</span></label>`;
+                const dup = dupSet[r.name] > 1;
+                const pend = r.avatar && __cardPendingOf(r.name, r.avatar);
+                const chipDup = dup ? `<span class="cs-cln-tag" title="这个名字下有多张同名卡，按卡面分开备份">同名 ${dupSet[r.name]} 张${r.primary ? ' · 主卡' : ''}</span>` : '';
+                const chipPend = pend ? `<span class="cs-cln-tag cs-cln-tag-warn" data-pair="${escapeHtml(r.key)}" title="这张卡分不清对应云端哪一张，点这里确认配对">⚠ 待确认配对</span>` : '';
+                const srcR = rowSrc(r);
+                const img = srcR
+                    ? `<img class="cs-role-avatar" loading="lazy" src="${escapeHtml(srcR)}" title="${escapeHtml(r.hint || r.name)}" onerror="if(!this.dataset.f){this.dataset.f=1;this.src=this.src.replace('/master/','/main/');}else{this.style.visibility='hidden';}">`
+                    : `<span class="cs-role-avatar cs-av-ph" title="分块存储的大卡（没有单文件直链）">🖼</span>`;
+                const sameName = dup && r.hint;
+                const label = sameName ? `${r.name}（卡面 ${r.hint}）` : r.name;
+                return `<label class="cs-role-item" data-name="${escapeHtml(r.name)}"><input type="checkbox" value="${escapeHtml(r.key)}" name="cs_role_sel" ${prevChecked.has(r.key) ? 'checked' : ''}>${img}<b class="cs-cln-where cs-cln-where-${whereCls}">${both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端')}<span class="cs-where-diff" data-where-diff=""></span></b>${chipDup}${chipPend}<span>${escapeHtml(label)}</span></label>`;
             }).join('')
             : `<p class="cs-hint">（无${mode === 'cloud' ? '云端' : '本地'}角色）</p>`;
-        // ── 角色差异徽章(卡+绑定世界书+聊天): 与上传侧同构口径(卡字节/世界书文本/聊天段sha1Text) ──
+        // 待确认配对：点标记 → 选这张卡对应云端哪一条 → 记绑定（之后上传/导入都按它走）
+        if (!list.dataset.pairBound) {
+            list.dataset.pairBound = '1';
+            list.addEventListener('click', async (ev) => {
+                const el = ev.target && ev.target.closest && ev.target.closest('[data-pair]');
+                if (!el) return;
+                ev.preventDefault(); ev.stopPropagation();
+                const kk = __parseCardKey(el.getAttribute('data-pair'));
+                if (!kk || !kk.avatar) return;
+                const idx = await __cardsLoad(kk.name, true);
+                const cards = (idx && Array.isArray(idx.cards)) ? idx.cards.filter((c) => c.id) : [];
+                if (!cards.length) { toastr.info('云端这个角色还没有卡片记录，重新上传一次即可'); return; }
+                const buttons = cards.slice(0, 4).map((c, i) => ({ text: `${i + 1}. 卡面 ${c.hint ? __stemOf(c.hint) : c.id}${idx.primary === c.id ? '（主卡）' : ''}`, result: 4100 + i, classes: ['popup-button-ok'] }));
+                buttons.push({ text: '取消', result: 4999, classes: ['popup-button-cancel'] });
+                const ch2 = await __csPopupChoice('🔗 确认配对', `本地卡「${escapeHtml(kk.name)}（卡面 ${escapeHtml(__stemOf(kk.avatar))}）」对应云端哪一条记录？<br><small>配对只记在本机，决定这张卡上传到哪条记录 / 从哪条记录导入。</small>`, buttons, 4100);
+                if (ch2 >= 4100 && ch2 < 4100 + cards.length) {
+                    __cardBindSet(kk.avatar, cards[ch2 - 4100].id);
+                    __cardPendingClear(kk.name, kk.avatar);
+                    __cardsDropCache(kk.name);
+                    toastr.success('✅ 已配对，再点一次「上传选中角色」即可');
+                    try { window.__renderRoleMultiList(window.__csListMode); } catch { }
+                }
+            }, true);
+        }
+        // ── 卡级差异徽章(卡+绑定世界书+聊天): 与上传侧同构口径(卡字节/世界书文本/聊天段sha1Text) ──
         (async () => {
             try {
                 const NL = String.fromCharCode(10);
                 const rowsAll = [...list.querySelectorAll('label.cs-role-item')].filter((r) => r.querySelector('input[name=cs_role_sel]'));
                 if (!rowsAll.length) return;
-                const files = await Gitee.listAllFiles('sync');
+                const files = cloudFiles || await Gitee.listAllFiles('sync');
                 const byChar = {};
                 for (const f of files) {
                     const m2 = String(f.path).match(/^sync\/([^/]+)\/(.*)$/);
                     if (!m2) continue;
-                    const e = (byChar[m2[1]] = byChar[m2[1]] || { cardSha: '', chunks: [], chats: [] });
-                    if (m2[2] === 'character.png') e.cardSha = f.sha;
-                    else if (m2[2].startsWith('character.png.parts/')) e.chunks.push({ rest: m2[2], sha: f.sha });
-                    else if (m2[2].startsWith('chats/') && m2[2].endsWith('.manifest.json')) e.chats.push({ rest: m2[2], sha: f.sha });
+                    const e = (byChar[m2[1]] = byChar[m2[1]] || { cardSha: '', chunks: [], chats: [], cards: {} });
+                    const rest = m2[2];
+                    if (rest === 'character.png') e.cardSha = f.sha;
+                    else if (rest.startsWith('character.png.parts/')) e.chunks.push({ rest, sha: f.sha });
+                    else if (rest.startsWith('chats/') && rest.endsWith('.manifest.json')) e.chats.push({ rest, sha: f.sha });
+                    else {
+                        const mc = rest.match(/^cards\/([^/]+)\.png$/);
+                        const mp = rest.match(/^cards\/([^/]+)\.png\.parts\//);
+                        if (mc) { const b = (e.cards[mc[1]] = e.cards[mc[1]] || { chunks: [] }); b.sha = f.sha; b.file = rest; }
+                        else if (mp) { const b = (e.cards[mp[1]] = e.cards[mp[1]] || { chunks: [] }); b.chunks.push({ rest, sha: f.sha }); }
+                    }
                 }
                 let cursor2 = 0;
                 const worker2 = async () => {
                     while (cursor2 < rowsAll.length) {
                         const row = rowsAll[cursor2++];
                         try {
-                            const name = (row.querySelector('input[type=checkbox]') || {}).value;
+                            const kk = __parseCardKey((row.querySelector('input[type=checkbox]') || {}).value);
+                            if (!kk) continue;
+                            const name = kk.name;
                             const e = byChar[name];
                             if (!e) continue;
                             const det = {};
-                            const ch = (getContext().characters || []).find((x) => x.name === name);
+                            // 这一行对应的本地卡 / 云端卡记录（云端"仅云端"行没有本地卡）
+                            let lAvatar = kk.kind === 'local' ? kk.avatar : '';
+                            let cid = kk.kind === 'cloud' ? (kk.cardId || '') : '';
+                            if (!lAvatar && cid) lAvatar = __localAvatarForCardId(name, cid);
+                            if (!lAvatar && !cid) { const same = __cardsNamed(name); if (same.length === 1) lAvatar = __stemOf(same[0].avatar) + '.png'; }
+                            if (!cid && lAvatar) { try { cid = await __cardIdForAvatar(name, lAvatar); } catch { } }
+                            const side = cid ? (e.cards[cid] || null) : { sha: e.cardSha, chunks: e.chunks, file: 'character.png' };
+                            const ch = lAvatar ? __charByAvatar(lAvatar) : null;
                             try {
-                                const b64 = await getCharacterCardB64(name);
-                                if (b64) {
-                                    const clean = String(b64).replace(/\s/g, '');
-                                    const bin = atob(clean);
-                                    const u8 = new Uint8Array(bin.length);
-                                    for (let i2 = 0; i2 < bin.length; i2++) u8[i2] = bin.charCodeAt(i2);
-                                    if (e.chunks.length) {
-                                        const cparts = e.chunks.slice().sort((a2, b2) => a2.rest.localeCompare(b2.rest, undefined, { numeric: true }));
-                                        const localShas = [];
-                                        for (let i2 = 0; i2 < clean.length; i2 += CARD_CHUNK_CHARS) localShas.push(await gitBlobSha(new TextEncoder().encode(clean.slice(i2, i2 + CARD_CHUNK_CHARS))));
-                                        const bytesSame = (localShas.length === cparts.length && localShas.every((sh, i3) => sh === cparts[i3].sha));
-                                        if (bytesSame) { det.card = 'same'; }
-                                        else {
-                                            // 0.12.128 字节不同 → 复核: 拼云端分块 PNG, 与本地卡剥"运行时噪音"后比语义(假本地新: 本地扩展写卡)
-                                            // 0.12.129 复核结果入 __recheckCache(键=云端各块sha组合, 30min): 此类卡因ST保存噪音长期不一致,
-                                            //   无缓存则每次刷新都重下载云端卡(消耗大)。云端sha不变→直接复用判定, 零下载。
-                                            const csig = cparts.map((p2) => p2.sha).join(',');
-                                            det.card = (await __csCardRecheck(u8, cparts, null, csig)) ? 'same' : 'local';
-                                        }
-                                    } else if (e.cardSha) {
-                                        const bytesSame = ((await gitBlobSha(u8)) === e.cardSha);
-                                        if (bytesSame) { det.card = 'same'; }
-                                        else {
-                                            // 0.12.128 单文件复核: 下载云端 character.png, 剥噪音语义比(0.12.129 同样缓存)
-                                            det.card = (await __csCardRecheck(u8, null, name, e.cardSha)) ? 'same' : 'local';
+                                if (lAvatar && side) {
+                                    const b64 = await getCharacterCardB64(name, lAvatar);
+                                    if (b64) {
+                                        const clean = String(b64).replace(/\s/g, '');
+                                        const bin = atob(clean);
+                                        const u8 = new Uint8Array(bin.length);
+                                        for (let i2 = 0; i2 < bin.length; i2++) u8[i2] = bin.charCodeAt(i2);
+                                        if (side.chunks && side.chunks.length) {
+                                            const cparts = side.chunks.slice().sort((a2, b2) => a2.rest.localeCompare(b2.rest, undefined, { numeric: true }));
+                                            const localShas = [];
+                                            for (let i2 = 0; i2 < clean.length; i2 += CARD_CHUNK_CHARS) localShas.push(await gitBlobSha(new TextEncoder().encode(clean.slice(i2, i2 + CARD_CHUNK_CHARS))));
+                                            const bytesSame = (localShas.length === cparts.length && localShas.every((sh, i3) => sh === cparts[i3].sha));
+                                            if (bytesSame) { det.card = 'same'; }
+                                            else {
+                                                // 0.12.128 字节不同 → 复核: 拼云端分块 PNG, 与本地卡剥"运行时噪音"后比语义
+                                                const csig = cparts.map((p2) => p2.sha).join(',');
+                                                det.card = (await __csCardRecheck(u8, cparts, null, csig)) ? 'same' : 'local';
+                                            }
+                                        } else if (side.sha) {
+                                            const bytesSame = ((await gitBlobSha(u8)) === side.sha);
+                                            if (bytesSame) { det.card = 'same'; }
+                                            else { det.card = (await __csCardRecheck(u8, null, name, side.sha, `sync/${name}/${side.file}`)) ? 'same' : 'local'; }
                                         }
                                     }
                                 }
@@ -5238,7 +5865,7 @@ function wirePanelEvents() {
                                 }
                             } catch { }
                             try {
-                                const av = (ch && ch.avatar) || '';
+                                const av = (ch && ch.avatar) || lAvatar || '';
                                 let chatState = '';
                                 for (const cm of e.chats) {
                                     const mc = await Gitee.getText('sync/' + name + '/' + cm.rest).catch(() => null);
@@ -5246,7 +5873,7 @@ function wirePanelEvents() {
                                     const man = JSON.parse(mc.content);
                                     const chatName = cm.rest.replace(/^chats\//, '').replace(/\.manifest\.json$/, '');
                                     let chatText = '';
-                                    try { chatText = await getChatContent(chatName, name); } catch { continue; }
+                                    try { chatText = await getChatContent(chatName, name, av); } catch { continue; }
                                     const lines = String(chatText).split(NL).filter((l) => l.trim());
                                     const msgLines = [];
                                     lines.forEach((l, idx) => {
@@ -5283,7 +5910,6 @@ function wirePanelEvents() {
         })();
         __applyRowFilter('cs_roles_list', window.__rowFilter_cs_roles_list || '全部');
     };
-    // 部分选择按钮事件
     $('cs_refresh_local')?.addEventListener('click', () => window.__renderRoleMultiList('local'));
     $('cs_refresh_cloud2')?.addEventListener('click', () => window.__renderRoleMultiList('cloud'));
     $('cs_roles_selall')?.addEventListener('click', () => document.querySelectorAll('input[name="cs_role_sel"]').forEach((c) => { if (c.closest('label') && c.closest('label').style.display === 'none') return; c.checked = true; }));
@@ -5674,7 +6300,9 @@ function wirePanelEvents() {
         // 0.12.137 修: 下拉曾只有1个角色——TT/面板渲染早期 getContext().characters 可能未全量(只含当前)。
         //   先 getCharacters() 强制重拉官方全量角色, 确保所有角色进下拉。
         try { await getCharacters(); } catch { /* 忽略: 失败则用现有数组 */ }
-        const localNames = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group')).map((x) => x.name);
+        // 0.13.0 卡级：本地下拉按「卡」列（同名卡各占一项，值用卡键），避免只列出第一张/选不中第二张
+        const localCards = (getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group'));
+        const localNames = [...new Set(localCards.map((x) => x.name))];
         // 0.12.118 云端角色只列"确实有聊天"的: 用户用「删除选中文件」删本地后, 云端 sync/名/ 目录仍在(设计如此, 清理器用于清云端残留),
         //   但若该目录只剩角色卡没聊天, 下拉出现空壳 → 过滤掉。listEntries sync/名/chats 探测有无聊天文件(并发4)。
         let cloudNames = [];
@@ -5693,8 +6321,15 @@ function wirePanelEvents() {
         }
         // 本地侧: 已删卡的角色不在 characters 里(不会出现); 还在的本地角色保留(可能含本地聊天, 即便空也便于后续清理)
         const all = [...new Set([...localNames, ...cloudKeep])];
-        sel.innerHTML = all.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
-        if (cur && all.includes(cur)) sel.value = cur;
+        const opts = [];
+        for (const nm of all) {
+            const cs = localCards.filter((x) => x.name === nm);
+            if (cs.length > 1) { for (const c of cs) opts.push({ value: __cardKeyLocal(c.avatar), label: `${nm}（卡面 ${__stemOf(c.avatar)}）` }); }
+            else if (cs.length === 1) opts.push({ value: __cardKeyLocal(cs[0].avatar), label: nm });
+            else opts.push({ value: __cardKeyCloud(nm, 'character.png'), label: nm });
+        }
+        sel.innerHTML = opts.map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
+        if (cur && opts.some((o) => o.value === cur)) sel.value = cur;
     }
     function __clnRowHtml(r) {
         const whereTag = { both: '<b class="cs-cln-where cs-cln-where-both">双端</b>', local: '<b class="cs-cln-where cs-cln-where-local">仅本地</b>', cloud: '<b class="cs-cln-where cs-cln-where-cloud">仅云端</b>' };
@@ -5715,13 +6350,16 @@ function wirePanelEvents() {
     async function __renderCleanerList() {
         const box = $('cs_cln_listbox'); const st = $('cs_cln_status'); const sel = $('cs_cln_char');
         if (!box || !sel) return;
-        const charName = sel.value;
+        const kkCln = __parseCardKey(sel.value);
+        const charName = kkCln ? kkCln.name : sel.value;
+        const clnAvatar = (kkCln && kkCln.kind === 'local') ? kkCln.avatar : '';
+        window.__clnAvatar = clnAvatar;
         if (!charName) { box.innerHTML = '<p class="cs-hint">（请先选择角色）</p>'; return; }
         if (st) st.textContent = '读取中…';
         showBusy(0, 0, '正在获取聊天列表…');
         const prevChecked = new Set([...document.querySelectorAll('input[name="cs_cln_sel"]:checked')].map((c) => c.value));
         let rows = [];
-        try { rows = await listCleanerRows(charName); }
+        try { rows = await listCleanerRows(charName, clnAvatar); }
         catch (e) { hideBusy(); if (st) st.textContent = '读取失败：' + (e && e.message || e); return; }
         window.__clnRows = rows; window.__clnChar = charName;
         const shown = __filterClnRows();
@@ -5852,7 +6490,7 @@ function wirePanelEvents() {
         const cached = window.__clnPreview && window.__clnPreview.fileName === fileName ? window.__clnPreview : null;
         if (cached) { cached.idx = cached.defIdx != null ? cached.defIdx : cached.floors.length - 1; __clnRenderFloor(); return; }
         pane.innerHTML = '<div class="cs-cln-ptext">读取中…</div>';
-        const d = await getCleanerPreviewFull(window.__clnChar, fileName).catch(() => null);
+        const d = await getCleanerPreviewFull(window.__clnChar, fileName, window.__clnAvatar || '').catch(() => null);
         if (pane.dataset.cur !== fileName) return; // 已切到别的行, 丢弃过期结果
         if (window.__clnPreviewInflight === fileName) window.__clnPreviewInflight = null;
         if (pane.querySelector('.cs-cln-fbody') && window.__clnPreview && window.__clnPreview.fileName === fileName) return; // 并发先行者已渲染本文件
@@ -5933,7 +6571,7 @@ function wirePanelEvents() {
             const okc = await csConfirm('⚠ 永久删除聊天记录', `将删除「${escapeHtml(window.__clnChar)}」的 <b>${chosen.length}</b> 条聊天，<b>本地和云端一起删，删了就找不回来</b>：<br>${escapeHtml(csShortList(chosen, 8))}`);
             if (!okc) return;
             if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return; }
-            try { const r = await deleteChatsBothSides(window.__clnChar, chosen); toastr.info(`删除完成：成功 ${r ? r.ok : 0} / 共 ${chosen.length}${r && r.fail ? `，失败 ${r.fail}（${csShortList(r.failReasons.map(x => x.name + ':' + x.reason))}）` : ''}`); }
+            try { const r = await deleteChatsBothSides(window.__clnChar, chosen, window.__clnAvatar || ''); toastr.info(`删除完成：成功 ${r ? r.ok : 0} / 共 ${chosen.length}${r && r.fail ? `，失败 ${r.fail}（${csShortList(r.failReasons.map(x => x.name + ':' + x.reason))}）` : ''}`); }
             finally { __csReleaseBusy(); }
             __clnCloseModal(); await __renderCleanerList();
         });
@@ -5979,7 +6617,7 @@ function wirePanelEvents() {
         if (!__csTryBusy()) { if (st) st.textContent = '已有同步在进行中，稍后再试'; return; }
         try {
             if (st) st.textContent = '删除中…';
-            const r = await deleteChatsBothSides(charName, chosen);
+            const r = await deleteChatsBothSides(charName, chosen, window.__clnAvatar || '');
             if (st) st.textContent = `删除完成：成功 ${r ? r.ok : 0} / 共 ${chosen.length}${r && r.fail ? `，失败 ${r.fail}（${csShortList(r.failReasons.map(x => x.name + ':' + x.reason))}）` : ''}`;
         } finally { __csReleaseBusy(); }
         await __renderCleanerList();
@@ -7524,7 +8162,7 @@ ext: {
         if (!kw) { res.innerHTML = ''; return; }
         const rows = (window.__clnRows || []).filter((r) => r.where !== 'cloud'); // 只扫可读的本地文件
         if (!rows.length) { res.innerHTML = '（该角色无本地聊天文件——内容搜索只看本地文件）'; return; }
-        const av = getAvatarFor(window.__clnChar || ''); // 与清理器列表同源(characterId取不到时为空)
+        const av = getAvatarFor(window.__clnChar || '', window.__clnAvatar || ''); // 与清理器列表同源(characterId取不到时为空)
         const hits = [];
         res.innerHTML = '🔎 扫描中 ' + rows.length + ' 个聊天…';
         const LIMIT = 80;
@@ -8030,18 +8668,26 @@ ext: {
         const mode = window.__csListMode || 'local';
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { if (st) st.textContent = '请先在上方勾选要删除的文件'; return; }
+        // 0.13.0 卡级：勾的是「卡键」→ 只删选中的那几张卡，同名卡的另一张不连坐
+        const items = sel.map((k) => {
+            const kk = __parseCardKey(k);
+            if (!kk || !kk.name) return null;
+            return { name: kk.name, avatar: kk.avatar || '', cardId: kk.cardId || '', label: kk.avatar ? __labelForCard(kk.name, kk.avatar) : kk.name };
+        }).filter(Boolean);
+        if (!items.length) { if (st) st.textContent = '（选中的卡已经不在本地了，点上面「本地角色」刷新一下）'; return; }
+        const selTxt = items.map((x) => escapeHtml(x.label)).join('、');
         // 确认在拿锁之前进行，避免「弹窗等待期间持锁」卡住后续所有同步
         let ok;
         if (mode === 'cloud') {
-            ok = await csConfirm('⚠ 永久删除云端角色', `将永久删除云端角色：<b>${sel.map(escapeHtml).join('、')}</b>（角色卡＋世界书＋聊天＋清单）。<br>删除后无法直接找回，确定删除「${sel.length}」个吗？`);
+            ok = await csConfirm('⚠ 永久删除云端卡', `将从云端永久删除：<b>${selTxt}</b><br>只删选中的这 <b>${items.length}</b> 张卡（卡文件 + 它自己的世界书；同名卡的另一张不受影响；聊天不跟着删）。<br>删除后无法直接找回，确定吗？`);
         } else {
-            ok = await csConfirm('⚠ 删除本地角色', `将删除本地角色：<b>${sel.map(escapeHtml).join('、')}</b> 及其全部聊天。<br>若未上传备份将无法找回，确定删除「${sel.length}」个吗？`);
+            ok = await csConfirm('⚠ 删除本地卡', `将删除本地卡：<b>${selTxt}</b> 及其全部聊天。<br>若还没上传备份，将无法找回，确定删除「${items.length}」张吗？`);
         }
         if (!ok) { if (st) st.textContent = '已取消'; return; }
         if (st) st.textContent = '删除中…';
         if (!__csTryBusy()) { if (st) st.textContent = '已有同步在进行中，稍后再试'; return; }
         try {
-            showBusy(0, sel.length, mode === 'cloud' ? '删除云端' : '删除本地');
+            showBusy(0, items.length, mode === 'cloud' ? '删除云端' : '删除本地');
             let okCount = 0, failCount = 0; const failed = [];
             // ⚠️ ST 官方 deleteCharacter 会在「处于临时聊天」时对【每个】被删角色各弹一次
             //   「您当前处于临时聊天中…将丢失未保存的消息」确认框（script.js:10773 inTempChat）。
@@ -8053,15 +8699,18 @@ ext: {
             const origPopupConfirm = P && P.confirm ? P.confirm.bind(P) : null;
             if (origConfirm) P.show.confirm = () => Promise.resolve(1 /* AFFIRMATIVE=确定 */);
             else if (origPopupConfirm) P.confirm = () => true;
-            for (let i = 0; i < sel.length; i++) {
-                const name = sel[i];
-                showBusy(i + 1, sel.length, mode === 'cloud' ? '删除云端' : '删除本地');
+            for (let i = 0; i < items.length; i++) {
+                const it = items[i];
+                showBusy(i + 1, items.length, mode === 'cloud' ? '删除云端' : '删除本地');
                 try {
-                    if (mode === 'cloud') await deleteCharFromCloud(name, true);
-                    else await deleteLocalCharacter(name, true, true); // 批量: 静默(已有汇总提示, 避免重复toast)
+                    if (mode === 'cloud') {
+                        // 有 cardId → 只删那一张卡；老数据行（无 cardId）→ 仍按整名字删（与旧行为一致）
+                        if (it.cardId) await deleteCharFromCloud(it.name, true, { cardId: it.cardId });
+                        else await deleteCharFromCloud(it.name, true);
+                    } else await deleteLocalCharacter(it.name, true, true, it.avatar); // 批量: 静默(已有汇总提示)
                     okCount++;
                 }
-                catch (e) { failCount++; failed.push(name); console.warn('[chat-sync] 删除角色失败', name, e); }
+                catch (e) { failCount++; failed.push(it.label); console.warn('[chat-sync] 删除失败', it.label, e); }
             }
             if (origConfirm) P.show.confirm = origConfirm;
             else if (origPopupConfirm) P.confirm = origPopupConfirm;
@@ -8081,29 +8730,38 @@ ext: {
             if (st) __csSetStatus(st, '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中」', 'err');
             return;
         }
-        const shown = sel.length > 8 ? sel.slice(0, 5).map(escapeHtml).join('、') + ` 等共 ${sel.length} 个` : sel.map(escapeHtml).join('、');
-        const ok = await csConfirm('⚠ 永久删除双端角色', `将<b>同时删除本地与云端</b>：<b>${shown}</b><br>` +
+        // 0.13.0 卡级：勾的是「卡键」——同名卡只删勾中的那张；整名字删除只在勾了老数据行(无 cardId)时发生
+        const items = sel.map((k) => {
+            const kk = __parseCardKey(k);
+            if (!kk || !kk.name) return null;
+            return { name: kk.name, avatar: kk.avatar || '', cardId: kk.cardId || '', legacy: !!kk.legacy, label: kk.avatar ? __labelForCard(kk.name, kk.avatar) : kk.name };
+        }).filter(Boolean);
+        if (!items.length) { if (st) st.textContent = '（选中的卡已经不在本地了，点上面「本地角色」刷新一下）'; return; }
+        const anyLegacy = items.some((x) => !x.cardId && !x.avatar);
+        const shown = items.length > 8 ? items.slice(0, 5).map((x) => escapeHtml(x.label)).join('、') + ` 等共 ${items.length} 个` : items.map((x) => escapeHtml(x.label)).join('、');
+        const ok = await csConfirm('⚠ 永久删除双端卡', `将<b>同时删除本地与云端</b>：<b>${shown}</b><br>` +
             `· 本地：角色卡 + 全部聊天记录 + 绑定世界书（绑定世界书仅当未被其它角色引用时删除，被引用则保留并提示）<br>` +
-            `· 云端：整个 sync/角色名/ 目录（含备份的角色卡/绑定世界书/全部聊天/清单）<br>` +
-            `<span style="color:#e66">本地与云端的聊天记录都会一并删除，双端均无法找回，确定删除「${sel.length}」个吗？</span>`);
+            `· 云端：只删这些卡对应的卡片文件${anyLegacy ? '（含老数据行的整目录保留语义）' : '（同名卡的另一张不受影响）'}；聊天不跟着删<br>` +
+            `<span style="color:#e66">本地聊天记录会一并删除、云端卡片备份删除后无法找回，确定删除「${items.length}」张吗？</span>`);
         if (!ok) { if (st) st.textContent = '已取消'; return; }
         if (st) st.textContent = '双端删除中…';
         if (!__csTryBusy()) { if (st) st.textContent = '已有同步在进行中，稍后再试'; return; }
         try {
             showBusy(0, sel.length, '删除双端');
             let okCount = 0, failCount = 0; const failed = []; const notes = [];
-            for (let i = 0; i < sel.length; i++) {
-                const name = sel[i];
-                showBusy(i + 1, sel.length, `删除双端 ${name}`);
+            for (let i = 0; i < items.length; i++) {
+                const it = items[i];
+                const name = it.name;
+                showBusy(i + 1, items.length, `删除双端 ${it.label}`);
                 const reasons = [];
                 try {
                     // ── 本地：先删角色(卡+全部聊天)，成功后再处理绑定世界书 ──
-                    const localChar = (getContext().characters || []).find((c) => c && String(c.name) === String(name));
+                    const localChar = it.avatar ? __charByAvatar(it.avatar) : (getContext().characters || []).find((c) => c && String(c.name) === String(name));
                     const boundW = localChar && localChar.data && localChar.data.extensions ? String(localChar.data.extensions.world || '') : '';
                     let localOk = true;
                     if (!localChar) { reasons.push('本地无(跳过)'); }
                     else {
-                        localOk = await deleteLocalCharacter(name, true, true); // 静默: 已有汇总, 且内部已接管临时聊天确认
+                        localOk = await deleteLocalCharacter(name, true, true, it.avatar); // 静默: 已有汇总, 且内部已接管临时聊天确认
                         if (!localOk) reasons.push('本地删除失败');
                     }
                     // ── 绑定世界书连带：角色已删，重查是否仍被其它角色引用 ──
@@ -8117,14 +8775,14 @@ ext: {
                     // ── 云端：整目录删（silent，汇总由本行给）──
                     let cloudOk = true;
                     try {
-                        const cr = await deleteCharFromCloud(name, true);
+                        const cr = it.cardId ? await deleteCharFromCloud(name, true, { cardId: it.cardId }) : await deleteCharFromCloud(name, true);
                         if (cr && cr.unconfigured) { cloudOk = false; reasons.push('云端未配置'); }
                         else if (cr && cr.missing) { reasons.push('云端无(跳过)'); }
                         else if (cr && cr.deleted === 0) { cloudOk = false; reasons.push('云端删除失败(文件全部删除未成功)'); }
                     } catch (e) { cloudOk = false; reasons.push('云端删除失败:' + ((e && e.message) || e)); }
                     if (localOk && cloudOk) okCount++;
-                    else { failCount++; failed.push(reasons.length ? `${name}(${reasons.join(';')})` : name); }
-                } catch (e) { failCount++; failed.push(`${name}(${(e && e.message) || e})`); console.warn('[chat-sync] 双端删除角色失败', name, e); }
+                    else { failCount++; failed.push(reasons.length ? `${it.label}(${reasons.join(';')})` : it.label); }
+                } catch (e) { failCount++; failed.push(`${it.label}(${(e && e.message) || e})`); console.warn('[chat-sync] 双端删除失败', it.label, e); }
             }
             if (st) st.textContent = `双端删除完成：成功 ${okCount}，失败 ${failCount}${failed.length ? `（${failed.join('、')}）` : ''}${notes.length ? '；' + notes.join('；') : ''}`;
             // 清云端目录/差异缓存避免徽章幽灵残留，再重渲染当前视图
@@ -8207,6 +8865,8 @@ const CHAT_SYNC_CSS = `
 .cs-cln-ptitle { margin-bottom:8px; font-size:.85em; line-height:1.6; }
 .cs-role-avatar { width:30px; height:30px; border-radius:50%; object-fit:cover; flex:none; background:rgba(128,128,128,0.16); border:1px solid var(--SmartThemeBorderColor,#333); }
 .cs-role-avatar.cs-av-ph { display:inline-flex; align-items:center; justify-content:center; font-size:.9em; opacity:.55; }
+.cs-cln-tag { flex:none; font-size:.68em; line-height:1.6; padding:0 5px; border-radius:999px; border:1px solid rgba(128,128,128,.45); opacity:.85; white-space:nowrap; }
+.cs-cln-tag-warn { color:#e6b34d; border-color:rgba(230,179,77,.6); cursor:pointer; }
 .cs-cln-ptext { white-space:pre-wrap; word-break:break-word; font-size:.85em; line-height:1.7; color:var(--SmartThemeBodyColor,#e1e1e1); }
 /* 预览正文格式着色: 与聊天页同款主题变量(斜体/引用/下划线) */
 .cs-cln-ptext em.cs-prev-em { color: var(--SmartThemeEmColor, #7f9cf5); font-style: italic; }
@@ -9062,6 +9722,22 @@ window.__stChatSyncDebug = {
     currentChatFileName,
     getChatContent,
     listCloudWorldbooks,
+    // 0.13.0 卡级身份（QA/调试直驱，供同名卡 e2e 断言）
+    __cardsLoad,
+    __resolveCard,
+    __cardsSave,
+    __cardsDropCache,
+    __cardIdForAvatar,
+    __filterChatsForCard,
+    deleteCardFromCloud,
+    __cardBindOf,
+    __entryOf,
+    __parseCardKey,
+    __cardKeyLocal,
+    __cardKeyCloud,
+    get cardBind() { return settings.cardBind || {}; },
+    get cardPending() { return settings.cardPending || {}; },
+    get cardMapDbg() { return __cardsCache; },
     // 分项配置同步
     _connPresetLocalNames,
     pushSelectedConnPresets,
