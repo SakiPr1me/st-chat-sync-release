@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.1'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -5767,22 +5767,32 @@ function wirePanelEvents() {
             if (!r.legacy && chunkedSet.has(r.cloudFile)) return ''; // 分块卡：没有单文件直链
             return rawUrl(`sync/${enc}/${r.cloudFile}`);
         };
-        const dupSet = {}; for (const r of rows) dupSet[r.name] = (dupSet[r.name] || 0) + 1;
+        // 同名分组：同名的卡挨着排 + 按卡面文件名稳定编号（只影响同名组，其它行保持原顺序）
+        const ordered = []; const seenName = new Set();
+        for (const r of rows) {
+            if (seenName.has(r.name)) continue;
+            seenName.add(r.name);
+            const grp = rows.filter((x) => x.name === r.name);
+            if (grp.length > 1) grp.sort((a, b) => String(a.hint || a.key).localeCompare(String(b.hint || b.key), undefined, { numeric: true }));
+            grp.forEach((x, i) => { x.idxInGroup = i + 1; x.groupSize = grp.length; ordered.push(x); });
+        }
+        rows = ordered;
         list.innerHTML = rows.length
             ? rows.map((r) => {
                 const both = sideSet.has(r.name);
                 const whereCls = mode === 'local' ? (both ? 'both' : 'local') : (both ? 'both' : 'cloud');
-                const dup = dupSet[r.name] > 1;
+                const grpSize = r.groupSize || 1;
                 const pend = r.avatar && __cardPendingOf(r.name, r.avatar);
-                const chipDup = dup ? `<span class="cs-cln-tag" title="这个名字下有多张同名卡，按卡面分开备份">同名 ${dupSet[r.name]} 张${r.primary ? ' · 主卡' : ''}</span>` : '';
                 const chipPend = pend ? `<span class="cs-cln-tag cs-cln-tag-warn" data-pair="${escapeHtml(r.key)}" title="这张卡分不清对应云端哪一张，点这里确认配对">⚠ 待确认配对</span>` : '';
                 const srcR = rowSrc(r);
                 const img = srcR
                     ? `<img class="cs-role-avatar" loading="lazy" src="${escapeHtml(srcR)}" title="${escapeHtml(r.hint || r.name)}" onerror="if(!this.dataset.f){this.dataset.f=1;this.src=this.src.replace('/master/','/main/');}else{this.style.visibility='hidden';}">`
                     : `<span class="cs-role-avatar cs-av-ph" title="分块存储的大卡（没有单文件直链）">🖼</span>`;
-                const sameName = dup && r.hint;
-                const label = sameName ? `${r.name}（卡面 ${r.hint}）` : r.name;
-                return `<label class="cs-role-item" data-name="${escapeHtml(r.name)}"><input type="checkbox" value="${escapeHtml(r.key)}" name="cs_role_sel" ${prevChecked.has(r.key) ? 'checked' : ''}>${img}<b class="cs-cln-where cs-cln-where-${whereCls}">${both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端')}<span class="cs-where-diff" data-where-diff=""></span></b>${chipDup}${chipPend}<span>${escapeHtml(label)}</span></label>`;
+                // 同名卡：名字后跟紧凑序号「·2/5」（第几张/共几张），完整卡面文件名放悬浮提示
+                const label = grpSize > 1 ? `${r.name} ·${r.idxInGroup}/${grpSize}` : r.name;
+                const tip = `${r.name}${grpSize > 1 ? `（同名第 ${r.idxInGroup}/共 ${grpSize} 张）` : ''} · 卡面文件 ${r.hint || r.name}.png${r.primary ? ' · 主卡' : ''}`;
+                const hidden = r.hint ? `<span style="display:none">${escapeHtml(r.hint)} ${escapeHtml(r.hint)}.png</span>` : '';
+                return `<label class="cs-role-item" data-name="${escapeHtml(r.name)}"><input type="checkbox" value="${escapeHtml(r.key)}" name="cs_role_sel" ${prevChecked.has(r.key) ? 'checked' : ''}>${img}<b class="cs-cln-where cs-cln-where-${whereCls}">${both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端')}<span class="cs-where-diff" data-where-diff=""></span></b>${chipPend}<span title="${escapeHtml(tip)}">${escapeHtml(label)}</span>${hidden}</label>`;
             }).join('')
             : `<p class="cs-hint">（无${mode === 'cloud' ? '云端' : '本地'}角色）</p>`;
         // 待确认配对：点标记 → 选这张卡对应云端哪一条 → 记绑定（之后上传/导入都按它走）
