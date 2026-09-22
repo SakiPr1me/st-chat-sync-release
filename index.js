@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6720,6 +6720,7 @@ async function __thWriteTree(tree) {
     if (!extension_settings.tavern_helper.script) extension_settings.tavern_helper.script = { scripts: [] };
     extension_settings.tavern_helper.script.scripts = want;
     saveSettingsDebounced();
+    window.__thWriteFellBack = true; // 直写兜底（酒馆助手面板可能不会自动刷新 → 由调用方提示刷新）
 }
 function __thFindNode(name, type) {
     const root = __thGetTreeRaw();
@@ -7087,9 +7088,10 @@ function _apiRowHtml(n, mode) {
 // 「密钥没随行」的统一说明文案（上传提醒 / 导入提醒共用）
 function __apiKeyHelpText() {
     return '酒馆<strong>默认不允许把密钥交给插件</strong>（安全设置，且它只在启动时读一次，插件无法替你改）。'
-        + '把酒馆根目录 <b>config.yaml</b> 里的 <b>allowKeysExposure</b> 改成 <b>true</b> 并<b>重启酒馆</b>后，'
-        + '插件就能<strong>直接把已有的密钥读出来一起备份</strong>——你不需要知道密钥内容，之后也永远不用再管。'
-        + '<br><small>密钥只进你自己的酒馆和你的私有仓库，插件作者无法读取。</small>';
+        + '在<strong>运行酒馆的那台设备</strong>上，把酒馆根目录 <b>config.yaml</b> 里的 <b>allowKeysExposure</b> 改成 <b>true</b> 并<b>重启酒馆</b>，'
+        + '插件就能<strong>直接把已有的密钥读出来一起备份</strong>——你不需要知道密钥内容，之后也永远不用再管（手机端什么都不用做）。'
+        + '<br><small>密钥只进你自己的酒馆和你的私有仓库，插件作者无法读取。'
+        + '若酒馆跑在手机/安卓上（没有 config.yaml 编辑入口），用下面的备用方式粘贴一次即可。</small>';
 }
 // 「开启密钥可见」的一键引导（把步骤和可复制命令摆出来；命令里不用反引号，避免转义问题）
 function __apiKeyEnableStepsHtml() {
@@ -7611,6 +7613,8 @@ ext: {
             async pull(items) {
                 const ok = [], fail = [], failReasons = [];
                 const renamedList = [];
+                let disabledImported = 0;
+                window.__thWriteFellBack = false;
                 const replaceMode = !!settings.thReplace;
                 let __t2 = 0; const __tn2 = items.length; for (const it of items) { __t2++; showBusy(__t2, __tn2, '导入脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…');
                     const type = it.startsWith('[文件夹]') ? 'folder' : 'script';
@@ -7623,6 +7627,7 @@ ext: {
                         const node = JSON.parse(c.content);
                         // 保留云端脚本原开关状态(用户要求: 导入不改变"它本身的状态"), id 尽量保留(冲突才换新)
                         node.enabled = !!node.enabled;
+                        if (!node.enabled) disabledImported++;
                         if (node.type === 'folder' && Array.isArray(node.scripts)) node.scripts.forEach((s) => { s.enabled = !!s.enabled; });
                         const freshId = () => (window.__uuidFix ? window.__uuidFix() : ('k' + Math.random().toString(36).slice(2, 10)));
                         if (!node.id || __thGetTreeRaw().some((t) => t.id === node.id)) node.id = freshId();
@@ -7646,9 +7651,15 @@ ext: {
                     } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || e }); }
                 }
                 // 0.13.3：导入成功也给明确结果（原来只在失败时提示 → 用户点了导入"没反应"无从判断）
-                if (ok.length) toastr.success(`✅ 酒馆助手脚本导入：${replaceMode ? '已覆盖' : '已新增'} ${ok.length} 条${renamedList.length ? `（${renamedList.length} 条因本机已有同名，另存为「名字(1)」）` : ''}`);
+                if (ok.length) {
+                    const extra = [];
+                    if (renamedList.length) extra.push(`${renamedList.length} 条因本机已有同名，另存为「名字(1)」`);
+                    if (disabledImported) extra.push(`${disabledImported} 条在云端是<b>关闭</b>状态，导入后仍是关闭（要启用去酒馆助手面板打开）`);
+                    toastr.success(`✅ 已导入 ${ok.length} 条到【全局脚本】${replaceMode ? '（覆盖模式）' : ''}${extra.length ? '：' + extra.join('；') : ''}`, '酒馆助手脚本导入', { timeOut: 9000, escapeHtml: false });
+                    if (window.__thWriteFellBack) toastr.info('酒馆助手面板可能没自动刷新：请刷新页面（或重开酒馆助手面板）查看导入的脚本。', '提示', { timeOut: 9000 });
+                }
                 if (renamedList.length) console.log('[chat-sync] 酒馆助手导入·同名另存：', renamedList.join('、'));
-                return { ok: ok.length, fail: fail.length, failReasons };
+                return { ok: ok.length, fail: fail.length, failReasons, renamedList, disabledImported, scope: 'global' };
             },
             async del(items, mode) {
                 const ok = [], fail = [];
