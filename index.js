@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.8'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.9'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7143,8 +7143,15 @@ function _apiRowHtml(n, mode) {
     let sum = null;
     if (mode === 'cloud') sum = (window.__apiCloudCache || {})[key] || (window.__apiCloudCache || {})[n] || null;
     else { const p = _apiProfileByName(n); sum = p ? _apiProfileSummary(p) : null; }
-    // 0.12.2 简化(用户拍板): 去掉🔑/API类型芯片, 重点=名字/模型名/端点, 三色区分无前缀
-    return `${_apiWhereHtml(n, mode)}`
+    // 0.13.9（作者要求）：这一条带不带密钥，用一个 🔑 标出来（云端那份没带明文的用 ⚠ 标，导入端要手动选一次 key）
+    let keyChip = '';
+    if (sum && mode === 'cloud') {
+        if (sum.cloudKey) keyChip = '<b class="cs-key-chip" title="云端这份带着密钥明文，导入后可直接用">🔑</b>';
+        else if (sum.hasSecret) keyChip = '<b class="cs-key-chip cs-key-chip-warn" title="这条配置绑定了密钥，但云端这份没有随行明文（上传端未开启「允许显示密钥」）——导入后需要手动选一次 key">⚠</b>';
+    } else if (sum && sum.hasSecret) {
+        keyChip = '<b class="cs-key-chip" title="这条配置绑定了密钥；上传时若酒馆允许显示密钥（ST: config.yaml 的 allowKeysExposure / TT: 用户设置→TauriTavern 设置→允许显示密钥），会自动把密钥一起备份">🔑</b>';
+    }
+    return `${_apiWhereHtml(n, mode)}` + keyChip
         + `<span style="flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--SmartThemeBodyColor,#e1e1e1);font-weight:600" title="${escapeHtml(n)}">${escapeHtml(n)}</span>`
         + `<span style="flex:1 1 25%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78em;color:var(--SmartThemeQuoteColor,#f0a35e);font-weight:600" title="${escapeHtml((sum && sum.model) || '')}">${escapeHtml((sum && sum.model) || (mode === 'cloud' ? '' : '无模型'))}</span>`
         + `<span style="flex:1 1 35%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.76em;color:#7fd0a8;opacity:.9" title="${escapeHtml((sum && sum.url) || '')}">${escapeHtml((sum && sum.url) || (mode === 'cloud' ? '（云端未存端点）' : '无端点'))}</span>`;
@@ -7770,7 +7777,9 @@ ext: {
                 const out = [];
                 for (const key of keys) {
                     const j = await _apiCloudJson(key).catch(() => null);
-                    window.__apiCloudCache[key] = j && j.profile ? _apiProfileSummary(j.profile) : null;
+                    window.__apiCloudCache[key] = j && j.profile
+                        ? Object.assign(_apiProfileSummary(j.profile), { cloudKey: !!(j.secret && j.secret.value) })
+                        : null;
                     out.push((j && j.profile && j.profile.name) || key); // 返回原始名(与本地行 whereSets 匹配; 文件名被 safeName 弄过的没关系)
                 }
                 return out;
@@ -9102,6 +9111,8 @@ const CHAT_SYNC_CSS = `
 .cs-role-avatar.cs-av-ph { display:inline-flex; align-items:center; justify-content:center; font-size:.9em; opacity:.55; }
 .cs-cln-tag { flex:none; font-size:.68em; line-height:1.6; padding:0 5px; border-radius:999px; border:1px solid rgba(128,128,128,.45); opacity:.85; white-space:nowrap; }
 .cs-cln-tag-warn { color:#e6b34d; border-color:rgba(230,179,77,.6); cursor:pointer; }
+.cs-key-chip { flex:none; font-size:.72em; line-height:1.5; padding:0 3px; border-radius:4px; border:1px solid rgba(126,200,255,.55); color:#7ec8ff; background:rgba(126,200,255,.08); }
+.cs-key-chip-warn { border-color:rgba(230,179,77,.6); color:#e6b34d; background:rgba(230,179,77,.08); }
 .cs-cln-ptext { white-space:pre-wrap; word-break:break-word; font-size:.85em; line-height:1.7; color:var(--SmartThemeBodyColor,#e1e1e1); }
 /* 预览正文格式着色: 与聊天页同款主题变量(斜体/引用/下划线) */
 .cs-cln-ptext em.cs-prev-em { color: var(--SmartThemeEmColor, #7f9cf5); font-style: italic; }
