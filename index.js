@@ -39,7 +39,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.2'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3454,8 +3454,12 @@ async function restoreUserFromCloud() {
         const pu = ud.power_user || {};
         if (pu.personas && typeof pu.personas === 'object' && Object.keys(pu.personas).length) {
             o.power_user = o.power_user || {};
-            o.power_user.personas = pu.personas;
-            if (pu.persona_descriptions && typeof pu.persona_descriptions === 'object') o.power_user.persona_descriptions = pu.persona_descriptions;
+            // 0.13.3 修（用户实报"下载后某个人设不见了"）：原来整表替换 → 云端备份里没有的本地人设，
+            //   名字/描述映射被抹掉（图片文件还在，但界面上变成未命名/像丢了）。改成合并：云端有的覆盖，云端没有的保留。
+            o.power_user.personas = Object.assign({}, (o.power_user && o.power_user.personas) || {}, pu.personas);
+            if (pu.persona_descriptions && typeof pu.persona_descriptions === 'object') {
+                o.power_user.persona_descriptions = Object.assign({}, (o.power_user && o.power_user.persona_descriptions) || {}, pu.persona_descriptions);
+            }
         }
         if (ud.user_avatar) { o.user_avatar = ud.user_avatar; if (settings.user_avatar !== undefined) settings.user_avatar = ud.user_avatar; }
         const uname = ud.username || ud.user_name;
@@ -7062,10 +7066,29 @@ function _apiRowHtml(n, mode) {
         + `<span style="flex:1 1 25%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78em;color:var(--SmartThemeQuoteColor,#f0a35e);font-weight:600" title="${escapeHtml((sum && sum.model) || '')}">${escapeHtml((sum && sum.model) || (mode === 'cloud' ? '' : '无模型'))}</span>`
         + `<span style="flex:1 1 35%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.76em;color:#7fd0a8;opacity:.9" title="${escapeHtml((sum && sum.url) || '')}">${escapeHtml((sum && sum.url) || (mode === 'cloud' ? '（云端未存端点）' : '无端点'))}</span>`;
 }
+// 「密钥没随行」的统一说明文案（上传提醒 / 导入提醒共用）
+function __apiKeyHelpText() {
+    return '要连密钥一起同步，需要在酒馆根目录的 <b>config.yaml</b> 里把 <b>allowKeysExposure</b> 改成 <b>true</b>，然后<b>重启酒馆</b>'
+        + '（酒馆默认关闭；它只在启动时读一次，插件无法替你改）。<br><small>没开启时：只同步 Api 配置本身（端点/模型），密钥要在每台设备手动选一次。</small>';
+}
 async function pushSelectedApiProfiles(names) {
     if (!Array.isArray(names) || !names.length) { toastr.warning('未选择要上传的Api配置'); return null; }
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
     try {
+        // 0.13.3：若选中的配置里有用到密钥、但酒馆不允许导出密钥明文 → 先说清楚再上传（否则导入端会"没有 key"且用户莫名其妙）
+        let noKeyCount = 0;
+        try {
+            const withSecret = names.map((nm) => _apiProfileByName(nm)).filter((p) => p && p['secret-id']);
+            if (withSecret.length) {
+                const perms = await __secretCanView();
+                if (perms !== true) {
+                    noKeyCount = withSecret.length;
+                    const go = await csConfirm('⚠ 密钥不会被带走（酒馆未允许导出密钥）',
+                        `选中的 <b>${withSecret.length}</b> 条 Api 配置用了密钥，但当前酒馆<strong>不允许把密钥明文交给插件</strong>，所以这次上传<b>只带配置、不带密钥</b>；导入到别的设备后需要手动选一次 key。<br><br>${__apiKeyHelpText()}<br><br>要现在继续上传吗（不带密钥）？`);
+                    if (!go) { toastr.info('已取消上传。改好 config.yaml 并重启酒馆后，再点一次「上传选中」。'); return null; }
+                }
+            }
+        } catch (e) { console.warn('[chat-sync] 密钥权限探测失败(按不带密钥继续)', e); }
         const ok = [], skipped = [], fail = []; const failReasons = [];
         showBusy(0, names.length, '上传Api配置');
         for (let i = 0; i < names.length; i++) {
@@ -7096,8 +7119,9 @@ async function pushSelectedApiProfiles(names) {
         }
         hideBusy();
         saveSettingsDebounced();
-        toastr.info(`上传Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}`);
-        return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
+        toastr.info(`上传Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}${noKeyCount ? ` ｜ ⚠ 其中 ${noKeyCount} 条的密钥没随行（酒馆未开启 allowKeysExposure）` : ''}`);
+        if (noKeyCount) toastr.warning('密钥没随行：' + __apiKeyHelpText().replace(/<[^>]+>/g, ''));
+        return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons, noKeyCount };
     } finally { __csReleaseBusy(); }
 }
 async function importSelectedApiProfiles(names) {
@@ -7133,6 +7157,9 @@ async function importSelectedApiProfiles(names) {
                     if (!newId) { try { newId = await __secretWrite(parsed.secret.key, parsed.secret.value, parsed.secret.label || name); } catch { } }
                     if (newId) profile['secret-id'] = newId;
                     else secretNote = '密钥写入失败, 导入后需手动选一次key';
+                } else if (profile && profile['secret-id']) {
+                    // 0.13.3: 云端这份没带密钥明文（上传端未开启 allowKeysExposure）→ 说清楚怎么办，别让用户以为导入坏了
+                    secretNote = '云端这份没有随行密钥（需在上传端把 config.yaml 的 allowKeysExposure 设为 true 并重启酒馆后重新上传）；本次导入后请手动选一次 key';
                 }
                 if (!extension_settings.connectionManager || typeof extension_settings.connectionManager !== 'object') extension_settings.connectionManager = {};
                 if (!Array.isArray(extension_settings.connectionManager.profiles)) extension_settings.connectionManager.profiles = [];
@@ -7487,10 +7514,12 @@ ext: {
             },
             async pull(items) {
                 const ok = [], fail = [], failReasons = [];
+                const renamedList = [];
                 const replaceMode = !!settings.thReplace;
                 let __t2 = 0; const __tn2 = items.length; for (const it of items) { __t2++; showBusy(__t2, __tn2, '导入脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…');
                     const type = it.startsWith('[文件夹]') ? 'folder' : 'script';
                     const name = it.replace(/^\[(脚本|文件夹)\]/, '');
+                    let renamed = false;
                     try {
                         const fname = __safeName(name) + '.json';
                         const c = await Gitee.getText(`${TH_SCRIPTS_DIR}/${fname}`);
@@ -7506,6 +7535,7 @@ ext: {
                         } else {
                             const exists = __thFindNode(node.name, node.type);
                             if (exists) { // 同名并存: 换名并给(folder子项)换新id, 状态仍保留
+                                renamed = true;
                                 node.name = node.name + '(1)';
                                 node.id = freshId();
                                 if (node.type === 'folder' && Array.isArray(node.scripts)) node.scripts.forEach((s) => { s.id = freshId(); });
@@ -7516,8 +7546,12 @@ ext: {
                         }
                         // 还原结束后刷新列表行状态(重渲染由调用侧执行)
                         ok.push(node.name);
+                        if (renamed) renamedList.push(`${name} → ${node.name}`);
                     } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || e }); }
                 }
+                // 0.13.3：导入成功也给明确结果（原来只在失败时提示 → 用户点了导入"没反应"无从判断）
+                if (ok.length) toastr.success(`✅ 酒馆助手脚本导入：${replaceMode ? '已覆盖' : '已新增'} ${ok.length} 条${renamedList.length ? `（${renamedList.length} 条因本机已有同名，另存为「名字(1)」）` : ''}`);
+                if (renamedList.length) console.log('[chat-sync] 酒馆助手导入·同名另存：', renamedList.join('、'));
                 return { ok: ok.length, fail: fail.length, failReasons };
             },
             async del(items, mode) {
@@ -7872,6 +7906,14 @@ ext: {
         }
         hideBusy();
         if (st2 && st2.textContent.startsWith('正在切换至')) { st2.textContent = ''; }
+        // 0.13.3：Api 分页常驻提示——密钥能不能随行取决于酒馆的 allowKeysExposure（默认关），用户实报"导入没有 key"就是这里
+        try {
+            if (st2 && window.__cfgTab === 'api' && !st2.textContent) {
+                st2.innerHTML = '密钥随行需酒馆 <b>config.yaml</b> 里 <b>allowKeysExposure: true</b>（改完要重启酒馆）；未开启时只同步配置、密钥需每台设备手动选一次。';
+            } else if (st2 && window.__cfgTab !== 'api' && st2.textContent.startsWith('密钥随行需')) {
+                st2.textContent = '';
+            }
+        } catch { }
         if (st2) st2.style.color = '';
         if (renderId !== window.__cfgRenderGen) return; // 已被更新的请求取代, 丢弃本次结果
         if (tgt) tgt.textContent = (mode === 'cloud' ? '当前为云端视图，将导入云端选中 ｜ 🗑 删除云端' : '当前为本地视图，将上传本地选中 ｜ 🗑 删除本地') + (__force ? '' : '（缓存 · 点上方「刷新」获取最新）');
