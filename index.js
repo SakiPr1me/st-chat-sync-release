@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.7'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.8'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1399,7 +1399,11 @@ async function getChatContent(fileName, charName, avatarHint) {
             avatar_url: avatar,
         }),
     });
-    if (!r.ok) throw new Error(`读聊天 ${fileName} 失败 HTTP ${r.status}`);
+    if (!r.ok) {
+        // 0.13.8：把服务端返回的正文带上（例如 "File not found: xxx. The chat does not exist or is empty"）——否则只有状态码，定位不了
+        const body = await r.text().catch(() => '');
+        throw new Error(`读聊天 ${fileName} 失败 HTTP ${r.status}${body ? ' ' + String(body).replace(/\s+/g, ' ').slice(0, 160) : ''}`);
+    }
     const data = await r.json();
     if (!Array.isArray(data)) return '';
     // ST /api/chats/get 返回数组：首个是 header（含 chat_metadata/user_name/character_name），其余是消息。
@@ -1441,8 +1445,15 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
     const p = plan.path;
     // ⚠️ 0.13.7 修：这里原来漏传 avatar（同名卡会去读第一张卡的聊天目录 → 服务端报 File not found/does not exist or is empty，
     //   读成空 → 把云端聊天覆盖成空白；用户实报"上传的聊天记录文件是空白的"就是这个）
-    const chatText = await getChatContent(item.file_name, charName, avatar);
-    if (!chatText) return null;
+    // 0.13.8：读取失败【单条不炸整批】——原来一抛异常 phase A 的 Promise.all 整批就挂，用户只看到一条蓝提示、查不出是哪几条
+    let chatText = '';
+    try {
+        chatText = await getChatContent(item.file_name, charName, avatar);
+    } catch (e) {
+        __chatReadIssue(plan.localName, (e && e.message) || String(e));
+        return null;
+    }
+    if (!chatText) { __chatReadIssue(plan.localName, '读取为空(服务端没返回内容)'); return null; }
     const cloud = await getCloudChat(p); // 分段感知: manifest 存在则拼装
     if (cloud) {
         const localMsgs = parseJsonlMessages(chatText);
@@ -1450,7 +1461,7 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
         // 空读保护：本地这条读出来 0 楼、而云端有内容 → 一律跳过（宁可不传，也不能把云端好数据覆盖成空白）
         if (!localMsgs.length && cloudMsgs.length) {
             console.warn('[chat-sync] 本地读取为空，已跳过上传（云端内容保持不变）:', plan.localName);
-            skipped.push(plan.localName + '(本地读取为空)');
+            __chatReadIssue(plan.localName, '本地读到 0 楼（云端有内容，已跳过、未覆盖）');
             return null;
         }
         // 优先用锁外预扫的决策; 未预扫则用 batchGuard(批内不弹窗, 一律照 'overwrite' 覆盖) —— 并行阶段绝不现场弹多个窗
@@ -1464,6 +1475,20 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
         return { plan, p, text: buildCloudUploadText(localMsgs, cloudMsgs, headerObj, decision), cloudSha: cloud.sha, cloud, decision };
     }
     return { plan, p, text: chatText, cloudSha: undefined, cloud: null, decision: 'new' };
+}
+// 0.13.8：本轮上传中"聊天读成空/读失败"的清单（供汇总提示与一键复制诊断）
+let __csReadIssues = [];
+function __chatReadIssue(chat, reason) {
+    try { __csReadIssues.push({ chat, reason }); } catch { }
+}
+function __chatReadIssuesTake() { const a = __csReadIssues.slice(); __csReadIssues = []; return a; }
+function __chatReadIssuesText(issues) {
+    const out = ['=== 一键云同步 · 聊天读取异常清单 ==='];
+    out.push('插件版本: ' + PLUGIN_VERSION);
+    out.push('共 ' + issues.length + ' 条本地聊天没读到内容（云端原有内容均未被覆盖）：');
+    for (const it of issues) out.push('  - ' + it.chat + ' ｜' + it.reason);
+    out.push('（把以上内容整段复制发给作者即可定位；若这些角色有同名卡，先确认插件版本 ≥0.13.7）');
+    return out.join('\n');
 }
 async function exportChats(charName, chatItems, preDecisions = null, avatar = '') {
     const uploaded = [];
@@ -1581,8 +1606,19 @@ async function pushCurrentCharacter(charName, opts = {}) {
         }
         const chatItems = chatItems0 || await getCharChatFileNames(name, avatar);
         const { uploaded, skipped } = await exportChats(name, chatItems, preDecisions, avatar);
-        const msg = `已同步角色「${label}」：卡 + ${worldName ? '世界书 + ' : ''}${uploaded.length} 个聊天已同步${skipped.length ? `，${skipped.length} 个已是最新` : ''} ✅`;
-        toastr.success(msg);
+        const readIssues = __chatReadIssuesTake();
+        const msg = `已同步角色「${label}」：卡 + ${worldName ? '世界书 + ' : ''}${uploaded.length} 个聊天已同步${skipped.length ? `，${skipped.length} 个已是最新` : ''}${readIssues.length ? `，⚠ ${readIssues.length} 条聊天本地没读到内容（已跳过、云端未改动）` : ''} ✅`;
+        if (readIssues.length) { toastr.warning(msg, '部分聊天未上传', { timeOut: 12000 }); } else { toastr.success(msg); }
+        if (readIssues.length) {
+            // 单条异常不打扰阅读：挂机上传时也能事后查到是哪几条（整段可复制）
+            try {
+                const txt = escapeHtml(__chatReadIssuesText(readIssues)).replace(/\n/g, '<br>');
+                await __csPopupChoice('⚠ 这些聊天没读到内容（可整段复制发给作者）',
+                    `以下 ${readIssues.length} 条本地聊天没读到内容，已跳过上传（<b>云端原有内容没有被覆盖</b>）：<br>` +
+                    '<textarea readonly style="width:100%;height:180px;font-family:monospace;font-size:.72em;background:rgba(0,0,0,.25);color:var(--SmartThemeBodyColor,#ddd);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:4px;padding:6px" onclick="this.select()">' + txt + '</textarea>',
+                    [{ text: '知道了', result: 1, classes: ['popup-button-ok'] }], 1);
+            } catch { }
+        }
         return true;
     } catch (e) {
         console.warn('[chat-sync] 上传角色失败', e);
