@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.9'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.10'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1458,10 +1458,12 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
     if (cloud) {
         const localMsgs = parseJsonlMessages(chatText);
         const cloudMsgs = parseJsonlMessages(cloud.content || '');
-        // 空读保护：本地这条读出来 0 楼、而云端有内容 → 一律跳过（宁可不传，也不能把云端好数据覆盖成空白）
-        if (!localMsgs.length && cloudMsgs.length) {
-            console.warn('[chat-sync] 本地读取为空，已跳过上传（云端内容保持不变）:', plan.localName);
-            __chatReadIssue(plan.localName, '本地读到 0 楼（云端有内容，已跳过、未覆盖）');
+        // 空读保护（0.13.10 加强）：本地这条读出来 0 楼 → **一律不上传**。
+        //   原来只在"云端已有内容"时拦 → 云端还没有这条时，会把"只有表头"的空壳写进云端（用户实报的一堆空白聊天文件）；
+        //   而这种 0 楼几乎都是同一个根因：服务端按头像找不到该聊天（同名卡取错头像目录）→ 宁可不传并报出来。
+        if (!localMsgs.length) {
+            console.warn('[chat-sync] 本地读到 0 楼，已跳过上传:', plan.localName, cloudMsgs.length ? '（云端有内容，未覆盖）' : '');
+            __chatReadIssue(plan.localName, cloudMsgs.length ? '本地读到 0 楼（云端有内容，已跳过、未覆盖）' : '本地读到 0 楼（未上传；服务端可能按头像找不到这条聊天）');
             return null;
         }
         // 优先用锁外预扫的决策; 未预扫则用 batchGuard(批内不弹窗, 一律照 'overwrite' 覆盖) —— 并行阶段绝不现场弹多个窗
