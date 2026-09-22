@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.7'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -1439,12 +1439,20 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
     const item = chatItems.find((x) => x.file_name === plan.localName);
     if (!item) return null;
     const p = plan.path;
-    const chatText = await getChatContent(item.file_name, charName);
+    // ⚠️ 0.13.7 修：这里原来漏传 avatar（同名卡会去读第一张卡的聊天目录 → 服务端报 File not found/does not exist or is empty，
+    //   读成空 → 把云端聊天覆盖成空白；用户实报"上传的聊天记录文件是空白的"就是这个）
+    const chatText = await getChatContent(item.file_name, charName, avatar);
     if (!chatText) return null;
     const cloud = await getCloudChat(p); // 分段感知: manifest 存在则拼装
     if (cloud) {
         const localMsgs = parseJsonlMessages(chatText);
         const cloudMsgs = parseJsonlMessages(cloud.content || '');
+        // 空读保护：本地这条读出来 0 楼、而云端有内容 → 一律跳过（宁可不传，也不能把云端好数据覆盖成空白）
+        if (!localMsgs.length && cloudMsgs.length) {
+            console.warn('[chat-sync] 本地读取为空，已跳过上传（云端内容保持不变）:', plan.localName);
+            skipped.push(plan.localName + '(本地读取为空)');
+            return null;
+        }
         // 优先用锁外预扫的决策; 未预扫则用 batchGuard(批内不弹窗, 一律照 'overwrite' 覆盖) —— 并行阶段绝不现场弹多个窗
         const decision = preDecisions ? (preDecisions.get(plan.localName) ?? 'skip') : await resolveUploadConflict(localMsgs, cloudMsgs, plan.localName, batchGuard);
         if (decision === 'skip' || String(decision).startsWith('skip_cloud') || decision === 'cancel') {
@@ -7164,6 +7172,7 @@ async function pushSelectedApiProfiles(names) {
             }
         } catch (e) { console.warn('[chat-sync] 密钥权限探测失败(按不带密钥继续)', e); }
         const ok = [], skipped = [], fail = []; const failReasons = [];
+        let secretMissed = 0; // 已开启/或配置绑了密钥，但本次没能读到明文（如密钥没绑定到该配置）
         showBusy(0, names.length, '上传Api配置');
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
@@ -7181,6 +7190,7 @@ async function pushSelectedApiProfiles(names) {
                         if (cj && cj.secret && cj.secret.value) { secret = cj.secret; console.log('[chat-sync] 复用云端已有密钥明文:', name); }
                     } catch { }
                 }
+                if (!secret && p['secret-id'] && await __secretCanView().catch(() => null) === true) secretMissed++; // 已开启却读不到明文
                 const text = JSON.stringify({ kind: 'st-connection-profile', v: 1, savedAt: new Date().toISOString(), profile: p, secret });
                 const cloud = await Gitee.getText(path);
                 if (cloud) {
@@ -7203,6 +7213,7 @@ async function pushSelectedApiProfiles(names) {
         saveSettingsDebounced();
         toastr.info(`上传Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}${noKeyCount ? ` ｜ ⚠ 其中 ${noKeyCount} 条的密钥没随行（酒馆未开启 allowKeysExposure）` : ''}`);
         if (noKeyCount) toastr.warning('密钥没随行：' + __apiKeyHelpText().replace(/<[^>]+>/g, ''));
+        if (secretMissed) toastr.warning('⚠ 有 ' + secretMissed + ' 条配置虽然已开启「显示密钥」，但没读到密钥明文（可能这条配置没有绑定密钥，或密钥在酒馆里是掩码状态）——导入端会需要手动选一次 key。');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons, noKeyCount };
     } finally { __csReleaseBusy(); }
 }
@@ -8011,7 +8022,17 @@ ext: {
         // 0.13.3：Api 分页常驻提示——密钥能不能随行取决于酒馆的 allowKeysExposure（默认关），用户实报"导入没有 key"就是这里
         try {
             if (st2 && window.__cfgTab === 'api' && !st2.textContent) {
-                st2.innerHTML = '密钥随行需酒馆 <b>config.yaml</b> 里 <b>allowKeysExposure: true</b>（改完要重启酒馆）；未开启时只同步配置、密钥需每台设备手动选一次。';
+                st2.innerHTML = '检测中…';
+                // 0.13.7：改成真检测（原来这句是静态文案 → 用户以为"改了也没用"）
+                (async () => {
+                    try {
+                        const can = await __secretCanView();
+                        if (window.__cfgTab !== 'api') return;
+                        st2.innerHTML = can === true
+                            ? '✅ 已检测到酒馆允许显示密钥：上传 Api 配置时会自动带上密钥（无需任何操作）。'
+                            : '密钥要一起备份：ST 酒馆 → 把根目录 <b>config.yaml</b> 的 <b>allowKeysExposure</b> 改成 <b>true</b> 并重启；TT 酒馆 → 用户设置 → TauriTavern 设置 → 允许显示密钥 → 打开保存。未开启时只同步配置、密钥需每台设备手动选一次。';
+                    } catch { st2.innerHTML = '（检测密钥可见性失败，可忽略）'; }
+                })();
             } else if (st2 && window.__cfgTab !== 'api' && st2.textContent.startsWith('密钥随行需')) {
                 st2.textContent = '';
             }
