@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.5'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.6'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6722,6 +6722,26 @@ async function __thWriteTree(tree) {
     saveSettingsDebounced();
     window.__thWriteFellBack = true; // 直写兜底（酒馆助手面板可能不会自动刷新 → 由调用方提示刷新）
 }
+// 0.13.6 诊断：把"导入到底发生了啥"打成一份可直接复制的报告（用户实报"显示双端但酒馆助手里找不着"时定位用）
+async function __thDiagnose(extra) {
+    const out = [];
+    out.push('=== 一键云同步 · 酒馆助手诊断 ===');
+    out.push('插件版本: ' + PLUGIN_VERSION);
+    out.push('TavernHelper: ' + (window.TavernHelper ? ('可用/write=' + (typeof window.TavernHelper.updateScriptTreesWith) + ' read=' + (typeof window.TavernHelper.getScriptTrees)) : '不可用(会走直写兜底)'));
+    try {
+        const local = __thTree();
+        out.push('本机【全局脚本】顶层节点 ' + local.length + ' 个:');
+        for (const n of local) out.push('  - [' + (n.type === 'folder' ? '文件夹' : '脚本') + '] ' + n.name + '｜开关=' + (n.node && n.node.enabled ? '开' : '关') + '｜内容长度=' + String((n.node && n.node.content) || '').length + '｜id=' + String((n.node && n.node.id) || '').slice(0, 8));
+        try { const g = (window.TavernHelper && window.TavernHelper.getScriptTrees) ? window.TavernHelper.getScriptTrees({ type: 'global' }) : null; if (Array.isArray(g)) out.push('官方接口读回 ' + g.length + ' 个: ' + g.map((x) => x.name).join('、')); } catch (e) { out.push('官方接口读回失败: ' + e.message); }
+    } catch (e) { out.push('读本机脚本树失败: ' + e.message); }
+    try {
+        const arr = (await Gitee.listEntries(TH_SCRIPTS_DIR).catch(() => [])).filter((e) => e.type === 'file' && e.name.endsWith('.json'));
+        out.push('云端脚本文件 ' + arr.length + ' 个: ' + arr.map((e) => e.name).join('、'));
+    } catch (e) { out.push('读云端列表失败: ' + e.message); }
+    if (extra) out.push('本次导入结果: ' + JSON.stringify(extra));
+    out.push('（把以上内容整段复制发给作者即可定位）');
+    return out.join('\n');
+}
 function __thFindNode(name, type) {
     const root = __thGetTreeRaw();
     return root.find((n) => n.name === name && (type ? n.type === type : true)) || null;
@@ -7087,25 +7107,10 @@ function _apiRowHtml(n, mode) {
 }
 // 「密钥没随行」的统一说明文案（上传提醒 / 导入提醒共用）
 function __apiKeyHelpText() {
-    return '酒馆<strong>默认不允许把密钥交给插件</strong>（安全设置，且它只在启动时读一次，插件无法替你改）。'
-        + '在<strong>运行酒馆的那台设备</strong>上，把酒馆根目录 <b>config.yaml</b> 里的 <b>allowKeysExposure</b> 改成 <b>true</b> 并<b>重启酒馆</b>，'
-        + '插件就能<strong>直接把已有的密钥读出来一起备份</strong>——你不需要知道密钥内容，之后也永远不用再管（手机端什么都不用做）。'
-        + '<br><small>密钥只进你自己的酒馆和你的私有仓库，插件作者无法读取。'
-        + '若酒馆跑在手机/安卓上（没有 config.yaml 编辑入口），用下面的备用方式粘贴一次即可。</small>';
+    return 'ST酒馆：手动把酒馆根目录 <b>config.yaml</b> 里的 <b>allowKeysExposure</b> 改成 <b>true</b> 并重启酒馆后<br>'
+        + 'TT酒馆：上方用户设置 - TauriTavern 设置 - 允许显示密钥 - 打开 - 保存<br><br>'
+        + '<small>密钥只进你自己的酒馆和你的私有仓库，插件作者无法读取。</small>';
 }
-// 「开启密钥可见」的一键引导（把步骤和可复制命令摆出来；命令里不用反引号，避免转义问题）
-function __apiKeyEnableStepsHtml() {
-    const ps = "$f='.\\config.yaml'; $c=Get-Content $f -Raw; if($c -match 'allowKeysExposure:\\s*false'){ ($c -replace 'allowKeysExposure:\\s*false','allowKeysExposure: true') | Set-Content $f -Encoding UTF8 } else { Add-Content $f 'allowKeysExposure: true' }; Write-Host 'OK - restart SillyTavern'";
-    return '在酒馆根目录（有 <code>config.yaml</code>、<code>server.js</code> 的那个文件夹）操作：'
-        + '<ol style="margin:6px 0 6px 18px;padding:0">'
-        + '<li>用记事本打开 <code>config.yaml</code></li>'
-        + '<li>把 <code>allowKeysExposure: false</code> 改成 <code>allowKeysExposure: true</code>（没有这一行就在末尾加一行同样内容）</li>'
-        + '<li>保存 → <b>重启酒馆</b> → 回来再点一次「上传选中」，密钥就会自动一起上传</li>'
-        + '</ol>'
-        + '<small>不想手动找：在酒馆根目录用 PowerShell 跑下面这行（右键复制）：</small>'
-        + '<textarea readonly style="width:100%;height:52px;margin-top:4px;font-family:monospace;font-size:.78em;background:rgba(0,0,0,.25);color:var(--SmartThemeBodyColor,#ddd);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:4px;padding:4px" onclick="this.select()">' + ps + '</textarea>';
-}
-// 探测某条 profile 绑定的酒馆密钥键名（如 api_key_openai）——粘贴时应写到同一个键
 async function _apiSecretKeyName(profile) {
     if (!profile || !profile['secret-id']) return '';
     try { await __secretReadState(); } catch { }
@@ -7118,58 +7123,43 @@ async function _apiSecretKeyName(profile) {
     }
     return '';
 }
-// 让用户粘贴一次密钥（ST 原生输入框；无则退化为 prompt）
-async function __askPasteKey(pname, keyName) {
-    const tip = `「${pname}」用的密钥（${keyName || 'api_key'}）：\n\n粘贴后会写进本机酒馆，并随本次上传存进你的私有云端；插件作者无法读取。\n留空 = 本次不带密钥。`;
-    const P2 = __csPopup();
-    try {
-        if (P2 && P2.show && typeof P2.show.input === 'function') return await P2.show.input('🔑 粘贴一次密钥', tip, '');
-        if (P2 && P2.show && typeof P2.show.text === 'function') { await P2.show.text('🔑 粘贴密钥', tip); }
-    } catch { }
-    try { return window.prompt(tip); } catch { return null; }
-}
 async function pushSelectedApiProfiles(names) {
     if (!Array.isArray(names) || !names.length) { toastr.warning('未选择要上传的Api配置'); return null; }
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
     try {
-        // 0.13.4：密钥随行。酒馆未开启 allowKeysExposure 时（默认关闭，且是启动常量、插件改不了），
-        //   给用户三个选择：粘贴一次（写进本机+私有云端）/ 不带密钥继续 / 取消。
+        // 0.13.6：密钥随行。检测到酒馆允许导出密钥 → 直接上传（不弹这个窗）；否则给两条路：去开启 / 仍然上传。
+        //   （ST 开 config.yaml 的 allowKeysExposure；TT 走 用户设置→TauriTavern 设置→允许显示密钥）
         let noKeyCount = 0;
-        const pastedByKey = {}; // 键名 → 明文（同一键只问一次）
         try {
-            const withSecret = names.map((nm) => _apiProfileByName(nm)).filter((p) => p && p['secret-id']);
+            let withSecret = names.map((nm) => _apiProfileByName(nm)).filter((p) => p && p['secret-id']);
             if (withSecret.length) {
                 const perms = await __secretCanView();
                 if (perms !== true) {
-                    noKeyCount = withSecret.length;
+                    // 云端已经存过密钥的（之前从开过 allowKeysExposure 的设备传过）→ 直接复用、不打扰用户
+                    const cloudHasKey = [];
+                    for (const p of withSecret) {
+                        try {
+                            const t = await Gitee.getText(`${API_CLOUD_DIR}/${__safeName(p.name)}.json`).catch(() => null);
+                            const j = t && t.content ? JSON.parse(t.content) : null;
+                            if (!(j && j.secret && j.secret.value)) cloudHasKey.push(p.name);
+                        } catch { cloudHasKey.push(p.name); }
+                    }
+                    if (!cloudHasKey.length) withSecret = [];
+                    else noKeyCount = cloudHasKey.length;
+                }
+                if (perms !== true && withSecret.length) {
                     const pick = await __csPopupChoice('🔑 密钥要一起备份吗？',
-                        `选中的 <b>${withSecret.length}</b> 条 Api 配置用了密钥，但酒馆当前<strong>不允许把密钥交给插件</strong>，所以默认这次只备份配置本身。<br><br>${__apiKeyHelpText()}`,
+                        `选中的 <b>${withSecret.length}</b> 条 Api 配置用了密钥，但ST酒馆当前<strong>不允许把密钥交给插件</strong>，所以默认这次只备份配置本身。<br><br>${__apiKeyHelpText()}`,
                         [
-                            { text: '✅ 开启「密钥可见」后自动读取（推荐）', result: 4212, classes: ['popup-button-ok'] },
+                            { text: '好的，我这就去修改', result: 4212, classes: ['popup-button-ok'] },
                             { text: '仍然上传（不带密钥）', result: 4211, classes: ['popup-button-cancel'] },
-                            { text: '这台改不了配置，粘贴一次', result: 4210, classes: ['popup-button-cancel'] },
                             { text: '取消', result: 4999, classes: ['popup-button-cancel'] },
                         ], 4212);
-                    if (pick === 4999) { toastr.info('已取消上传'); return null; }
                     if (pick === 4212) {
-                        // 一键引导：把步骤+可复制命令摆给用户；改完重启后再点一次上传即可（之后永远自动）
-                        await __csPopupChoice('🔑 开启「密钥可见」', __apiKeyEnableStepsHtml(), [{ text: '知道了', result: 1, classes: ['popup-button-ok'] }], 1);
-                        toastr.info('改好 config.yaml 并重启酒馆后，再点一次「上传选中」，密钥会自动一起上传（以后不用再管）。');
+                        toastr.info('改好后（ST：config.yaml 改 allowKeysExposure 并重启酒馆；TT：用户设置 → TauriTavern 设置 → 允许显示密钥）重新点一次「上传选中」即可。');
                         return null;
                     }
-                    if (pick === 4210) {
-                        for (const p of withSecret) {
-                            const kn = await _apiSecretKeyName(p);
-                            if (!kn) continue;
-                            if (pastedByKey[kn] !== undefined) continue; // 同一个键只问一次
-                            const val = await __askPasteKey(p.name, kn);
-                            const v = val == null ? '' : String(val).trim();
-                            if (!v) { pastedByKey[kn] = ''; continue; }
-                            pastedByKey[kn] = v;
-                            try { const nid = await __secretWrite(kn, v, p.name); if (nid) p['secret-id'] = nid; }
-                            catch (e) { console.warn('[chat-sync] 密钥写入本机失败(仍随行上传)', e); }
-                        }
-                    }
+                    if (pick === 4999) { toastr.info('已取消上传'); return null; }
                 }
             }
         } catch (e) { console.warn('[chat-sync] 密钥权限探测失败(按不带密钥继续)', e); }
@@ -7183,13 +7173,7 @@ async function pushSelectedApiProfiles(names) {
                 if (!p) { fail.push(name); failReasons.push({ name, reason: '本地无该配置' }); continue; }
                 const path = `${API_CLOUD_DIR}/${__safeName(name)}.json`;
                 let secret = await _apiSecretOf(p);
-                // 0.13.4：本机读不到明文时——① 用刚粘贴的；② 复用云端旧文件里已有的明文（用户只需粘贴一次，之后不再打扰）
-                if (!secret && p['secret-id']) {
-                    try {
-                        const kn = await _apiSecretKeyName(p);
-                        if (kn && pastedByKey[kn]) secret = { key: kn, value: pastedByKey[kn], label: p.name };
-                    } catch { }
-                }
+                // 本机读不到明文时：复用云端旧文件里已有的明文（同一条配置只上传一次密钥，之后不再打扰）
                 if (!secret && p['secret-id']) {
                     try {
                         const prevTxt = (await Gitee.getText(path).catch(() => null));
@@ -7659,7 +7643,18 @@ ext: {
                     if (window.__thWriteFellBack) toastr.info('酒馆助手面板可能没自动刷新：请刷新页面（或重开酒馆助手面板）查看导入的脚本。', '提示', { timeOut: 9000 });
                 }
                 if (renamedList.length) console.log('[chat-sync] 酒馆助手导入·同名另存：', renamedList.join('、'));
-                return { ok: ok.length, fail: fail.length, failReasons, renamedList, disabledImported, scope: 'global' };
+                const dg = await __thDiagnose({ ok: ok.length, fail: fail.length, failReasons, renamedList, disabledImported }).catch(() => '');
+                if (dg) console.log(dg);
+                if (fail.length || !ok.length) {
+                    // 出问题才弹（成功不打扰）：整段可复制，用户发来即可定位
+                    try {
+                        const esc = escapeHtml(dg).replace(/\n/g, '<br>');
+                        await __csPopupChoice('🩺 酒馆助手导入诊断（可整段复制发给作者）',
+                            '<textarea readonly style="width:100%;height:220px;font-family:monospace;font-size:.72em;background:rgba(0,0,0,.25);color:var(--SmartThemeBodyColor,#ddd);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:4px;padding:6px" onclick="this.select()">' + esc + '</textarea>',
+                            [{ text: '知道了', result: 1, classes: ['popup-button-ok'] }], 1);
+                    } catch { }
+                }
+                return { ok: ok.length, fail: fail.length, failReasons, renamedList, disabledImported, scope: 'global', diag: dg };
             },
             async del(items, mode) {
                 const ok = [], fail = [];
