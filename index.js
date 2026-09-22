@@ -25,7 +25,11 @@ const __csExtractPng = (typeof __utilsCompat.extractDataFromPng === 'function') 
 const __secretCanView = (typeof __secCompat.canViewSecrets === 'function') ? __secCompat.canViewSecrets : async () => null;
 const __secretWrite = (typeof __secCompat.writeSecret === 'function') ? __secCompat.writeSecret : async () => null;
 const __secretReadState = (typeof __secCompat.readSecretState === 'function') ? __secCompat.readSecretState : async () => {};
-const __secretState = (typeof __secCompat.secret_state !== 'undefined') ? __secCompat.secret_state : {};
+// ⚠️ 0.13.4 关键修复：酒馆前端是「secret_state = await response.json()」**重新赋值**，
+//   原来这里用 const 抓了导入那一刻的旧对象（多为空 {}）→ 即使把 allowKeysExposure 打开，
+//   插件也永远读不到密钥 → 用户实报"上传后导入没有 key"。
+//   改：活读取（module 命名空间属性是 live binding，重新赋值后取到的是最新对象）。
+function __secretStateNow() { try { return __secCompat.secret_state || {}; } catch { return {}; } }
 
 // 加载探针：供 headless 验证/调试确认插件确实执行
 window.__stChatSyncLoaded = true;
@@ -39,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.3'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.4'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6697,12 +6701,24 @@ function __thGetTreeRaw() {
 // 写树: 优先走 TavernHelper 官方接口 updateScriptTreesWith(用户确认可用, 与官方导入同通道), 缺失时退回直改+落盘
 async function __thWriteTree(tree) {
     const th = window.TavernHelper;
+    const want = Array.isArray(tree) ? tree : [];
     if (th && typeof th.updateScriptTreesWith === 'function') {
-        await Promise.resolve(th.updateScriptTreesWith(() => tree, { type: 'global' }));
-    } else {
-        if (!extension_settings.tavern_helper) extension_settings.tavern_helper = { script: { scripts: [] } };
-        extension_settings.tavern_helper.script.scripts = tree;
+        try { await Promise.resolve(th.updateScriptTreesWith(() => want, { type: 'global' })); }
+        catch (e) { console.warn('[chat-sync] 官方接口写脚本树失败，改走直写', e); }
+        // 0.13.4 校验：官方接口可能"静默不生效"（用户实报"显示已下载/双端但看不到变化"）→ 读回来核对，没写进去就直写兜底
+        try {
+            const now = (typeof th.getScriptTrees === 'function' ? th.getScriptTrees({ type: 'global' }) : null);
+            if (Array.isArray(now)) {
+                const has = (x) => now.some((m) => m && m.name === x.name && (!x.id || !m.id || m.id === x.id));
+                const okAll = want.every(has);
+                if (okAll) { saveSettingsDebounced(); return; }
+                console.warn('[chat-sync] 官方接口写入未生效 → 直写兜底', want.map((x) => x.name));
+            }
+        } catch (e) { console.warn('[chat-sync] 脚本树校验异常，走直写兜底', e); }
     }
+    if (!extension_settings.tavern_helper) extension_settings.tavern_helper = { script: { scripts: [] } };
+    if (!extension_settings.tavern_helper.script) extension_settings.tavern_helper.script = { scripts: [] };
+    extension_settings.tavern_helper.script.scripts = want;
     saveSettingsDebounced();
 }
 function __thFindNode(name, type) {
@@ -7037,11 +7053,13 @@ async function _apiSecretOf(profile) {
     if (__apiSecretCanCache.can !== true) return null;
     try { await __secretReadState(); } catch { }
     const id = String(profile['secret-id']);
-    for (const key of Object.keys(__secretState || {})) {
-        const arr = __secretState[key];
+    const st = __secretStateNow();
+    for (const key of Object.keys(st)) {
+        const arr = st[key];
         if (!Array.isArray(arr)) continue;
         const hit = arr.find((x) => x && String(x.id) === id) || arr.find((x) => x && x.label === id);
-        if (hit && typeof hit.value === 'string' && hit.value) return { key, value: hit.value, label: hit.label || '' };
+        // 值非空 且 不是掩码（掩码=未开启 allowKeysExposure，不能当成真密钥上传）
+        if (hit && typeof hit.value === 'string' && hit.value && !/^\*+/.test(hit.value)) return { key, value: hit.value, label: hit.label || '' };
     }
     return null;
 }
@@ -7068,24 +7086,88 @@ function _apiRowHtml(n, mode) {
 }
 // 「密钥没随行」的统一说明文案（上传提醒 / 导入提醒共用）
 function __apiKeyHelpText() {
-    return '要连密钥一起同步，需要在酒馆根目录的 <b>config.yaml</b> 里把 <b>allowKeysExposure</b> 改成 <b>true</b>，然后<b>重启酒馆</b>'
-        + '（酒馆默认关闭；它只在启动时读一次，插件无法替你改）。<br><small>没开启时：只同步 Api 配置本身（端点/模型），密钥要在每台设备手动选一次。</small>';
+    return '酒馆<strong>默认不允许把密钥交给插件</strong>（安全设置，且它只在启动时读一次，插件无法替你改）。'
+        + '把酒馆根目录 <b>config.yaml</b> 里的 <b>allowKeysExposure</b> 改成 <b>true</b> 并<b>重启酒馆</b>后，'
+        + '插件就能<strong>直接把已有的密钥读出来一起备份</strong>——你不需要知道密钥内容，之后也永远不用再管。'
+        + '<br><small>密钥只进你自己的酒馆和你的私有仓库，插件作者无法读取。</small>';
+}
+// 「开启密钥可见」的一键引导（把步骤和可复制命令摆出来；命令里不用反引号，避免转义问题）
+function __apiKeyEnableStepsHtml() {
+    const ps = "$f='.\\config.yaml'; $c=Get-Content $f -Raw; if($c -match 'allowKeysExposure:\\s*false'){ ($c -replace 'allowKeysExposure:\\s*false','allowKeysExposure: true') | Set-Content $f -Encoding UTF8 } else { Add-Content $f 'allowKeysExposure: true' }; Write-Host 'OK - restart SillyTavern'";
+    return '在酒馆根目录（有 <code>config.yaml</code>、<code>server.js</code> 的那个文件夹）操作：'
+        + '<ol style="margin:6px 0 6px 18px;padding:0">'
+        + '<li>用记事本打开 <code>config.yaml</code></li>'
+        + '<li>把 <code>allowKeysExposure: false</code> 改成 <code>allowKeysExposure: true</code>（没有这一行就在末尾加一行同样内容）</li>'
+        + '<li>保存 → <b>重启酒馆</b> → 回来再点一次「上传选中」，密钥就会自动一起上传</li>'
+        + '</ol>'
+        + '<small>不想手动找：在酒馆根目录用 PowerShell 跑下面这行（右键复制）：</small>'
+        + '<textarea readonly style="width:100%;height:52px;margin-top:4px;font-family:monospace;font-size:.78em;background:rgba(0,0,0,.25);color:var(--SmartThemeBodyColor,#ddd);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:4px;padding:4px" onclick="this.select()">' + ps + '</textarea>';
+}
+// 探测某条 profile 绑定的酒馆密钥键名（如 api_key_openai）——粘贴时应写到同一个键
+async function _apiSecretKeyName(profile) {
+    if (!profile || !profile['secret-id']) return '';
+    try { await __secretReadState(); } catch { }
+    const id = String(profile['secret-id']);
+    const st = __secretStateNow();
+    for (const key of Object.keys(st)) {
+        const arr = st[key];
+        if (!Array.isArray(arr)) continue;
+        if (arr.some((x) => x && (String(x.id) === id || x.label === id))) return key;
+    }
+    return '';
+}
+// 让用户粘贴一次密钥（ST 原生输入框；无则退化为 prompt）
+async function __askPasteKey(pname, keyName) {
+    const tip = `「${pname}」用的密钥（${keyName || 'api_key'}）：\n\n粘贴后会写进本机酒馆，并随本次上传存进你的私有云端；插件作者无法读取。\n留空 = 本次不带密钥。`;
+    const P2 = __csPopup();
+    try {
+        if (P2 && P2.show && typeof P2.show.input === 'function') return await P2.show.input('🔑 粘贴一次密钥', tip, '');
+        if (P2 && P2.show && typeof P2.show.text === 'function') { await P2.show.text('🔑 粘贴密钥', tip); }
+    } catch { }
+    try { return window.prompt(tip); } catch { return null; }
 }
 async function pushSelectedApiProfiles(names) {
     if (!Array.isArray(names) || !names.length) { toastr.warning('未选择要上传的Api配置'); return null; }
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
     try {
-        // 0.13.3：若选中的配置里有用到密钥、但酒馆不允许导出密钥明文 → 先说清楚再上传（否则导入端会"没有 key"且用户莫名其妙）
+        // 0.13.4：密钥随行。酒馆未开启 allowKeysExposure 时（默认关闭，且是启动常量、插件改不了），
+        //   给用户三个选择：粘贴一次（写进本机+私有云端）/ 不带密钥继续 / 取消。
         let noKeyCount = 0;
+        const pastedByKey = {}; // 键名 → 明文（同一键只问一次）
         try {
             const withSecret = names.map((nm) => _apiProfileByName(nm)).filter((p) => p && p['secret-id']);
             if (withSecret.length) {
                 const perms = await __secretCanView();
                 if (perms !== true) {
                     noKeyCount = withSecret.length;
-                    const go = await csConfirm('⚠ 密钥不会被带走（酒馆未允许导出密钥）',
-                        `选中的 <b>${withSecret.length}</b> 条 Api 配置用了密钥，但当前酒馆<strong>不允许把密钥明文交给插件</strong>，所以这次上传<b>只带配置、不带密钥</b>；导入到别的设备后需要手动选一次 key。<br><br>${__apiKeyHelpText()}<br><br>要现在继续上传吗（不带密钥）？`);
-                    if (!go) { toastr.info('已取消上传。改好 config.yaml 并重启酒馆后，再点一次「上传选中」。'); return null; }
+                    const pick = await __csPopupChoice('🔑 密钥要一起备份吗？',
+                        `选中的 <b>${withSecret.length}</b> 条 Api 配置用了密钥，但酒馆当前<strong>不允许把密钥交给插件</strong>，所以默认这次只备份配置本身。<br><br>${__apiKeyHelpText()}`,
+                        [
+                            { text: '✅ 开启「密钥可见」后自动读取（推荐）', result: 4212, classes: ['popup-button-ok'] },
+                            { text: '仍然上传（不带密钥）', result: 4211, classes: ['popup-button-cancel'] },
+                            { text: '这台改不了配置，粘贴一次', result: 4210, classes: ['popup-button-cancel'] },
+                            { text: '取消', result: 4999, classes: ['popup-button-cancel'] },
+                        ], 4212);
+                    if (pick === 4999) { toastr.info('已取消上传'); return null; }
+                    if (pick === 4212) {
+                        // 一键引导：把步骤+可复制命令摆给用户；改完重启后再点一次上传即可（之后永远自动）
+                        await __csPopupChoice('🔑 开启「密钥可见」', __apiKeyEnableStepsHtml(), [{ text: '知道了', result: 1, classes: ['popup-button-ok'] }], 1);
+                        toastr.info('改好 config.yaml 并重启酒馆后，再点一次「上传选中」，密钥会自动一起上传（以后不用再管）。');
+                        return null;
+                    }
+                    if (pick === 4210) {
+                        for (const p of withSecret) {
+                            const kn = await _apiSecretKeyName(p);
+                            if (!kn) continue;
+                            if (pastedByKey[kn] !== undefined) continue; // 同一个键只问一次
+                            const val = await __askPasteKey(p.name, kn);
+                            const v = val == null ? '' : String(val).trim();
+                            if (!v) { pastedByKey[kn] = ''; continue; }
+                            pastedByKey[kn] = v;
+                            try { const nid = await __secretWrite(kn, v, p.name); if (nid) p['secret-id'] = nid; }
+                            catch (e) { console.warn('[chat-sync] 密钥写入本机失败(仍随行上传)', e); }
+                        }
+                    }
                 }
             }
         } catch (e) { console.warn('[chat-sync] 密钥权限探测失败(按不带密钥继续)', e); }
@@ -7098,7 +7180,21 @@ async function pushSelectedApiProfiles(names) {
                 const p = _apiProfileByName(name);
                 if (!p) { fail.push(name); failReasons.push({ name, reason: '本地无该配置' }); continue; }
                 const path = `${API_CLOUD_DIR}/${__safeName(name)}.json`;
-                const secret = await _apiSecretOf(p);
+                let secret = await _apiSecretOf(p);
+                // 0.13.4：本机读不到明文时——① 用刚粘贴的；② 复用云端旧文件里已有的明文（用户只需粘贴一次，之后不再打扰）
+                if (!secret && p['secret-id']) {
+                    try {
+                        const kn = await _apiSecretKeyName(p);
+                        if (kn && pastedByKey[kn]) secret = { key: kn, value: pastedByKey[kn], label: p.name };
+                    } catch { }
+                }
+                if (!secret && p['secret-id']) {
+                    try {
+                        const prevTxt = (await Gitee.getText(path).catch(() => null));
+                        const cj = prevTxt && prevTxt.content ? JSON.parse(prevTxt.content) : null;
+                        if (cj && cj.secret && cj.secret.value) { secret = cj.secret; console.log('[chat-sync] 复用云端已有密钥明文:', name); }
+                    } catch { }
+                }
                 const text = JSON.stringify({ kind: 'st-connection-profile', v: 1, savedAt: new Date().toISOString(), profile: p, secret });
                 const cloud = await Gitee.getText(path);
                 if (cloud) {
@@ -7148,7 +7244,7 @@ async function importSelectedApiProfiles(names) {
                     try {
                         await __secretReadState();
                         const skey = parsed.secret.key, sval = parsed.secret.value, slab = parsed.secret.label || name;
-                        const sarr = (__secretState || {})[skey];
+                        const sarr = __secretStateNow()[skey];
                         if (Array.isArray(sarr)) {
                             const dup = sarr.find((x) => x && x.label === slab && x.value === sval);
                             if (dup) newId = dup.id; // 密钥值逐字一致(明文态才可比) → 复用
