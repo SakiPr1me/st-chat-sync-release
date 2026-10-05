@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.10'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.11'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2811,6 +2811,18 @@ function _connPresetVisible(name) {
 // 列出本地连接预设名（只列 OpenAI, 已过滤 Default/.bak-/__ 前缀）
 // ⚠️ 实测 ST 返回: openai_settings = 字符串数组(每个是预设 JSON 文本), openai_setting_names = 同名索引数组, 两者一一对应!
 async function _connPresetNamesOf(g) {
+    // 0.13.11 修（作者实报：酒馆里改了预设名/新建预设后，点「刷新本地」看不到变化，只能刷新酒馆页面）：
+    //   原来只读 /api/settings/get 的服务端快照（且插件还缓存了它）——ST 保存是防抖的，快照会滞后；
+    //   改成优先取酒馆前端的【活名单】（与读预设内容同源），官方 UI 里改名/新建/删除都能立刻反映。
+    try {
+        const pm = getContext().getPresetManager && getContext().getPresetManager(g.apiId);
+        if (pm && typeof pm.getPresetList === 'function') {
+            const L = pm.getPresetList(g.apiId) || {};
+            const pn = L.preset_names;
+            const arr = Array.isArray(pn) ? pn.slice() : Object.keys(pn || {});
+            if (arr.length || Array.isArray(pn)) return arr.filter(Boolean).filter(_connPresetVisible);
+        }
+    } catch { }
     const d = await fetchSettingsJson();
     const contents = d[g.key];
     const names = d[CONN_NAME_KEY[g.key]];
@@ -7946,6 +7958,9 @@ ext: {
         try {
             const c = window.__cfgListCache[tab];
             if (!force && c && Array.isArray(c[which])) return c[which];
+            // 0.13.11：「刷新本地」= 强制取实时数据 —— 连 /api/settings/get 的快照缓存一起清，
+            //   否则酒馆里刚改名/新建的预设，回退路径仍会读到旧快照（作者实报"刷新没用、只能刷新酒馆"）
+            if (force && which === 'local') { try { __lastSettingsData = null; } catch { } }
             const v = await (which === 'cloud' ? drv.listCloud() : drv.listLocal());
             const prev = window.__cfgListCache[tab] || { local: null, cloud: null };
             window.__cfgListCache[tab] = { local: prev.local, cloud: prev.cloud, [which]: v, ts: Date.now() };
