@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.12'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.13'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3737,6 +3737,19 @@ async function __cachedListEntries(dir) {
     const arr = await Gitee.listEntries(dir);
     __dirEntryCache[dir] = { ts: Date.now(), arr };
     return arr;
+}
+// 0.13.13：配置项「上传/导入」成功后立刻失效相关缓存 → 重渲染时**即时重新比对**。
+//   不这么做的话：目录列表缓存(__dirEntryCache,5min)里还是旧 sha、差异缓存(__diffCache,5min)里还是旧判定 →
+//   刚上传成功的那条会继续显示"本地新"（作者实报"上传成功了还是本地新"）。
+function __invalidateCfgAfterOp() {
+    try {
+        const tab = window.__cfgTab || '';
+        const DIR_BY_TAB = { conn: () => CONN_PRESET_GROUPS[0].cloudDir, theme: () => THEME_CLOUD_DIR, regex: () => REGEX_CLOUD_DIR, user: () => 'config-sync/user/personas', api: () => API_CLOUD_DIR, thp: () => TH_SCRIPTS_DIR };
+        const dir = DIR_BY_TAB[tab] && DIR_BY_TAB[tab]();
+        if (dir) delete __dirEntryCache[dir]; // 目录(含云端 sha)下次重拉
+        for (const k of Object.keys(__diffCache)) delete __diffCache[k]; // 差异判定重算
+        if (tab === 'ext') { try { window.__extListAt = 0; window.__extListCache = null; } catch { } }
+    } catch (e) { console.warn('[chat-sync] 失效差异缓存失败(忽略)', e); }
 }
 // 删除后精确失效目录缓存(只剔除被删文件, 重渲染走缓存秒回; 避免清空后整表重拉3-4次目录)
 function __evictDirCacheItems(dir, entries, tab) {
@@ -8331,6 +8344,7 @@ ext: {
             const r = await window.__cfgDrivers[window.__cfgTab].push(sel);
             hideBusy();
             if (!(r && typeof r.ok === 'number')) { if (st2) __csSetStatus(st2, '❌ 上传出错：没有返回结果', 'err'); return; }
+            __invalidateCfgAfterOp(); // 0.13.13：先失效缓存，重渲染才会即时重新比对（否则刚传的仍显示本地新）
             try { await window.__renderCfgList(window.__cfgMode, { force: true }); } catch { } // 先刷新(刷新会清状态行), 再写完成文案
             if (st2) __csSetStatus(st2, `上传完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${urlNotesTxt(r)}`, r.fail ? 'err' : 'ok');
         } catch (e) {
@@ -8354,6 +8368,7 @@ ext: {
             const r = await window.__cfgDrivers[window.__cfgTab].pull(sel);
             hideBusy();
             if (!(r && typeof r.ok === 'number')) { if (st2) __csSetStatus(st2, '❌ 导入出错：没有返回结果', 'err'); return; }
+            __invalidateCfgAfterOp(); // 0.13.13：同上
             try { await window.__renderCfgList(window.__cfgMode, { force: true }); } catch { }
             if (st2) __csSetStatus(st2, `导入完成：成功 ${r.ok}${r.fail ? `，失败 ${r.fail}` : ''}${r.failReasons && r.failReasons.length ? '（' + csShortList(r.failReasons.map(x => x.reason)) + '）' : ''}`, r.fail ? 'err' : 'ok');
         } catch (e) {
@@ -8847,6 +8862,9 @@ ext: {
         if (!sel.length) { toastr.warning('请先勾选要上传的世界书'); return; }
         const st = $('cs_wb_status'); if (st) st.textContent = '上传中…';
         await pushSelectedWorldbooks(sel);
+        // 0.13.13：操作后失效缓存并重渲染（原来只在操作前渲染 → 刚传的世界书仍显示"本地新"）
+        try { delete __dirEntryCache['worldbooks']; for (const k of Object.keys(__diffCache)) delete __diffCache[k]; } catch { }
+        try { window.__renderWorldbookList(window.__wbListMode); } catch { }
         if (st) st.textContent = '';
     });
     $('cs_wb_pull')?.addEventListener('click', async () => {
@@ -8855,6 +8873,8 @@ ext: {
         if (!sel.length) { toastr.warning('请先勾选要导入的世界书'); return; }
         const st = $('cs_wb_status'); if (st) st.textContent = '导入中…';
         await importSelectedWorldbooks(sel);
+        try { delete __dirEntryCache['worldbooks']; for (const k of Object.keys(__diffCache)) delete __diffCache[k]; } catch { }
+        try { window.__renderWorldbookList(window.__wbListMode); } catch { }
         if (st) st.textContent = '';
     });
     // 删除选中世界书：目标随当前列表视图（本地视图→删本地全局书，云端视图→删云端全局书），逻辑同角色删除选中
