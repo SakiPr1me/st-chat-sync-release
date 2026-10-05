@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.11'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.12'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3082,6 +3082,9 @@ async function deleteSelectedConnPresets(items, mode) {
 const THEME_CLOUD_DIR = 'config-sync/themes';
 // 本地主题列表：/api/settings/get 的 themes 数组（{name,...} 或 {name,custom_css}）
 async function _themeLocalList() {
+    // 0.13.12：部分版本(如 TT)可能暴露活对象 power_user.themes → 有就优先；ST 1.19 里它是 undefined（主题在服务端目录 + 设置快照），
+    //   那种情况靠「刷新本地」清掉设置快照缓存来保证即时性（见 __cfgGetList 的 force 分支）。
+    try { if (Array.isArray(power_user && power_user.themes)) return power_user.themes.map(t => ({ name: (t && t.name) || '', data: t })); } catch { }
     const d = await fetchSettingsJson();
     const arr = d.themes;
     if (!Array.isArray(arr)) return [];
@@ -3285,6 +3288,8 @@ async function _parseSettingsObj() {
     return d && typeof d.settings === 'object' && d.settings !== null ? d.settings : null;
 }
 async function _regexLocalList() {
+    // 0.13.12：优先用酒馆活对象 extension_settings.regex（快照滞后 → 增删改正则后点刷新看不到）
+    try { if (Array.isArray(extension_settings && extension_settings.regex)) return extension_settings.regex.map(r => ({ name: (r && (r.scriptName || r.id)) || '', data: r })); } catch { }
     const o = await _parseSettingsObj();
     const arr = o && o.extension_settings && o.extension_settings.regex;
     if (!Array.isArray(arr)) return [];
@@ -7960,7 +7965,11 @@ ext: {
             if (!force && c && Array.isArray(c[which])) return c[which];
             // 0.13.11：「刷新本地」= 强制取实时数据 —— 连 /api/settings/get 的快照缓存一起清，
             //   否则酒馆里刚改名/新建的预设，回退路径仍会读到旧快照（作者实报"刷新没用、只能刷新酒馆"）
-            if (force && which === 'local') { try { __lastSettingsData = null; } catch { } }
+            if (force && which === 'local') {
+                try { __lastSettingsData = null; } catch { } // 设置快照
+                // 0.13.12：拓展插件的 discover 结果也有 60s 缓存——刷新时一并清，新装的扩展立即可见
+                try { window.__extListAt = 0; window.__extListCache = null; window.__extMetaFetchedAt = 0; } catch { }
+            }
             const v = await (which === 'cloud' ? drv.listCloud() : drv.listLocal());
             const prev = window.__cfgListCache[tab] || { local: null, cloud: null };
             window.__cfgListCache[tab] = { local: prev.local, cloud: prev.cloud, [which]: v, ts: Date.now() };
