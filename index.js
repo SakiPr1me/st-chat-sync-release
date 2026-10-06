@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.17'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.18'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -868,6 +868,15 @@ function __csStripCardRuntime(j) {
         // 0.13.17：同上——0.5 是 ST 默认值，缺省与显式 0.5 等价（v2 读数存在 data.extensions.talkativeness）
         if (d.extensions && typeof d.extensions === 'object' && Number(d.extensions.talkativeness) === 0.5) delete d.extensions.talkativeness;
         if (Number(d.talkativeness) === 0.5) delete d.talkativeness;
+        // 0.13.18：卡里内嵌的 data.character_book 是**绑定世界书的派生副本**——ST 每次用表单保存/导入卡都会按
+        //   世界书重新生成它（endpoints/characters.js 的 charaFormatData：只要带了 world 字段就 _.set
+        //   char.data.character_book = convertWorldInfoToCharacterBook(...)）。而世界书本身是**单独比**的
+        //   （徽章里的「世界书:…」）⇒ 拿这份派生副本当"卡内容"比，会**假报"卡:本地新"**（实测：一边有、另一边没有，
+        //   或两端生成时机不同 ⇒ 恒不等）。**只在卡绑了世界书时**忽略它；没绑定（内嵌世界书卡）时照旧比。
+        {
+            const bw = (d.extensions && String(d.extensions.world || '').trim()) || String(out.world || '').trim();
+            if (bw) { delete d.character_book; delete out.character_book; }
+        }
         // depth_prompt 空壳：ST 保存时必写 {prompt:'',depth:0,role:'system'}；没有 prompt 就等于没内容 → 整块删掉再比
         if (d.extensions && typeof d.extensions === 'object' && d.extensions.depth_prompt && typeof d.extensions.depth_prompt === 'object'
             && !String(d.extensions.depth_prompt.prompt || '').trim()) {
