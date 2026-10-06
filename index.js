@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.13'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.14'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7293,6 +7293,7 @@ async function pushSelectedApiProfiles(names) {
     } finally { __csReleaseBusy(); }
 }
 async function importSelectedApiProfiles(names) {
+    const updatedInPlace = []; // 0.13.14：按 id 命中、直接更新的条目（结果里如实标注）
     if (!Array.isArray(names) || !names.length) { toastr.warning('未选择要导入的Api配置'); return null; }
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
     try {
@@ -7334,10 +7335,18 @@ async function importSelectedApiProfiles(names) {
                 const arr = extension_settings.connectionManager.profiles;
                 const keyName = profile.name || name;
                 let idx = profile.id ? arr.findIndex((x) => x && x.id === profile.id) : -1;
+                // 0.13.14：**按 id 命中** = 同一条配置（profile.id 跨端稳定）→ 云端更新过就直接更新
+                //   原来这种情况也会弹"同名覆盖/另存"，用户实报"明明上传时是新的，导入时却问同名"
+                const matchedById = idx >= 0 && !!profile.id && !!(arr[idx] && arr[idx].id === profile.id);
                 if (idx < 0) idx = arr.findIndex((x) => x && x.name === keyName);
                 let savedAs = keyName;
                 if (idx >= 0) {
                     if (jsonStableString(arr[idx]) === jsonStableString(profile)) { skipped.push(name); if (secretNote) failReasons.push({ name, reason: secretNote }); continue; }
+                    if (matchedById) {
+                        // 同一条：直接更新（不打扰）；结果里如实说明是"更新"而不是新增
+                        arr[idx] = profile;
+                        updatedInPlace.push(keyName);
+                    } else {
                     const decision = await resolveCfgImportConflict('Api配置', keyName, batchMode);
                     if (decision === 'cancel') { skippedManual.push(name); continue; }
                     if (decision === 'copy') {
@@ -7346,15 +7355,30 @@ async function importSelectedApiProfiles(names) {
                         profile.id = _apiNewId();
                         arr.push(profile);
                     } else arr[idx] = profile;
+                    }
                 } else arr.push(profile);
-                ok.push(savedAs === keyName ? keyName : `${keyName}→另存「${savedAs}」`);
+                ok.push(savedAs === keyName ? (matchedById ? `${keyName}(同一条·已更新)` : keyName) : `${keyName}→另存「${savedAs}」`);
                 if (secretNote) failReasons.push({ name: savedAs, reason: secretNote });
             } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
         }
         saveSettingsDebounced(); // 官方保存路径: 页面活设置 + 正确版本号(ST/TT 通用)
         window.__apiRefreshOfficialList(); // 0.12.4: 官方连接配置下拉即时可见(不等刷新)
+        // 0.13.14：若"当前选中的那条"就在本次导入里 → 触发一次官方"切换配置"流程
+        //   （#connection_profiles 的 change 处理器会调 applyConnectionProfile + 发 CONNECTION_PROFILE_LOADED）
+        //   不这么做：界面上的模型名/自定义端点仍是应用旧值 → 用户实报"要切到别的再切回来才变"
+        try {
+            const cmB = extension_settings.connectionManager || {};
+            const selId = cmB.selectedProfile;
+            const hitB = Array.isArray(cmB.profiles) ? cmB.profiles.find((p) => p && p.id === selId) : null;
+            const selEl = document.getElementById('connection_profiles');
+            if (hitB && selEl && names.some((n2) => String(n2) === String(hitB.name))) {
+                selEl.value = hitB.id;
+                selEl.dispatchEvent(new Event('change', { bubbles: true }));
+                console.log('[chat-sync] 已让酒馆重新应用当前连接配置:', hitB.name);
+            }
+        } catch (e) { console.warn('[chat-sync] 重新应用当前连接配置失败(忽略)', e); }
         hideBusy();
-        toastr.info(`导入Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}`);
+        toastr.info(`导入Api配置：成功 ${ok.length} / 共 ${names.length}${updatedInPlace.length ? `（其中 ${updatedInPlace.length} 条是同一条配置·已按云端更新）` : ''}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}`);
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
