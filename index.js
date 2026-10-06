@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.14'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.15'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2359,6 +2359,31 @@ function releaseAllImportModals() { /* 安全版无全局引用计数，无需�
 // TT：/api/characters/edit 只接受 multipart FormData（_tt2 character-routes.js:135，buildCharacterCardFromForm 读表单 json_data + chat 重建整卡）。
 // 故统一用 FormData：json_data = 用 /api/characters/get 拿到的完整卡对象(JSON)，chat = 目标，另带 name/avatar 等必需字段 → 两端都能落盘且不清空卡。
 // 不打开聊天窗口→不会冻结。返回是否成功；失败只告警不抛（导入本体不受影响）。
+// 0.13.15 ★：ST 的 /api/characters/edit 会用表单字段**重建整卡**（charaFormatData），没发的字段一律被清空。
+//   实测（e2e/run-card-fidelity.js）：只发原来那 10 个字段时，会丢 alternate_greetings（备用开场白）、
+//   system_prompt、post_history_instructions、data.extensions.world（**绑定世界书**）、depth_prompt、creator、character_version。
+//   这里按"能取到的都发全"构造（值优先卡对象的 data.*，V2 字段在这儿；回退顶层），并带上完整 extensions。
+function __cardFormFields(card) {
+    const d = (card && card.data) || {};
+    const pick = (k) => (d[k] !== undefined && d[k] !== null) ? d[k] : ((card && card[k] !== undefined && card[k] !== null) ? card[k] : '');
+    const ext = (d.extensions && typeof d.extensions === 'object') ? d.extensions : ((card && card.extensions && typeof card.extensions === 'object') ? card.extensions : {});
+    const dp = (ext.depth_prompt && typeof ext.depth_prompt === 'object') ? ext.depth_prompt : {};
+    const out = {
+        description: pick('description'), personality: pick('personality'), scenario: pick('scenario'),
+        first_mes: pick('first_mes'), mes_example: pick('mes_example'),
+        creator_notes: pick('creator_notes'), creatorcomment: pick('creatorcomment'),
+        system_prompt: pick('system_prompt'), post_history_instructions: pick('post_history_instructions'),
+        creator: pick('creator'), character_version: pick('character_version'),
+        talkativeness: pick('talkativeness'), fav: pick('fav'), tags: pick('tags'),
+        alternate_greetings: pick('alternate_greetings'),
+        world: pick('world') || ext.world || '',
+        depth_prompt_prompt: pick('depth_prompt_prompt') || dp.prompt || '',
+        depth_prompt_depth: pick('depth_prompt_depth') || dp.depth,
+        depth_prompt_role: pick('depth_prompt_role') || dp.role || '',
+    };
+    try { out.extensions = JSON.stringify(ext || {}); } catch { out.extensions = ''; }
+    return out;
+}
 async function persistChatPointerStt(charName, cardAvatar, chatStem) {
     const stem = String(chatStem || '').replace(/\.jsonl$/i, '');
     try {
@@ -2385,9 +2410,11 @@ async function persistChatPointerStt(charName, cardAvatar, chatStem) {
             fd.append('chat', stem);
             fd.append('json_data', jsonData);
             fd.append('create_date', card && card.create_date || new Date().toISOString());
-            for (const k of ['description','personality','scenario','first_mes','mes_example','creator_notes','creatorcomment','talkativeness','fav','tags']) {
-                const v = card && card[k] != null ? card[k] : '';
-                fd.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+            // 0.13.15：字段补全（原来只发 10 个 → 重建卡时会清空备用开场白/系统提示/绑定世界书等）
+            const F2 = __cardFormFields(card);
+            for (const k of Object.keys(F2)) {
+                const v = F2[k];
+                fd.append(k, (v === undefined || v === null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v)));
             }
             resp = await fetch('/api/characters/edit', { method: 'POST', headers: getRequestHeaders({ omitContentType: true }), body: fd });
         } else {
@@ -2396,9 +2423,12 @@ async function persistChatPointerStt(charName, cardAvatar, chatStem) {
                 avatar_url: av, ch_name: name, name, chat: stem, json_data: jsonData,
                 create_date: (card && card.create_date) || new Date().toISOString(),
             };
-            for (const k of ['description','personality','scenario','first_mes','mes_example','creator_notes','creatorcomment','talkativeness','fav','tags']) {
-                const v = card && card[k] != null ? card[k] : '';
-                body[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+            // 0.13.15：同一套字段补全（见 __cardFormFields 注释）
+            const F1 = __cardFormFields(card);
+            for (const k of Object.keys(F1)) {
+                const v = F1[k];
+                // 数组（tags / alternate_greetings）必须原样发：stringify 成字符串后 ST 只会当成"1 条"
+                body[k] = (v === undefined || v === null) ? '' : (Array.isArray(v) ? v : (typeof v === 'object' ? JSON.stringify(v) : String(v)));
             }
             resp = await fetch('/api/characters/edit', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(body) });
         }
@@ -3528,6 +3558,8 @@ async function restoreUserFromCloud() {
                 o.power_user.persona_descriptions = Object.assign({}, (o.power_user && o.power_user.persona_descriptions) || {}, pu.persona_descriptions);
             }
         }
+        // 0.13.15：恢复完人设后发官方事件（界面即时刷新，不用再手动刷新酒馆）
+        try { await __emitPersonaTouched(avEntries.map((e) => e.name), null); } catch { }
         if (ud.user_avatar) { o.user_avatar = ud.user_avatar; if (settings.user_avatar !== undefined) settings.user_avatar = ud.user_avatar; }
         const uname = ud.username || ud.user_name;
         if (uname) { o.username = uname; if (!(o.user_name)) o.user_name = uname; }
@@ -3542,6 +3574,20 @@ async function restoreUserFromCloud() {
     } catch (e) { console.warn('[chat-sync] User 恢复失败', e); hideBusy(); toastr.error('User 恢复失败：' + (e.message || e)); return false; }
     finally { __csReleaseBusy(); }
 }
+// 0.13.15：导入/恢复人设后发酒馆官方事件 —— 否则人设列表与头像要"刷新酒馆页面"才更新（作者实报）。
+//   酒馆 personas.js 用 PERSONA_CREATED(新增) / PERSONA_UPDATED(更新) 驱动界面刷新。
+async function __emitPersonaTouched(files, existedSet) {
+    for (const f of files) {
+        try {
+            const av = String(f || '');
+            if (!av) continue;
+            const wasThere = existedSet && existedSet.has(av);
+            if (wasThere) await eventSource.emit(event_types.PERSONA_UPDATED, av);
+            else await eventSource.emit(event_types.PERSONA_CREATED, { avatarId: av, name: (power_user.personas && power_user.personas[av]) || '', description: (power_user.persona_descriptions && power_user.persona_descriptions[av] && power_user.persona_descriptions[av].description) || '', title: '' });
+        } catch (e) { console.warn('[chat-sync] 发人设事件失败(忽略)', e); }
+    }
+}
+
 // ═══ 分项④-补: 人设管理·逐个删除（2026-08-25 用户要求完全按官方入口） ═══
 // 官方 deletePersona(personas.js:1151) 全套动作复刻:
 //   /api/avatars/delete → 清 power_user.personas/persona_descriptions 两键 → default_persona 处理
@@ -3645,8 +3691,10 @@ async function downloadUserPersonasFromCloud(files) {
             if (!r.ok) { fail.push(file); failReasons.push({ name: file, reason: '写入 HTTP ' + r.status }); continue; }
             if (!power_user.personas) power_user.personas = {};
             if (!power_user.persona_descriptions) power_user.persona_descriptions = {};
+            const __existed = !!(power_user.personas && power_user.personas[file]); // 记录"导入前是否已有"（决定发 CREATED 还是 UPDATED）
             if (meta.name) power_user.personas[file] = meta.name;
             if (meta.description) power_user.persona_descriptions[file] = { description: meta.description };
+            await __emitPersonaTouched([file], __existed ? new Set([file]) : new Set()); // 0.13.15：发官方事件 → 界面即时更新
             ok.push(file);
         } catch (e) { fail.push(file); failReasons.push({ name: file, reason: (e && e.message) || String(e) }); }
     }
