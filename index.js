@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.18'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.19'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4272,6 +4272,7 @@ async function importCharFromCloud(charName, opts = {}) {
     let cardReused = false; // 本地已有该卡 → 复用（不是失败）
     let cardAvatar = '';    // 聊天导入要落到哪张卡（多卡时取主卡/第一张）
     let importedAny = 0, reusedAny = 0; const failedCards = []; const healedCards = [];
+    const __wRefs = []; // 0.13.19：本次导入涉及的卡各自"引用哪本世界书"（决定本机世界书文件叫什么名）
     const idxCloud = await __cardsLoad(charName);
     const cloudCards = (idxCloud && Array.isArray(idxCloud.cards)) ? idxCloud.cards.slice() : [];
     const targets = cloudCards.length
@@ -4284,6 +4285,7 @@ async function importCharFromCloud(charName, opts = {}) {
         if (localHit) {
             reusedAny++;
             if (!cardAvatar) cardAvatar = __stemOf(localHit.avatar);
+            try { const __w0 = String((localHit.data && localHit.data.extensions && localHit.data.extensions.world) || '').trim(); if (__w0) __wRefs.push({ id: (entry && entry.id) || '', ref: __w0 }); } catch { }
             // 0.13.17：本地已有 ≠ 什么都不做——旧版本（≤0.13.14）导入会把卡里若干栏位清成空白，
             //   这里顺手把「本机空、云端有」的栏目补回来（只填空；只改本机，不上传、不动云端）
             const __healed = await __csHealHitCard(charName, localHit.avatar, entry);
@@ -4292,6 +4294,16 @@ async function importCharFromCloud(charName, opts = {}) {
             continue;
         }
         const cardCloud = await __cardGetSmart(__entryPath(charName, entry));
+        try {
+            if (cardCloud && cardCloud.b64) {
+                const __bin = atob(String(cardCloud.b64).replace(/\s/g, ''));
+                const __u = new Uint8Array(__bin.length);
+                for (let i = 0; i < __bin.length; i++) __u[i] = __bin.charCodeAt(i);
+                const __j = __csCardJsonFromPngUtf8(__u);
+                const __w1 = String((__j && __j.data && __j.data.extensions && __j.data.extensions.world) || (__j && __j.world) || '').trim();
+                if (__w1) __wRefs.push({ id: (entry && entry.id) || '', ref: __w1 });
+            }
+        } catch { }
         if (!cardCloud?.b64) {
             if (!cloudCards.length) {
                 // 云端没有该角色的卡 → 不是有效的云端角色（本地独有或云端从未上传），跳过并明示，避免静默失败
@@ -4344,12 +4356,21 @@ async function importCharFromCloud(charName, opts = {}) {
         try {
             // 书真实名字在 world.json 的 originalData.name（如「🌸方亦楷和高中生活_2.0」），不是固定的 world。
             // importWorldInfo 按【文件名】派生书名，所以要按 originalData.name 命名文件，才能和卡 extensions.world 引用对上。
-            let wName = 'world';
+            // 0.13.19：世界书文件的**名字**必须按"卡里引用的名字"（data.extensions.world）来定——ST 是按
+            //   【文件名】把书绑到卡上的。以前只认云端 JSON 自带的 originalData.name / name，云端那份是"手动新建"的书
+            //   （文件里只有 entries，没有名字）时会退化成固定的 'world' ⇒ 本机建出 worlds/world.json，而卡里仍写着
+            //   原名 ⇒ 卡"看起来没世界书"、徽章恒报"世界书:本地新"（本轮实测复现：listAfter 里多出一个 world、
+            //   按卡里的名字读出来 0 条）。
+            //   引用名从"卡循环里已经拿到的卡 JSON"取（导入后酒馆前端名单还没刷新，按名字去查卡会查不到 —— 实测踩过）
+            const __pick = opts.cardId ? (__wRefs.find((x) => x.id === opts.cardId) || {}) : (__wRefs.find((x) => x.ref) || {});
+            const wRefCard = String(__pick.ref || '').trim();
+            let wName = wRefCard || 'world';
             try {
                 const wj = JSON.parse(wText);
                 const on = wj?.originalData?.name || wj?.name || wj?.data?.name;
-                if (on && String(on).trim()) wName = String(on).trim();
-            } catch (e) { /* 解析失败就用默认 world */ }
+                // 卡里引用的名字优先（它才决定 ST 能不能把书绑到卡上）；卡里没有才用云端 JSON 自带的名字
+                if (!wRefCard && on && String(on).trim()) wName = String(on).trim();
+            } catch (e) { /* 解析失败就用上面的名字 */ }
             const f = textToFile(wText, `${wName}.json`);
             // ⚠️ ST 弹「是否导入世界书」的根因不只是撞名，还有一个更隐蔽的：ST 的 world_names 是
             //   world-info.js 的 `export let` 活绑定，只在页面初始化 data.world_names 后才填充。插件若在它
