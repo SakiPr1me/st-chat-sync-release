@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.15'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.16'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -830,9 +830,34 @@ async function gitBlobSha(bytes) {
 function __csStripCardRuntime(j) {
     if (!j || typeof j !== 'object') return j;
     const out = { ...j };
+    // 0.13.16：ST 保存/导入卡时会写入一批"空壳/类型不同"的字段（depth_prompt 空壳、creator/character_version/
+    //   creatorcomment 空串、talkativeness 写成字符串"0.5"）→ 与云端原始卡语义比对会**假报"本地新"**（实测 5 处）。
+    //   这里统一归一：删空串/空数组、数字型字符串转数字、删全空的 depth_prompt。
+    const __norm = (o) => {
+        if (!o || typeof o !== 'object') return;
+        for (const k of Object.keys(o)) {
+            const v = o[k];
+            if (v === '' || v === null || v === undefined) { delete o[k]; continue; }
+            if (Array.isArray(v) && v.length === 0) { delete o[k]; continue; }
+            if ((k === 'talkativeness' || k === 'depth' || k === 'order') && typeof v === 'string' && v !== '' && !isNaN(Number(v))) { o[k] = Number(v); continue; }
+        }
+    };
+    __norm(out);
     delete out.chat; // v1 顶层: 当前打开聊天文件名(运行时)
+    // 0.13.16：这两个也是运行时字段——ST 每次保存/导入都会重写（create_date 变、avatar 可能被写成 'none'），
+    //   不剥掉会让"导入后与云端比对"恒判不同 → 假"本地新"
+    delete out.create_date;
+    delete out.avatar;
     const d = out.data;
     if (d && typeof d === 'object') {
+        delete d.create_date;
+        delete d.avatar;
+        __norm(d); // 0.13.16：data 层也归一（同上的空壳/类型问题）
+        // depth_prompt 空壳：ST 保存时必写 {prompt:'',depth:0,role:'system'}；没有 prompt 就等于没内容 → 整块删掉再比
+        if (d.extensions && typeof d.extensions === 'object' && d.extensions.depth_prompt && typeof d.extensions.depth_prompt === 'object'
+            && !String(d.extensions.depth_prompt.prompt || '').trim()) {
+            delete d.extensions.depth_prompt;
+        }
         // v2: data.extensions 里扩展注入的运行时空壳。实测 JS-Slash-Runner/酒馆助手 写 tavern_helper{scripts:[],variables:{}}
         //   (整体空壳对象)。删掉已知扩展注入键; 再删"值全为空"的对象壳(空对象/空数组)。
         const ex = d.extensions;
@@ -6026,7 +6051,20 @@ function wirePanelEvents() {
                                     const wf = files.find((f) => f.path === 'sync/' + name + '/world.json');
                                     if (wf) {
                                         const wc = await getWorldContent(wname);
-                                        if (wc) det.wb = ((await gitBlobSha(new TextEncoder().encode(String(wc)))) === wf.sha) ? 'same' : 'local';
+                                        if (wc) {
+                                            const bytesSame = ((await gitBlobSha(new TextEncoder().encode(String(wc)))) === wf.sha);
+                                            if (bytesSame) det.wb = 'same';
+                                            else {
+                                                // 0.13.16：字节不同不等于内容不同——ST 导入/保存世界书会重排 JSON（键序/格式），
+                                                //   与云端原始字节恒不同 → 会假报"本地新"。下载云端世界书，比【语义】（键序无关）。
+                                                try {
+                                                    const __cw = await Gitee.getText('sync/' + name + '/world.json');
+                                                    const __a = jsonStableString(JSON.parse(String(wc)));
+                                                    const __b = jsonStableString(JSON.parse(String(__cw.content)));
+                                                    det.wb = (__a === __b) ? 'same' : 'local';
+                                                } catch { det.wb = 'local'; }
+                                            }
+                                        }
                                     }
                                 }
                             } catch { }
