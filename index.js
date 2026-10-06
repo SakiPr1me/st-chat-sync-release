@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.16'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.17'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -843,6 +843,18 @@ function __csStripCardRuntime(j) {
         }
     };
     __norm(out);
+    // 0.13.17 再归一三种"内容等价、形状不同"，否则会**永久假报"本地新"**（实测：补回后还剩 7 处全是这类）：
+    //   · spec/spec_version：ST 写 PNG 时同时写 chara(=v2) 与 ccv3(=v3) 两块、**读取优先 v3**；
+    //     而 /edit 那条写路径（__cardFormFields 走的）固定写成 v2 → 云端 v3、本机 v2，恒不相等
+    //   · talkativeness：ST 缺省 0.5，写卡时会把 0.5 显式补上 → "没写"与"写了 0.5"等价
+    //   · creatorcomment：creator_notes 的老镜像（ST 每次保存都写），同值不算差异
+    delete out.spec;
+    delete out.spec_version;
+    if (Number(out.talkativeness) === 0.5) delete out.talkativeness;
+    {
+        const cn = (out.data && out.data.creator_notes) || out.creator_notes || '';
+        if (out.creatorcomment && cn && out.creatorcomment === cn) delete out.creatorcomment;
+    }
     delete out.chat; // v1 顶层: 当前打开聊天文件名(运行时)
     // 0.13.16：这两个也是运行时字段——ST 每次保存/导入都会重写（create_date 变、avatar 可能被写成 'none'），
     //   不剥掉会让"导入后与云端比对"恒判不同 → 假"本地新"
@@ -853,6 +865,9 @@ function __csStripCardRuntime(j) {
         delete d.create_date;
         delete d.avatar;
         __norm(d); // 0.13.16：data 层也归一（同上的空壳/类型问题）
+        // 0.13.17：同上——0.5 是 ST 默认值，缺省与显式 0.5 等价（v2 读数存在 data.extensions.talkativeness）
+        if (d.extensions && typeof d.extensions === 'object' && Number(d.extensions.talkativeness) === 0.5) delete d.extensions.talkativeness;
+        if (Number(d.talkativeness) === 0.5) delete d.talkativeness;
         // depth_prompt 空壳：ST 保存时必写 {prompt:'',depth:0,role:'system'}；没有 prompt 就等于没内容 → 整块删掉再比
         if (d.extensions && typeof d.extensions === 'object' && d.extensions.depth_prompt && typeof d.extensions.depth_prompt === 'object'
             && !String(d.extensions.depth_prompt.prompt || '').trim()) {
@@ -1696,7 +1711,7 @@ async function importAllCharacters() {
     try { names = await Gitee.listDir('sync'); } catch (e) { toastr.error('读取云端角色失败：' + e.message); return; }
     if (!names || !names.length) { toastr.info('云端暂无角色可导入'); return; }
     // 防误点：全部级操作先确认一次（本地已最新的会自动跳过）
-    if (!await csConfirm('⚠ 导入全部云端角色', `将从云端导入 <b>${names.length}</b> 个角色（同名卡会按卡面逐张导入；本地已有的一律跳过，不会重复刷、不会生成复制卡）。<br>确定开始吗？`)) return;
+    if (!await csConfirm('⚠ 导入全部云端角色', `将从云端导入 <b>${names.length}</b> 个角色（同名卡会按卡面逐张导入；本地已有的不会重复导入、也不会生成复制卡。<br>如果本机某张卡比云端少内容——栏目空白，例如被旧版本导空过——会自动用云端补回来，<b>只补空的，不动你本机已有的内容</b>）。<br>确定开始吗？`)) return;
     const total = names.length;
     setStatus(`正在导入云端角色：0/${total}…`);
     showBusy(0, total, `导入全部云端角色`);
@@ -2409,6 +2424,168 @@ function __cardFormFields(card) {
     try { out.extensions = JSON.stringify(ext || {}); } catch { out.extensions = ''; }
     return out;
 }
+// ── 0.13.17：「本机被清空的栏目」用云端那份补回来 ──────────────────────────────
+// 背景：≤0.13.14 导入角色时，写 .chat 指针的 /api/characters/edit 只发 10 个字段，ST 的
+//   charaFormatData() 据此重建整张卡 → 备用开场白 / 系统提示 / 末尾附加 / 绑定世界书 / 深度提示 /
+//   作者 / 版本 被清成空白（写入侧 0.13.15 已修，见 __cardFormFields）。已经导坏的那些卡得能修回来：
+//   导入时若本机这张卡有「空白栏位」而云端那份有内容 → 用云端补回（只填空）。
+// 安全边界：① 只填空，本机已有内容一律不动；② 只改本机，云端一个字节都不动（不上传）；
+//   ③ 只在导入路径（用户点「导入」）里做；两处逐字节相同时连云端都不下载。
+const __CS_HEAL_KEYS = ['alternate_greetings', 'system_prompt', 'post_history_instructions', 'creator', 'character_version', 'tags'];
+const __CS_HEAL_ZH = { alternate_greetings: '备用开场白', system_prompt: '系统提示', post_history_instructions: '末尾附加', creator: '作者', character_version: '卡版本', tags: '标签' };
+function __csEmptyish(v) { return v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0); }
+function __csPickField(j, k) {
+    const d = (j && j.data) || {};
+    if (d[k] !== undefined && d[k] !== null) return d[k];
+    return j ? j[k] : undefined;
+}
+// 本地卡 vs 云端卡 → 「本地空、云端有」的栏目清单（只认已知会被旧版本清空的那几项）
+function __csHealDelta(localJ, cloudJ) {
+    const delta = {};
+    if (!localJ || !cloudJ) return delta;
+    for (const k of __CS_HEAL_KEYS) {
+        if (__csEmptyish(__csPickField(localJ, k)) && !__csEmptyish(__csPickField(cloudJ, k))) delta[k] = __csPickField(cloudJ, k);
+    }
+    const lext = (localJ.data && localJ.data.extensions) || localJ.extensions || {};
+    const cext = (cloudJ.data && cloudJ.data.extensions) || cloudJ.extensions || {};
+    const cw = String(cext.world || '').trim();
+    if (!String(lext.world || '').trim() && cw) delta.__world = cw;
+    // 0.13.17 tags 修复：旧载荷把数组发成字符串（JSON.stringify）→ ST 按逗号切 → 本地只剩一条
+    //   "搬运工式"的假标签（形如 '["t1"]'）。只在"本地这条假标签解析出来恰好等于云端标签表"时才修
+    //   —— 精确判定，不做任何猜测性改动，更不会覆盖用户自己改过的标签。
+    const ltags = __csPickField(localJ, 'tags');
+    const ctags = __csPickField(cloudJ, 'tags');
+    if (Array.isArray(ltags) && ltags.length === 1 && typeof ltags[0] === 'string' && Array.isArray(ctags) && ctags.length) {
+        try { if (jsonStableString(JSON.parse(ltags[0])) === jsonStableString(ctags)) delta.tags = ctags; } catch { /* 不是数组串就算了 */ }
+    }
+    const cdp = cext.depth_prompt || {};
+    if (!String((lext.depth_prompt && lext.depth_prompt.prompt) || '').trim() && String(cdp.prompt || '').trim()) {
+        delta.__depth = { prompt: cdp.prompt, depth: (Number.isFinite(Number(cdp.depth)) ? Number(cdp.depth) : 4), role: cdp.role || 'system' };
+    }
+    return delta;
+}
+// 「查过、确认无需补」的记性（免得每次「导入全部」都给每张已存在的卡白下一遍云端卡）
+// 键里带云端 sha：云端换过（别处重传了完好卡）→ 键变 → 会重新查一遍
+function __csHealMemoHit(entryId, cloudSha, localSha) { try { const m = settings.__csHealSeen || {}; return m[(entryId || 'legacy') + '|' + (cloudSha || '') + '|' + localSha] === 1; } catch { return false; } }
+function __csHealMemoSet(entryId, cloudSha, localSha) {
+    try {
+        settings.__csHealSeen = settings.__csHealSeen || {};
+        settings.__csHealSeen[(entryId || 'legacy') + '|' + (cloudSha || '') + '|' + localSha] = 1;
+        const ks = Object.keys(settings.__csHealSeen);
+        if (ks.length > 400) for (const k of ks.slice(0, ks.length - 400)) delete settings.__csHealSeen[k];
+        saveSettingsDebounced();
+    } catch { /* 记不住最多下次多下一次 */ }
+}
+// 把 delta 写回本机卡（走 0.13.15 的字段补全，绝不清空别的栏位）；返回补回的栏目名（人话）
+async function __csApplyHeal(charName, avatar, delta) {
+    const av = String(avatar).includes('.png') ? String(avatar) : String(avatar) + '.png';
+    const cg = await fetch('/api/characters/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: av }) });
+    if (!cg.ok) return null;
+    const card = await cg.json();
+    let cur = null;
+    try { cur = card && card.json_data ? JSON.parse(card.json_data) : null; } catch { cur = null; }
+    if (!cur || typeof cur !== 'object') cur = JSON.parse(JSON.stringify(card || {}));
+    cur.data = (cur.data && typeof cur.data === 'object') ? cur.data : {};
+    cur.data.extensions = (cur.data.extensions && typeof cur.data.extensions === 'object') ? cur.data.extensions : {};
+    const names = [];
+    for (const k of Object.keys(delta)) {
+        if (k === '__world') { cur.data.extensions.world = delta.__world; names.push('绑定世界书'); }
+        else if (k === '__depth') { cur.data.extensions.depth_prompt = Object.assign({}, cur.data.extensions.depth_prompt || {}, delta.__depth); names.push('深度提示'); }
+        else { cur.data[k] = delta[k]; if (cur[k] !== undefined) cur[k] = delta[k]; names.push(__CS_HEAL_ZH[k] || k); }
+    }
+    const F = __cardFormFields(cur);
+    const body = {
+        avatar_url: av, ch_name: cur.name || (card && card.name) || charName, name: cur.name || (card && card.name) || charName,
+        chat: (card && card.chat) || '', json_data: JSON.stringify(cur), create_date: (card && card.create_date) || new Date().toISOString(),
+    };
+    for (const k of Object.keys(F)) {
+        const v = F[k];
+        body[k] = (v === undefined || v === null) ? '' : (Array.isArray(v) ? v : (typeof v === 'object' ? JSON.stringify(v) : String(v)));
+    }
+    // ST 走 JSON body；TT 的 /edit 要 multipart（与 persistChatPointerStt 同一条已验证路径）
+    const isTt = Boolean(window.__TAURITAVERN__ || window.__TAURITAVERN_MAIN_READY__);
+    let r;
+    if (isTt) {
+        const fd = new FormData();
+        fd.append('avatar_url', av);
+        fd.append('ch_name', body.ch_name);
+        fd.append('name', body.name);
+        fd.append('chat', body.chat);
+        fd.append('json_data', body.json_data);
+        fd.append('create_date', body.create_date);
+        for (const k of Object.keys(F)) {
+            const v = F[k];
+            fd.append(k, (v === undefined || v === null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v)));
+        }
+        r = await fetch('/api/characters/edit', { method: 'POST', headers: getRequestHeaders({ omitContentType: true }), body: fd });
+    } else {
+        r = await fetch('/api/characters/edit', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(body) });
+    }
+    if (!r.ok) { console.warn('[chat-sync] 补回栏目写卡失败', r.status); return null; }
+    // 内存同步：徽章 / 世界书判断读的是内存里那张卡
+    try {
+        const c = getContext();
+        const stem = String(avatar).replace(/\.png$/, '');
+        const i = (c.characters || []).findIndex((x) => x && String(x.avatar || '').replace(/\.png$/, '') === stem);
+        if (i >= 0) {
+            const o = c.characters[i];
+            o.data = Object.assign({}, o.data || {}, cur.data);
+            for (const k of __CS_HEAL_KEYS) if (cur.data[k] !== undefined) o[k] = cur.data[k];
+        }
+    } catch { }
+    return names;
+}
+// 0.13.17：按 **UTF-8** 正确解出卡 JSON。ST 自带的 extractDataFromPng() 是把 base64 解成 latin1 串直接
+//   JSON.parse（见 public/scripts/utils.js）→ 中文/emoji 全成乱码；插件此前只拿它算"指纹"（两端同法解码，
+//   比对仍自洽）所以没暴露。补回栏目要写**值**，必须用这个（否则补回去的中文是乱码）。
+function __csCardJsonFromPngUtf8(pngIn) {
+    try {
+        const u8 = pngIn instanceof Uint8Array ? pngIn : new Uint8Array(pngIn);
+        if (!u8 || u8.length < 12 || u8[0] !== 0x89 || u8[1] !== 0x50) return null;
+        const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+        let idx = 8;
+        while (idx + 12 <= u8.length) {
+            const len = dv.getUint32(idx);
+            const name = String.fromCharCode(u8[idx + 4], u8[idx + 5], u8[idx + 6], u8[idx + 7]);
+            const start = idx + 8;
+            if (name === 'tEXt' && len > 6 && start + len <= u8.length) {
+                let z = -1;
+                for (let i = start; i < start + len; i++) { if (u8[i] === 0) { z = i; break; } }
+                if (z - start === 5 && String.fromCharCode(u8[start], u8[start + 1], u8[start + 2], u8[start + 3], u8[start + 4]) === 'chara') {
+                    const b64 = new TextDecoder('latin1').decode(u8.subarray(z + 1, start + len));
+                    const bin = atob(b64);
+                    const bytes = new Uint8Array(bin.length);
+                    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                    const j = JSON.parse(new TextDecoder('utf-8').decode(bytes));
+                    if (j && typeof j === 'object') return j;
+                }
+            }
+            if (name === 'IEND') break;
+            idx = start + len + 4;
+        }
+    } catch (e) { console.warn('[chat-sync] 读卡 JSON(UTF-8) 失败(当没有处理)', e); }
+    return null;
+}
+// 导入时本机已有这张卡 → 查/补（返回补回的栏目名数组；无需补/读不出返回 null）
+async function __csHealHitCard(charName, avatar, entry) {
+    try {
+        const localB64 = await getCharacterCardB64(charName, avatar);
+        if (!localB64) return null;
+        const localSha = await __cardShaOfB64(localB64);
+        if (entry && entry.sha && entry.sha === localSha) return null;                        // 两边逐字节同 → 不可能缺
+        if (__csHealMemoHit(entry && entry.id, entry && entry.sha, localSha)) return null;    // 查过、确认不缺 → 不再重复下载
+        const toU8 = (b64) => { const bin = atob(String(b64 || '').replace(/\s/g, '')); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
+        const localJ = __csCardJsonFromPngUtf8(toU8(localB64));
+        if (!localJ) return null;
+        const cloudCard = await __cardGetSmart(__entryPath(charName, entry)).catch(() => null);
+        if (!cloudCard || !cloudCard.b64) return null;
+        const cloudJ = __csCardJsonFromPngUtf8(toU8(cloudCard.b64));
+        const delta = __csHealDelta(localJ, cloudJ);
+        if (!Object.keys(delta).length) { __csHealMemoSet(entry && entry.id, entry && entry.sha, localSha); return null; }
+        return await __csApplyHeal(charName, avatar, delta);
+    } catch (e) { console.warn('[chat-sync] 补回空白栏目失败(忽略)', e); return null; }
+}
+
 async function persistChatPointerStt(charName, cardAvatar, chatStem) {
     const stem = String(chatStem || '').replace(/\.jsonl$/i, '');
     try {
@@ -4085,7 +4262,7 @@ async function importCharFromCloud(charName, opts = {}) {
     let cardImported = false;
     let cardReused = false; // 本地已有该卡 → 复用（不是失败）
     let cardAvatar = '';    // 聊天导入要落到哪张卡（多卡时取主卡/第一张）
-    let importedAny = 0, reusedAny = 0; const failedCards = [];
+    let importedAny = 0, reusedAny = 0; const failedCards = []; const healedCards = [];
     const idxCloud = await __cardsLoad(charName);
     const cloudCards = (idxCloud && Array.isArray(idxCloud.cards)) ? idxCloud.cards.slice() : [];
     const targets = cloudCards.length
@@ -4098,7 +4275,11 @@ async function importCharFromCloud(charName, opts = {}) {
         if (localHit) {
             reusedAny++;
             if (!cardAvatar) cardAvatar = __stemOf(localHit.avatar);
-            console.log(`[chat-sync] 本地已有「${label}」(${localHit.avatar})，跳过卡导入（不会生成复制卡）`);
+            // 0.13.17：本地已有 ≠ 什么都不做——旧版本（≤0.13.14）导入会把卡里若干栏位清成空白，
+            //   这里顺手把「本机空、云端有」的栏目补回来（只填空；只改本机，不上传、不动云端）
+            const __healed = await __csHealHitCard(charName, localHit.avatar, entry);
+            if (__healed && __healed.length) healedCards.push(`${label}：${__healed.join('、')}`);
+            console.log(`[chat-sync] 本地已有「${label}」(${localHit.avatar})，跳过卡导入（不会生成复制卡）${__healed && __healed.length ? '，已补回：' + __healed.join('、') : ''}`);
             continue;
         }
         const cardCloud = await __cardGetSmart(__entryPath(charName, entry));
@@ -4136,6 +4317,8 @@ async function importCharFromCloud(charName, opts = {}) {
     if (reusedAny) cardReused = true;
     if (importedAny > 1) toastr.success(`✅ 已导入 ${importedAny} 张同名角色卡（各是各的卡面）`);
     if (failedCards.length) toastr.warning(`⚠️ 有 ${failedCards.length} 张卡导入失败：${csShortList(failedCards)}`);
+    // 0.13.17：把"补回了哪些被旧版本导空的栏目"说清楚（否则用户以为白点了一次导入）
+    if (healedCards.length) toastr.success(`✅ 已用云端补回 ${healedCards.length} 张卡的空白栏目：${csShortList(healedCards)}`, '补回被清空的栏目', { timeOut: 12000 });
 
     // 2) 世界书：world.json → importWorldInfo
     let worldImported = false;
