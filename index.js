@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.20'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.21'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -152,22 +152,40 @@ const Gitee = {
     errOf(r, path, bodyText) {
         const n = r && r.status;
         const txt = String(bodyText || '').replace(/\s+/g, ' ').slice(0, 160);
-        if (n === 401) return new Error('云端令牌没通过(HTTP 401)——令牌可能没填、被重置、过期或复制漏了。到上方「设置」里重新粘贴/换一个新令牌再试；若另一台设备连同一个仓库正常，多半是两端令牌不一致(多/少字符或带空格)，整段删掉重贴一次');
-        // ★0.13.20：限流 ≠ 没权限。此前一律说成"令牌权限不够"，用户被带着反复换令牌（实报：403 正文就是 API rate limit exceeded）
+        if (n === 401) return new Error('令牌无效（401）· 多半是过期 / 被撤销 / 复制时缺了字符 · 到上面「设置」里整段重贴，或重新生成一个令牌再贴');
+        // ★限流 ≠ 没权限（用户实报：403 正文就是 API rate limit exceeded，却被提示去换令牌）
         if (this.isRateLimit(r) || /rate limit|too many requests|频繁|超出限制/i.test(txt)) {
             const i = this.rateHeaders(r);
             const mins = i.reset ? Math.max(1, Math.ceil((i.reset * 1000 - Date.now()) / 60000)) : 0;
-            return new Error('云端接口次数用完/被限流(HTTP ' + n + ')——这不是令牌的问题，别去换令牌。' + (String(i.remaining) === '0' ? '这个账号本小时的接口额度已用尽' : '刚才请求发得太密') + (mins ? '，大约 ' + mins + ' 分钟后自动恢复' : '，等一会儿再试') + '。恢复前先别做「上传全部/导入全部」这类整包操作（一次就可能上千次请求）；也可以换 Gitee（额度更宽松）。云端原话：' + (txt || '(无)'));
+            return new Error('云端额度用完 / 被限流（HTTP ' + n + '）'
+                + (String(i.remaining) === '0' ? ' · 本小时 ' + (i.limit || 5000) + ' 次已用尽' : ' · 刚才请求太密')
+                + (mins ? ' · 约 ' + mins + ' 分钟后自动恢复' : ' · 等几秒再点一次')
+                + ' · 不是令牌问题（别换令牌）；恢复前少做「上传全部 / 导入全部」');
         }
-        if (n === 403) return new Error('云端拒绝访问(HTTP 403)——令牌权限不够（创建时可能没勾仓库读写），或这个令牌无权访问该仓库。重新生成一个带仓库读写权限的令牌，并确认仓库是你自己的' + (txt ? '。云端原话：' + txt : ''));
-        if (n === 429) return new Error('云端接口限流(HTTP 429)——刚才请求太密，稍等 5 秒再点一次就行');
-        if (n === 503 || n === 502 || n === 504) return new Error('云端服务器繁忙(HTTP ' + n + ')，稍候几秒再试');
-        return new Error(path + ': HTTP ' + n + (txt ? ' — ' + txt : ''));
+        if (n === 403) return new Error('云端拒绝（403）· 这个令牌没有该仓库的读写权限 · 重新生成令牌时勾上仓库读写（私有库还要授权给该仓库），并确认仓库是你自己的' + (txt ? ' · 云端原话：' + txt : ''));
+        if (n === 429) return new Error('请求太密被限流（429）· 等 5~10 秒再点一次');
+        if (n === 503 || n === 502 || n === 504) return new Error('云端临时故障（HTTP ' + n + '）· 已自动重试过一轮 · 稍等几秒再点一次');
+        return new Error('云端返回 HTTP ' + n + (txt ? ' · ' + txt : '') + (path ? '（' + path + '）' : ''));
+    },
+    // 0.13.21：把 GitHub 的配额头记下来（面板/连接测试里显示"本小时还剩多少次"）；剩得少时提醒一次
+    captureQuota(r) {
+        if (!this.isGithub()) return;
+        try {
+            const i = this.rateHeaders(r);
+            if (!i.limit && !i.remaining) return;
+            const q = { remaining: Number(i.remaining), limit: Number(i.limit) || 5000, reset: i.reset || 0, ts: Date.now() };
+            if (!Number.isFinite(q.remaining)) return;
+            window.__csQuota = q;
+            if (q.remaining > 0 && q.remaining < 500 && Date.now() - (window.__csQuotaWarnedAt || 0) > 600000) {
+                window.__csQuotaWarnedAt = Date.now();
+                try { toastr.warning('⚠️ 云端额度快用完了（剩 ' + q.remaining + ' / ' + q.limit + '）· 约 ' + (q.reset ? new Date(q.reset * 1000).toLocaleTimeString().slice(0, 5) : '一小时') + ' 恢复 · 接下来少做「上传全部 / 导入全部」', null, { timeOut: 10000 }); } catch { }
+            }
+        } catch { }
     },
     async req(path, opts = {}) {
         const method = opts.method || 'GET';
         const timeout = opts.timeout || 45000;
-        const url = `${this.url(path)}${this.isGithub() || this.isGitlab() ? '' : '?access_token=' + encodeURIComponent(settings.token)}${this.isGithub() || this.isGitlab() ? '' : '&_=' + Date.now()}`;
+        const url = opts.absUrl ? String(opts.absUrl) : `${this.url(path)}${this.isGithub() || this.isGitlab() ? '' : '?access_token=' + encodeURIComponent(settings.token)}${this.isGithub() || this.isGitlab() ? '' : '&_=' + Date.now()}`;
         const doFetch = () => {
             const ctl = new AbortController();
             const timer = setTimeout(() => ctl.abort(), timeout);
@@ -196,11 +214,12 @@ const Gitee = {
         }
         if (!r) {
             if (lastErr && lastErr.name === 'AbortError')
-                throw new Error('云端请求超时(' + Math.round(timeout / 1000) + 's)——网络慢/仓库文件多，稍后再点；反复超时请点「连接」自查');
-            throw new Error('网络请求失败：' + ((lastErr && lastErr.message) || lastErr));
+                throw new Error('请求超时（' + Math.round(timeout / 1000) + ' 秒）· 网络慢或云端文件多 · 稍后再点一次；反复超时点「连接」自查');
+            throw new Error('连不上云端 · 网络 / 代理问题（不是令牌）· 连 GitHub：国内常被墙，开代理；连 Gitee：相反，请关代理 · 原始信息：' + (((lastErr && lastErr.message) || lastErr) + '').slice(0, 60));
         }
         // 404 容忍范围: GET(读不存在→上层返回null/[])与 DELETE(已删=幂等成功); PUT/POST 404(sha冲突/文件被移走)必须抛——
         // 否则 putText 拿不到 content.sha 静默返回 undefined, 上层以为上传成功, 实际云端没写进去(数据丢失风险)
+        try { this.captureQuota(r); } catch { }   // 0.13.21：顺手记下配额（成功响应也带这个头）
         // 0.13.20：报错前把响应正文读出来（限流/权限怎么分，全看正文和头）
         if (!r.ok && r.status !== 404) { const txt = await r.clone().text().catch(() => ''); throw this.errOf(r, path, txt); }
         if (!r.ok && r.status === 404 && method !== 'GET' && method !== 'DELETE') { const txt = await r.clone().text().catch(() => ''); throw this.errOf(r, path, txt); }
@@ -309,7 +328,10 @@ const Gitee = {
         const method = (this.isGithub() || sha) ? 'PUT' : 'POST';
         const r = await this.req(path, { method, body: JSON.stringify(body), noRetry: true });
         const j = await r.json();
-        return j && j.content ? j.content.sha : undefined;
+        const newSha = j && j.content ? j.content.sha : undefined;
+        this.ghTreePatch(path, newSha);   // 0.13.21：就地更新整树缓存（不多花请求、也不会看到旧数据）
+        __evictChatsDirOf(path);
+        return newSha;
     },
     // 写二进制(角色卡PNG)
     async putBase64(path, b64, sha, message) {
@@ -324,7 +346,10 @@ const Gitee = {
         const method = (this.isGithub() || sha) ? 'PUT' : 'POST';
         const r = await this.req(path, { method, body: JSON.stringify(body), noRetry: true });
         const j = await r.json();
-        return j && j.content ? j.content.sha : undefined;
+        const newSha2 = j && j.content ? j.content.sha : undefined;
+        this.ghTreePatch(path, newSha2);  // 0.13.21：同上
+        __evictChatsDirOf(path);
+        return newSha2;
     },
     // 列目录：读某目录(如 sync) → 返回其子项 name 数组(仅 dir 类型的 name，即角色名)
     async listDir(path) {
@@ -332,6 +357,59 @@ const Gitee = {
         return arr.filter((x) => x.type === 'dir').map((x) => x.name);
     },
     // 列目录原始条目（含 file 和 dir，含 sha），用于删除/递归; GitLab 没有 contents 目录列举 → repository/tree(分页)
+    // ——— 0.13.21 GitHub 整树（省额度 + 提速；拿不到就自动退回逐目录读法，正确性优先）———
+    async ghTree() {
+        const now = Date.now();
+        if (__ghTreeCache.arr && now - __ghTreeCache.ts < 300000) return __ghTreeCache.arr;
+        try {
+            const url = `${this.base}/repos/${settings.owner}/${settings.repo}/git/trees/HEAD?recursive=1`;
+            const r = await this.req('', { absUrl: url });
+            if (!r.ok) return null;
+            const j = await r.json().catch(() => null);
+            if (!j || !Array.isArray(j.tree)) return null;
+            if (j.truncated) return null; // 太大被截断 → 交回逐目录（不能漏文件）
+            __ghTreeCache = { ts: now, arr: j.tree };
+            return j.tree;
+        } catch { return null; }
+    },
+    async ghListFromTree(dir) {
+        const tree = await this.ghTree();
+        if (!tree) return null;
+        const d = String(dir || '').replace(/^\/+|\/+$/g, '');
+        const pre = d ? d + '/' : '';
+        const seen = new Set(); const out = [];
+        for (const e of tree) {
+            const p = String(e.path || '');
+            if (pre && !p.startsWith(pre)) continue;
+            const rest = pre ? p.slice(pre.length) : p;
+            if (!rest) continue;
+            const i = rest.indexOf('/');
+            if (i < 0) { if (seen.has(rest)) continue; seen.add(rest); out.push({ name: rest, path: p, type: e.type === 'tree' ? 'dir' : 'file', sha: e.sha || '' }); }
+            else { const nm = rest.slice(0, i); if (!seen.has(nm)) { seen.add(nm); out.push({ name: nm, path: pre + nm, type: 'dir', sha: '' }); } }
+        }
+        return out;
+    },
+    ghTreePatch(path, sha) {
+        try {
+            const c = __ghTreeCache; if (!c || !Array.isArray(c.arr) || !path) return;
+            const p = String(path).replace(/^\/+/, '');
+            const hit = c.arr.find((e) => e.path === p);
+            if (hit) { if (sha) hit.sha = sha; }
+            else c.arr.push({ path: p, mode: '100644', type: 'blob', sha: sha || '' });
+            const segs = p.split('/'); let acc = '';
+            for (let i = 0; i < segs.length - 1; i++) {
+                acc = acc ? acc + '/' + segs[i] : segs[i];
+                if (!c.arr.some((e) => e.path === acc && e.type === 'tree')) c.arr.push({ path: acc, mode: '040000', type: 'tree', sha: '' });
+            }
+        } catch { }
+    },
+    ghTreeDrop(path) {
+        try {
+            const c = __ghTreeCache; if (!c || !Array.isArray(c.arr) || !path) return;
+            const p = String(path).replace(/^\/+/, '');
+            c.arr = c.arr.filter((e) => !(e.path === p || String(e.path).startsWith(p + '/')));
+        } catch { }
+    },
     async listEntries(path) {
         if (this.isGitlab()) {
             const base = (settings.server || '').replace(/\/$/, '');
@@ -352,6 +430,8 @@ const Gitee = {
             } catch (e) { throw e; }
             return all;
         }
+        // 0.13.21：GitHub 优先整树（1 次请求顶 N 次）；拿不到（空库/截断/出错）自动退回下面的逐目录读法
+        if (this.isGithub()) { const arr = await this.ghListFromTree(path).catch(() => null); if (arr) return arr; }
         const r = await this.req(path);
         if (r.status === 404) return [];
         const j = await r.json();
@@ -359,6 +439,21 @@ const Gitee = {
     },
     // 递归列出某目录下所有【文件】的 {path, sha}
     async listAllFiles(path, acc = []) {
+        // 0.13.21：GitHub 直接按整树过滤出全部后代（原来要逐层递归、每层一次请求）
+        if (this.isGithub()) {
+            const tree = await this.ghTree().catch(() => null);
+            if (tree) {
+                const pre = String(path || '').replace(/^\/+|\/+$/g, '');
+                const out = [];
+                for (const e of tree) {
+                    if (e.type !== 'blob') continue;
+                    const p = String(e.path || '');
+                    if (pre && !p.startsWith(pre + '/')) continue;
+                    out.push({ path: p, sha: e.sha || '' });
+                }
+                return acc.concat(out);
+            }
+        }
         const entries = await this.listEntries(path);
         for (const e of entries) {
             if (e.type === 'file') acc.push({ path: e.path, sha: e.sha });
@@ -379,6 +474,7 @@ const Gitee = {
         const r = await fetch(url, { method: 'DELETE', headers: this.auth(), cache: 'no-store' });
         if (r.status === 404) return; // 已删=幂等成功
         if (!r.ok) throw this.errOf(r, path);
+        this.ghTreeDrop(path); __evictChatsDirOf(path);   // 0.13.21：删完同步缓存
     },
     // 版本历史（防丢恢复）；GitLab 接口不同 → 返回空
     async history(path) {
@@ -800,7 +896,7 @@ function planPushTargets(charName, localFileNames) {
 //  - 分段聊天: X.p000.jsonl/X.p001.jsonl(+X.manifest.json/X.meta.json) → 折叠回 X
 //  - 排除 .manifest.json / .meta.json / 其它非 .jsonl 文件
 async function listCloudChatFiles(charName) {
-    const entries = await Gitee.listEntries(`sync/${charName}/chats`).catch(() => []);
+    const entries = await __cachedListEntries(`sync/${charName}/chats`).catch(() => []);
     const stems = new Set();
     for (const e of entries) {
         if (!e || e.type !== 'file') continue;
@@ -2317,7 +2413,7 @@ function csShortList(items, max = 5) {
 // 一次目录列表拿全部云端 sha（仅 1 个请求）：与上次同步记忆一致的文件，拉取时直接跳过、不再逐个全量下载（拉取提速核心）
 async function cloudShaMap(dirPath) {
     const m = new Map();
-    try { for (const e of await Gitee.listEntries(dirPath)) if (e.type === 'file') m.set(e.path, e.sha); } catch { }
+    try { for (const e of await __cachedListEntries(dirPath)) if (e.type === 'file') m.set(e.path, e.sha); } catch { }
     return m;
 }
 // saveSettingsDebounced 从 script.js import（ST 真版，真正写盘 settings.json）
@@ -2870,7 +2966,7 @@ async function listCleanerRows(charName, avatarHint) {
             if (r.ok) { const arr = await r.json(); if (Array.isArray(arr)) localRows = arr.filter((x) => x && x.file_name); }
         } catch { }
     }
-    const cloudEntries = await Gitee.listEntries(`sync/${charName}/chats`).catch(() => []);
+    const cloudEntries = await __cachedListEntries(`sync/${charName}/chats`).catch(() => []);
     // 0.13.0 卡级：同名多卡时，云端只列「属于这张卡」的聊天（归属未知的老聊天照列，避免"看不见"）
     let ownedSet = null;
     try {
@@ -2977,7 +3073,7 @@ async function deleteChatsBothSides(charName, fileNames, avatarHint) {
     let listObj = null;
     const lc = await Gitee.getText(listPath).catch(() => null);
     if (lc) { try { listObj = JSON.parse(lc.content || '{}'); } catch { listObj = null; } }
-    const cloudEntries = await Gitee.listEntries(base).catch(() => []);
+    const cloudEntries = await __cachedListEntries(base).catch(() => []);
     for (const fn of fileNames) {
         try { showBusy(fileNames.indexOf(fn) + 1, fileNames.length, `正在删除聊天「${fn}」(本地+云端)`); } catch { }
         try {
@@ -4023,12 +4119,30 @@ async function backupConfigToCloud() {
 }
 // 目录条目缓存(5min): 列表渲染与差异比对共用, 避免对同一目录反复 listEntries
 const __dirEntryCache = {}; // {dir: {ts, arr}}
+// 0.13.21：GitHub「整仓树」缓存（/git/trees/HEAD?recursive=1 —— 1 次请求拿到全部路径+sha）。
+//   实测一个几十张卡的库，刷一次列表要几十次目录请求；改用整树后 = 1 次。写完/删完**就地改这一条**，
+//   所以"上传完立刻刷新"看到的仍是准的（即时可视性不打折），也不会因为失效而多花请求。
+let __ghTreeCache = { ts: 0, arr: null };
 async function __cachedListEntries(dir) {
     const hit = __dirEntryCache[dir];
-    if (hit && Date.now() - hit.ts < 300000) return hit.arr;
+    // 0.13.21：聊天目录用 20 秒短缓存（一次操作里同一目录常被列几十上百遍：实测一个 846 条聊天的角色被列了 846 次）；
+    //   其它目录仍是 5 分钟。写完/删完由 __evictChatsDirOf() 立即失效 ⇒ 即时可视性不打折。
+    const ttl = /\/chats\/?$/.test(String(dir)) ? 20000 : 300000;   // 'chats' 与 'chats/' 两种写法都算
+    if (hit && Date.now() - hit.ts < ttl) return hit.arr;
     const arr = await Gitee.listEntries(dir);
     __dirEntryCache[dir] = { ts: Date.now(), arr };
     return arr;
+}
+// 0.13.21：某个文件被写/删后，立刻失效它所在聊天目录的列表缓存（含分块子目录）
+function __evictChatsDirOf(filePath) {
+    try {
+        const p = String(filePath || '');
+        const i = p.indexOf('/chats/');
+        if (i < 0) return;
+        const dir = p.slice(0, i + 6); // 'sync/<名>/chats'
+        delete __dirEntryCache[dir];
+        for (const k of Object.keys(__dirEntryCache)) if (k.startsWith(dir + '/')) delete __dirEntryCache[k];
+    } catch { }
 }
 // 0.13.13：配置项「上传/导入」成功后立刻失效相关缓存 → 重渲染时**即时重新比对**。
 //   不这么做的话：目录列表缓存(__dirEntryCache,5min)里还是旧 sha、差异缓存(__diffCache,5min)里还是旧判定 →
@@ -6540,7 +6654,8 @@ function wirePanelEvents() {
                 throw e;
             }
             const userData = await u.json();
-            out.textContent = `✅ 连接成功：${userData.login || userData.username}（已识别为用户名）`;
+            out.textContent = `✅ 连接成功：${userData.login || userData.username}（已识别为用户名）`
+                + (() => { try { const q = window.__csQuota; return (q && Number.isFinite(q.remaining)) ? `\n本小时云端额度：剩余 ${q.remaining} / ${q.limit}${q.reset ? '（约 ' + new Date(q.reset * 1000).toLocaleTimeString().slice(0, 5) + ' 恢复）' : ''}` : ''; } catch { return ''; } })();
             // 仓库可达性: Gitee/GitHub 用 contents 列举; GitLab 用 GET /projects/{proj} 探测
             const rr = isGl
                 ? await fetch(`${base}/projects/${encodeURIComponent(owner + '/' + repo)}`, { headers: ah })
@@ -6573,7 +6688,8 @@ function wirePanelEvents() {
             if (e && e.csDiag) {
                 const d = e.csDiag;
                 console.log('[chat-sync 连接诊断]', d);
-                out.textContent += `\n\n📋 诊断信息（复制发给开发者）：\n请求地址: ${d.url}\nHTTP ${d.status} ${d.statusText}\n平台判定: ${d.server}\n令牌长度: ${d.tokenLen}（首 ${d.tokenHead}… 尾 ${d.tokenTail}）\n响应: ${d.body}`;
+                out.textContent += (() => { try { const q = window.__csQuota; return (q && Number.isFinite(q.remaining)) ? `\n本小时云端额度：剩余 ${q.remaining} / ${q.limit}` : ''; } catch { return ''; } })()
+                + `\n\n📋 诊断信息（复制发给开发者）：\n请求地址: ${d.url}\nHTTP ${d.status} ${d.statusText}\n平台判定: ${d.server}\n令牌长度: ${d.tokenLen}（首 ${d.tokenHead}… 尾 ${d.tokenTail}）\n响应: ${d.body}`;
             }
         }
     });
