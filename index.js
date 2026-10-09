@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.19'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.20'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -133,13 +133,36 @@ const Gitee = {
 
     // 统一请求: 20s 超时 + GET 失败自动慢重试1次 + 429限流/断网/超时的中文提示
     // （Gitee 对连续请求会限流 429，快速连点多个"云端"按钮时偶发失败——重试+明确提示是"获取不下来"的解药）
-    errOf(r, path) {
+    // 0.13.20：限流相关响应头（GitHub 额度用完/被限流时会给这几项）
+    rateHeaders(r) {
+        const h = (k) => { try { return String(r.headers.get(k) || ''); } catch { return ''; } };
+        return { remaining: h('x-ratelimit-remaining'), limit: h('x-ratelimit-limit'), reset: Number(h('x-ratelimit-reset')) || 0, retryAfter: Number(h('retry-after')) || 0 };
+    },
+    // 是不是"限额/限流"（而不是没权限）：额度剩 0 / 给了 Retry-After / 状态 429
+    isRateLimit(r) { try { const i = this.rateHeaders(r); return String(i.remaining) === '0' || i.retryAfter > 0 || (r && r.status === 429); } catch { return false; } },
+    // 等多久再试（秒→毫秒）；额度用尽时 reset 可能在几分钟后 ⇒ 上层据此决定"等"还是"直接说清楚"
+    retryWaitMs(r) {
+        try {
+            const i = this.rateHeaders(r);
+            if (i.retryAfter) return i.retryAfter * 1000;
+            if (i.reset) { const ms = i.reset * 1000 - Date.now(); return ms > 0 ? ms : 1800; }
+        } catch { }
+        return 1800;
+    },
+    errOf(r, path, bodyText) {
         const n = r && r.status;
+        const txt = String(bodyText || '').replace(/\s+/g, ' ').slice(0, 160);
         if (n === 401) return new Error('云端令牌没通过(HTTP 401)——令牌可能没填、被重置、过期或复制漏了。到上方「设置」里重新粘贴/换一个新令牌再试；若另一台设备连同一个仓库正常，多半是两端令牌不一致(多/少字符或带空格)，整段删掉重贴一次');
-        if (n === 403) return new Error('云端拒绝访问(HTTP 403)——令牌权限不够(创建时可能没勾仓库读写)。重新生成一个带读写权限的令牌, 并确认仓库是你自己的');
+        // ★0.13.20：限流 ≠ 没权限。此前一律说成"令牌权限不够"，用户被带着反复换令牌（实报：403 正文就是 API rate limit exceeded）
+        if (this.isRateLimit(r) || /rate limit|too many requests|频繁|超出限制/i.test(txt)) {
+            const i = this.rateHeaders(r);
+            const mins = i.reset ? Math.max(1, Math.ceil((i.reset * 1000 - Date.now()) / 60000)) : 0;
+            return new Error('云端接口次数用完/被限流(HTTP ' + n + ')——这不是令牌的问题，别去换令牌。' + (String(i.remaining) === '0' ? '这个账号本小时的接口额度已用尽' : '刚才请求发得太密') + (mins ? '，大约 ' + mins + ' 分钟后自动恢复' : '，等一会儿再试') + '。恢复前先别做「上传全部/导入全部」这类整包操作（一次就可能上千次请求）；也可以换 Gitee（额度更宽松）。云端原话：' + (txt || '(无)'));
+        }
+        if (n === 403) return new Error('云端拒绝访问(HTTP 403)——令牌权限不够（创建时可能没勾仓库读写），或这个令牌无权访问该仓库。重新生成一个带仓库读写权限的令牌，并确认仓库是你自己的' + (txt ? '。云端原话：' + txt : ''));
         if (n === 429) return new Error('云端接口限流(HTTP 429)——刚才请求太密，稍等 5 秒再点一次就行');
         if (n === 503 || n === 502 || n === 504) return new Error('云端服务器繁忙(HTTP ' + n + ')，稍候几秒再试');
-        return new Error(path + ': HTTP ' + n);
+        return new Error(path + ': HTTP ' + n + (txt ? ' — ' + txt : ''));
     },
     async req(path, opts = {}) {
         const method = opts.method || 'GET';
@@ -151,16 +174,25 @@ const Gitee = {
             return fetch(url, { method, headers: this.auth(), body: opts.body, cache: 'no-store', signal: ctl.signal })
                 .finally(() => clearTimeout(timer));
         };
-        // GET 最多试 3 次(弱网/限流抖动自愈, 间隔 1.2s); 写请求只试 1 次(防重复提交); 超时不重试(已等满 45s)
+        // GET 最多试 3 次(弱网/限流/网关抖动自愈, 间隔 1.2s 起); 写请求只试 1 次(防重复提交); 超时不重试(已等满 45s)
+        // 0.13.20：以前只有"网络层直接抛错"才重试，HTTP 429/限流 403/5xx 会直接失败（用户实报"经常失败"）——
+        //   现在这几类也重试；等待时长按 Retry-After / 额度重置时间算；要等超过 8 秒（多半是整点额度）就不干等，直接说清楚。
         const maxTry = (method === 'GET' && !opts.noRetry) ? 3 : 1;
         let r = null, lastErr = null;
         for (let attempt = 0; attempt < maxTry; attempt++) {
-            try { r = await doFetch(); break; }
+            try { r = await doFetch(); }
             catch (e) {
-                lastErr = e;
+                lastErr = e; r = null;
                 if (e && e.name === 'AbortError') break;
                 if (attempt < maxTry - 1) await new Promise((rs) => setTimeout(rs, 1200));
+                continue;
             }
+            if (r.ok) break;
+            const retryable = (method === 'GET') && (r.status === 429 || r.status === 502 || r.status === 503 || r.status === 504 || (r.status === 403 && this.isRateLimit(r)));
+            if (!retryable || attempt >= maxTry - 1) break;          // 留着这次响应，下面统一报错
+            const w = this.retryWaitMs(r);
+            if (w > 8000) break;                                    // 要等好几分钟（额度整点恢复）→ 不干等
+            await new Promise((rs) => setTimeout(rs, Math.max(600, w)));
         }
         if (!r) {
             if (lastErr && lastErr.name === 'AbortError')
@@ -169,8 +201,9 @@ const Gitee = {
         }
         // 404 容忍范围: GET(读不存在→上层返回null/[])与 DELETE(已删=幂等成功); PUT/POST 404(sha冲突/文件被移走)必须抛——
         // 否则 putText 拿不到 content.sha 静默返回 undefined, 上层以为上传成功, 实际云端没写进去(数据丢失风险)
-        if (!r.ok && r.status === 404 && method !== 'GET' && method !== 'DELETE') throw this.errOf(r, path);
-        if (!r.ok && r.status !== 404) throw this.errOf(r, path);
+        // 0.13.20：报错前把响应正文读出来（限流/权限怎么分，全看正文和头）
+        if (!r.ok && r.status !== 404) { const txt = await r.clone().text().catch(() => ''); throw this.errOf(r, path, txt); }
+        if (!r.ok && r.status === 404 && method !== 'GET' && method !== 'DELETE') { const txt = await r.clone().text().catch(() => ''); throw this.errOf(r, path, txt); }
         return r;
     },
     // 读文件 → {content(base64解码后的utf8文本), sha} 或 null
