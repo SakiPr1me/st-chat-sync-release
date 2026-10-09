@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.21'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.22'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7266,6 +7266,19 @@ async function __thDiagnose(extra) {
     out.push('（把以上内容整段复制发给作者即可定位）');
     return out.join('\n');
 }
+// 0.13.22：「酒馆助手」(JS-Slash-Runner) 在不在？——导入/上传脚本前先查，没装就把话说明白
+async function __thPresence() {
+    try { if (window.TavernHelper || window.TavernHelper_) return { ok: true, why: 'running' }; } catch { }
+    try {
+        const list = await __discoverExts().catch(() => []);
+        const hit = (list || []).find((n) => /JS[-_ ]?Slash[-_ ]?Runner|TavernHelper|酒馆助手/i.test(String(n)));
+        if (hit) return { ok: false, why: 'installed', name: String(hit) };
+        return { ok: false, why: 'missing' };
+    } catch { return { ok: true, why: 'unknown' }; }   // 查不出来就别拦（宁可放过，不可误挡）
+}
+function __thPresenceHint() {
+    return '⚠ 没检测到「酒馆助手」（JS-Slash-Runner）→ 先到本卡片的「拓展插件」分页把它导入/装好并启用，再回到这里导入脚本';
+}
 function __thFindNode(name, type) {
     const root = __thGetTreeRaw();
     return root.find((n) => n.name === name && (type ? n.type === type : true)) || null;
@@ -8131,6 +8144,13 @@ ext: {
                 await __thWriteTree(__thGetTreeRaw());
             },
             async push(items) {
+                {   // 0.13.22：同上——没有酒馆助手就没有本机脚本树
+                    const __p = await __thPresence();
+                    if (!__p.ok && __p.why === 'missing') {
+                        try { toastr.error('没检测到「酒馆助手」→ 本机没有脚本树可上传；先到「拓展插件」分页装好它并启用', null, { timeOut: 12000 }); } catch { }
+                        return { ok: 0, fail: items.length, failReasons: items.map((n) => ({ name: n, reason: '未安装酒馆助手' })) };
+                    }
+                }
                 const ok = [], fail = [];
                 let __t = 0; const __tn = items.length; for (const it of items) { __t++; showBusy(__t, __tn, '上传脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…');
                     // 行值格式: [类型]名字
@@ -8153,6 +8173,16 @@ ext: {
                 return { ok: ok.length, fail: fail.length, failReasons: fail };
             },
             async pull(items) {
+                {   // 0.13.22：先查"酒馆助手装没装"
+                    const __p = await __thPresence();
+                    if (!__p.ok) {
+                        const msg = __p.why === 'missing'
+                            ? '没检测到「酒馆助手」→ 先到本卡片的「拓展插件」分页装上「JS-Slash-Runner（酒馆助手）」并启用，再回来导入脚本'
+                            : '「酒馆助手」装了但这会儿没跑起来（可能被禁用 / 需刷新酒馆页面）→ 到「拓展插件」分页确认它启用着；脚本会先写进去，启用后再用';
+                        try { toastr.error(msg, null, { timeOut: 12000 }); } catch { }
+                        if (__p.why === 'missing') return { ok: 0, fail: items.length, failReasons: items.map((n) => ({ name: n, reason: '未安装酒馆助手' })) };
+                    }
+                }
                 const ok = [], fail = [], failReasons = [];
                 const renamedList = [];
                 let disabledImported = 0;
@@ -8479,6 +8509,20 @@ ext: {
         // ⚠️ 竞态: whereSets 的 listLocal/listCloud 是异步的, renderId 必须先于它生效——否则快速切换时
         //    旧集合会被渲染到新列表上("点了预设没出双端, 再点一次就好了")
         const renderId = ++window.__cfgRenderGen;
+        // 0.13.22：切分页时每秒刷"已等 N 秒"（用户报"切分页像卡死，不知道是不是在连"）。渲染完/被取代/出错都会停表。
+        try {
+            if (window.__csTabTick) { clearInterval(window.__csTabTick); window.__csTabTick = null; }
+            if (st2 && String(st2.textContent || '').startsWith('正在切换至')) {
+                const __tickT0 = Date.now(); const __tickGen = renderId; const __tickNM = TAB_NAMES[window.__cfgTab] || window.__cfgTab;
+                window.__csTabTick = setInterval(() => {
+                    try {
+                        if (!st2.isConnected || window.__cfgRenderGen !== __tickGen) { clearInterval(window.__csTabTick); window.__csTabTick = null; return; }
+                        const s2 = Math.max(1, Math.round((Date.now() - __tickT0) / 1000));
+                        st2.textContent = '正在切换至「' + __tickNM + '」分页… 已 ' + s2 + ' 秒' + (s2 >= 4 ? '（在拉云端目录、逐条比对；慢一点属正常，不是卡住）' : '');
+                    } catch { }
+                }, 1000);
+            }
+        } catch { }
         const whereSets = { localSet: new Set(), cloudSet: new Set() };
         let __lc = null, __cc = null; // 本 tab 的 本地/云端 列表(供随后列表渲染复用, 免重复拉取)
         try {
@@ -8569,12 +8613,21 @@ ext: {
         try { if (!Array.isArray(names)) names = mode === 'cloud' ? await drv.listCloud() : await drv.listLocal(); }
         catch (e) {
             const why = (e && e.message) || e;
+            try { if (window.__csTabTick) { clearInterval(window.__csTabTick); window.__csTabTick = null; } } catch { }
             if (st2) __csSetStatus(st2, '读取失败：' + why, 'err');
             list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ ${mode === 'cloud' ? '读取云端失败' : '读取本地失败'}：${escapeHtml(why)}<br>${mode === 'cloud' ? '请点设置里的「连接」自查（网络/仓库/token）' : '请确认酒馆扩展目录可访问后重试'}</p>`;
             hideBusy(); return;
         }
         hideBusy();
+        try { if (window.__csTabTick) { clearInterval(window.__csTabTick); window.__csTabTick = null; } } catch { }   // 0.13.22：渲染完停表
         if (st2 && st2.textContent.startsWith('正在切换至')) { st2.textContent = ''; }
+        // 0.13.22：酒馆助手分页——本机没装"酒馆助手"时，状态行直接写"去哪儿装"（别让人对着空列表点）
+        try {
+            if (window.__cfgTab === 'thp' && String(mode) === 'local' && st2 && !String(st2.textContent || '').trim()) {
+                const __p3 = await __thPresence();
+                if (!__p3.ok) st2.textContent = __thPresenceHint();
+            }
+        } catch { }
         // 0.13.3：Api 分页常驻提示——密钥能不能随行取决于酒馆的 allowKeysExposure（默认关），用户实报"导入没有 key"就是这里
         try {
             if (st2 && window.__cfgTab === 'api' && !st2.textContent) {
