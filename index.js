@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.22'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.23'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2442,6 +2442,20 @@ function __csReleaseBusy() {
     hideBusy();
 }
 // 顶部醒目进度条（页面级，无论用户看哪都能注意到）
+// 0.13.23：忙碌条上的"已等 N 秒"（作者报"切分页只显示一句静态文字，像卡死"）。
+//   ⚠ 起因：showBusy 会把文本镜像到 #cs_cfg2_status，把"正在切换至…"那句覆盖掉 ⇒ 0.13.22 那个
+//     "只在文本以'正在切换至'开头才起表"的计时器**根本起不来**。所以改成：计时跟操作走（showBusy 起、hideBusy 停）。
+function __csBusyTickPaint() {
+    const base = String(window.__csBusyText || '');
+    if (!base) return;
+    const secs = Math.max(0.5, (Date.now() - (window.__csBusyT0 || Date.now())) / 1000);
+    const txt = base + ' · 已 ' + (secs >= 10 ? Math.round(secs) : secs.toFixed(1)) + ' 秒';
+    try { if (__csBusyEl) __csBusyEl.textContent = txt; } catch { }
+    try {
+        const s2 = document.getElementById('cs_cfg2_status');
+        if (s2 && String(s2.textContent || '').startsWith('🔄 ')) { s2.textContent = txt; s2.style.color = ''; }
+    } catch { }
+}
 function showBusy(page, total, msg) {
     if (!__csBusyEl) {
         __csBusyEl = document.createElement('div');
@@ -2452,19 +2466,22 @@ function showBusy(page, total, msg) {
             'text-align:left;border-radius:10px;border:1px solid rgba(255,255,255,.15);' +
             'box-shadow:0 4px 16px rgba(0,0,0,.5);pointer-events:none;';
         document.body.appendChild(__csBusyEl);
+        // 0.13.23：一次操作 = 一次计时（元素是每次操作新建、hideBusy 删除）
+        try {
+            window.__csBusyT0 = Date.now();
+            if (window.__csBusyTick) { clearInterval(window.__csBusyTick); window.__csBusyTick = null; }
+            window.__csBusyTick = setInterval(() => { try { __csBusyTickPaint(); } catch { } }, 500);
+        } catch { }
     }
     const label = msg || '同步';
-    __csBusyEl.textContent = (total && total > 0)
+    window.__csBusyText = (total && total > 0)
         ? `🔄 ${label}中：${page}/${total}，请稍后…`
         : `🔄 ${label}中，请稍后…`;
-    // 同步镜像到"列表下方状态行"(用户要求细化: 上传/导入的当前项与几/几直接显示在那里)
-    try {
-        const s2 = document.getElementById('cs_cfg2_status');
-        if (s2) { s2.textContent = __csBusyEl.textContent; s2.style.color = ''; }
-    } catch { }
+    __csBusyTickPaint();   // 文案 + 已等秒数 一起画（镜像到状态行也在里面）
 }
 function hideBusy() {
     if (__csBusyEl) { __csBusyEl.remove(); __csBusyEl = null; }
+    try { if (window.__csBusyTick) { clearInterval(window.__csBusyTick); window.__csBusyTick = null; } window.__csBusyText = ''; } catch { }   // 0.13.23：停表
     try {
         const s2 = document.getElementById('cs_cfg2_status');
         if (s2 && s2.textContent.startsWith('🔄 ')) { s2.textContent = ''; s2.style.color = ''; }
@@ -8499,7 +8516,8 @@ ext: {
         if (!list) return;
         // 切分项时提示"正在切换至XX分页"(渲染完成后被列表内容覆盖)
         const TAB_NAMES = { conn: '预设', theme: '主题', regex: '全局正则', user: 'User人设', ext: '拓展插件', thp: '酒馆助手', api: 'Api配置' };
-        if (st2) { st2.textContent = '正在切换至「' + (TAB_NAMES[window.__cfgTab] || window.__cfgTab) + '」分页…'; st2.style.color = ''; }
+        // 0.13.23：切分页/刷新时在这行上打"已等 N 秒"（作者报"只显示一句静态文字，像卡死"）
+        if (st2) { st2.textContent = '正在切换至「' + (TAB_NAMES[window.__cfgTab] || window.__cfgTab) + '」分页… v' + PLUGIN_VERSION; st2.style.color = ''; }
         const __csTabSwitchedAt = Date.now();
         const tab = window.__cfgTab;
         const drv = window.__cfgDrivers[tab];
@@ -8509,18 +8527,19 @@ ext: {
         // ⚠️ 竞态: whereSets 的 listLocal/listCloud 是异步的, renderId 必须先于它生效——否则快速切换时
         //    旧集合会被渲染到新列表上("点了预设没出双端, 再点一次就好了")
         const renderId = ++window.__cfgRenderGen;
-        // 0.13.22：切分页时每秒刷"已等 N 秒"（用户报"切分页像卡死，不知道是不是在连"）。渲染完/被取代/出错都会停表。
+        // 0.13.23：无条件起表（每 500ms 刷一次，0.x 秒也显示）；若此刻"忙碌条"正在镜像这条状态行（以 🔄 开头），就让位给它
         try {
-            if (window.__csTabTick) { clearInterval(window.__csTabTick); window.__csTabTick = null; }
-            if (st2 && String(st2.textContent || '').startsWith('正在切换至')) {
-                const __tickT0 = Date.now(); const __tickGen = renderId; const __tickNM = TAB_NAMES[window.__cfgTab] || window.__cfgTab;
-                window.__csTabTick = setInterval(() => {
+            if (window.__csTabTick2) { clearInterval(window.__csTabTick2); window.__csTabTick2 = null; }
+            if (st2) {
+                const __t0b = Date.now(); const __genB = renderId; const __nmB = TAB_NAMES[window.__cfgTab] || window.__cfgTab;
+                window.__csTabTick2 = setInterval(() => {
                     try {
-                        if (!st2.isConnected || window.__cfgRenderGen !== __tickGen) { clearInterval(window.__csTabTick); window.__csTabTick = null; return; }
-                        const s2 = Math.max(1, Math.round((Date.now() - __tickT0) / 1000));
-                        st2.textContent = '正在切换至「' + __tickNM + '」分页… 已 ' + s2 + ' 秒' + (s2 >= 4 ? '（在拉云端目录、逐条比对；慢一点属正常，不是卡住）' : '');
+                        if (!st2.isConnected || window.__cfgRenderGen !== __genB) { clearInterval(window.__csTabTick2); window.__csTabTick2 = null; return; }
+                        if (String(st2.textContent || '').startsWith('🔄 ')) return;   // 让位给忙碌条（它自己也带秒数）
+                        const sec = (Date.now() - __t0b) / 1000;
+                        st2.textContent = '正在切换至「' + __nmB + '」分页… 已 ' + (sec >= 10 ? Math.round(sec) : sec.toFixed(1)) + ' 秒' + (sec >= 4 ? '（在拉云端目录、逐条比对；慢一点属正常，不是卡住）' : '');
                     } catch { }
-                }, 1000);
+                }, 500);
             }
         } catch { }
         const whereSets = { localSet: new Set(), cloudSet: new Set() };
@@ -8613,13 +8632,13 @@ ext: {
         try { if (!Array.isArray(names)) names = mode === 'cloud' ? await drv.listCloud() : await drv.listLocal(); }
         catch (e) {
             const why = (e && e.message) || e;
-            try { if (window.__csTabTick) { clearInterval(window.__csTabTick); window.__csTabTick = null; } } catch { }
+            try { if (window.__csTabTick2) { clearInterval(window.__csTabTick2); window.__csTabTick2 = null; } } catch { }
             if (st2) __csSetStatus(st2, '读取失败：' + why, 'err');
             list.innerHTML = `<p class="cs-hint" style="color:#e66">⚠ ${mode === 'cloud' ? '读取云端失败' : '读取本地失败'}：${escapeHtml(why)}<br>${mode === 'cloud' ? '请点设置里的「连接」自查（网络/仓库/token）' : '请确认酒馆扩展目录可访问后重试'}</p>`;
             hideBusy(); return;
         }
         hideBusy();
-        try { if (window.__csTabTick) { clearInterval(window.__csTabTick); window.__csTabTick = null; } } catch { }   // 0.13.22：渲染完停表
+        try { if (window.__csTabTick2) { clearInterval(window.__csTabTick2); window.__csTabTick2 = null; } } catch { }   // 0.13.23：渲染完停表
         if (st2 && st2.textContent.startsWith('正在切换至')) { st2.textContent = ''; }
         // 0.13.22：酒馆助手分页——本机没装"酒馆助手"时，状态行直接写"去哪儿装"（别让人对着空列表点）
         try {
