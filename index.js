@@ -43,12 +43,16 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.23'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.32'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
     token: '',
     server: '',
+    backend: '',             // M2-CF 多后端：'' = GitHub/Gitee/GitLab 三件套（现状）；'cf' = 自建 Cloudflare（地址+访问码）
+    cfUrl: '',               // CF 档：站点根（例 https://xxx.pages.dev；不带尾斜杠、不带 /api）
+    cfKey: '',               // CF 档：访问码（请求头 X-YWP-KEY）
+    cfName: '',              // CF 档：显示名（部署脚本给的标签/域名；只用于槽位与顶栏显示）
     autoSync: false,          // 自动同步（备份上传）总开关（默认关）
     autoSyncOnOpen: false,    // 【一次性】打开角色时自动拉取一次（独立，不归自动总开关；默认关）
     autoSyncOnSwitch: false,  // 【自动】切换角色/聊天时自动上传备份（受自动总开关管；默认关）
@@ -95,16 +99,138 @@ const b64Decode = (s) => {
     try { return decodeURIComponent(escape(atob(clean))); }
     catch { try { return atob(clean); } catch { return ''; } }
 };
+// 字节 → base64（分块；0x6000 是 3 的倍数 ⇒ 拼出来不带中段补齐符 —— 与 GitBackend.getBase64 同一手法）。
+// 0.13.27 抗抖动：CF 档大文件读走 ?raw=1 拿原始字节后用它本地转 base64（字节逐字节不变）。
+function __csBytesToB64(buf) {
+    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf || []);
+    let b64 = '';
+    for (let i = 0; i < u8.length; i += 0x6000) b64 += btoa(String.fromCharCode.apply(null, u8.subarray(i, i + 0x6000)));
+    return b64;
+}
 
 // 0.12.55 默认平台统一: settings.server 为空时按 owner 消解(Gitee 选项本就存空值)——owner 非空=老 Gitee 用户(
 // 或保存过 Gitee), owner 也为空=未配置→默认 GitHub(与面板下拉 selected 判定完全同构; 修"显示 GitHub 却发去 Gitee"的 401)
 function __csBase() {
+    if (csIsCF()) return __csCfRoot(); // M2-CF：CF 档不看 server/owner，只用 cfUrl（硬坑②）
     const v = String(settings.server || '').trim();
     if (v) return v.replace(/\/$/, '');
     return (String(settings.owner || '').trim() ? 'https://gitee.com/api/v5' : 'https://api.github.com');
 }
 
-const Gitee = {
+// ── 多后端取向与切换（M2-CF；设计 §2.2 #4/#5）──
+// 为什么 CF 用 4 个独立键、不塞进 server/token（设计 §2.4）：
+//   settings.token 会被拼进 gitee/github/gitlab 的 URL 与请求头 ⇒ 放访问码 = 把自建后端的码发给别人；
+//   settings.server 到处被 includes() 当"平台标记"解析 ⇒ 塞 CF 域名会被判成 Gitee/GitHub（全链路走错分支）。
+function csIsCF() { return String(settings.backend || '') === 'cf'; }
+function csBackend() { return csIsCF() ? CFBackend : GitBackend; }
+function csConfigured() { return csIsCF() ? !!String(settings.cfKey || '').trim() : !!(settings.owner && settings.repo && settings.token); }
+function csPlatformName() {
+    if (csIsCF()) return 'Cloudflare(自建)';
+    const b = __csBase();
+    return b.includes('gitlab.com') ? 'GitLab' : (b.includes('github') ? 'GitHub' : 'Gitee');
+}
+// 槽位/顶栏那一行显示的后端名（CF = cfName 或域名）
+function csBackendLabel() {
+    if (csIsCF()) return String(settings.cfName || '').trim() || (() => { try { return new URL(__csCfRoot()).host; } catch { return __csCfRoot() || '（未配置）'; } })();
+    return (settings.owner && settings.repo) ? `${settings.owner}/${settings.repo}` : '（未配置）';
+}
+// 连不上的文案：git 三平台**逐字保持原样**；CF 档说"地址/部署/拦截"（设计 §2.2 #23）
+function csNetHint() {
+    if (csIsCF()) return '连不上这个自建后端（地址打不开 / 部署还没生效，Pages 首次约 1 分钟 / 域名被拦截）';
+    return '网络 / 代理问题（不是令牌）· 连 GitHub：国内常被墙，开代理；连 Gitee：相反，请关代理';
+}
+// ★换后端必须清残留（设计 §3.3/§3.9 硬坑③）：下列缓存/记忆的键都是"云路径"，而两端路径布局完全一样 ⇒
+//   不清就会拿 A 后端的 sha 当"我上次传的"：徽章恒"云端新"、decideWorldUpload 误判 skipCloudEdited（世界书死活传不上去）。
+function csClearCaches() {
+    try { for (const k of Object.keys(__dirEntryCache)) delete __dirEntryCache[k]; } catch { }
+    try { __ghTreeCache = { ts: 0, arr: null }; } catch { }
+    try { for (const k of Object.keys(__recheckCache)) delete __recheckCache[k]; } catch { }
+    try { for (const k of Object.keys(__apiCloudJsonCache)) delete __apiCloudJsonCache[k]; } catch { }
+    try { for (const k of Object.keys(__cardsCache)) delete __cardsCache[k]; } catch { }
+    try { for (const k of Object.keys(__diffCache)) delete __diffCache[k]; } catch { }
+    try { window.__extManCache = {}; } catch { }
+    try { window.__extListCache = null; window.__extListAt = 0; window.__extMetaFetchedAt = 0; } catch { }
+    try { window.__csQuota = null; window.__csDbQueries = 0; } catch { }
+}
+// 换后端时丢"云端状态派生"的本机记忆（硬坑③）：
+//   lastCloudSha / lastLocalMTime 是 {云路径: sha/mtime} ⇒ 留着就会跨后端误判方向（世界书"云端被改过"误判）；
+//   cardPending 是"待确认配对"（云端卡清单派生）。
+//   ★connSlots / cardBind / syncMap 是"身份"记忆（跟后端无关或本来就按名字/id），保留。
+function csSwitchBackendReset() {
+    try { settings.lastCloudSha = {}; } catch { }
+    try { settings.lastLocalMTime = {}; } catch { }
+    try { settings.cardPending = {}; } catch { }
+    try { settings.__csHealSeen = {}; } catch { }
+    saveSettingsDebounced();
+}
+// ── 大文件读 / 只拿 sha（0.13.27 抗抖动 #2；性能支 §10.7-1）──
+// csReadBigText：CF 档走 ?raw=1 取原始字节、本地转文本 —— "会丢包的这一跳"上少发 JSON 外壳与转义的字节
+//   （角色卡分块/聊天段/配置块这类大文件专用；小文件照旧走 getText，行为零变化）。
+//   git 三平台**逐字**走 getText（URL/请求头/返回形状都不变）；404 ⇒ null（与 getText 同语义）。
+async function csReadBigText(path) {
+    if (!csIsCF()) return Gitee.getText(path);
+    return await CFBackend.rawText(path);
+}
+// csCfShaOnly：写仓前的"条件写"要先知道云端 sha —— CF 档走 HEAD（服务端只读指针行、0 body、1 趟库），
+//   不再把整个文件（可达 1MB）读回来只为拿一个 sha；文件不存在 ⇒ null。git 三平台走传进来的老取法（逐字不变）。
+async function csCfShaOnly(path, gitGetter) {
+    if (!csIsCF()) return await gitGetter();
+    return await CFBackend.headMeta(path);
+}
+// ── 配置串（部署脚本打印的那一行）：ywp1:<base64url(JSON{v,u,k,n})> ──
+function csCfgEncode(u, k, n) {
+    const j = JSON.stringify({ v: 1, u: String(u || ''), k: String(k || ''), n: String(n || '') });
+    const bin = new TextEncoder().encode(j);
+    let s = '';
+    for (let i = 0; i < bin.length; i += 0x6000) s += String.fromCharCode.apply(null, bin.subarray(i, i + 0x6000));
+    return 'ywp1:' + btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function csCfgDecode(text) {
+    const raw = String(text == null ? '' : text).trim();
+    const bad = () => new Error('这不像配置串：应该是 ywp1: 开头的一整行（部署脚本最后打印的那行）；也可以直接把地址、访问码分别填进上面两个框');
+    if (!raw) throw bad();
+    let u = '', k = '', n = '';
+    if (/^ywp1:/i.test(raw)) {
+        let b = raw.slice(5).replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+        while (b.length % 4) b += '=';
+        let j = null;
+        try {
+            const bin = atob(b);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            j = JSON.parse(new TextDecoder().decode(bytes));
+        } catch { throw new Error('这串配置串读不出来（多半是复制时被截断了）——整段重新复制一次，或直接把地址和访问码填进上面两个框'); }
+        if (!j || typeof j !== 'object') throw bad();
+        const v = Number(j.v);
+        if (v !== 1) throw new Error('这串配置串的版本是 ' + (j.v === undefined ? '?' : j.v) + '，这个版本的插件不认识 —— 先把插件更新到最新再试');
+        u = String(j.u || ''); k = String(j.k || ''); n = String(j.n || '');
+    } else {
+        // 容错：也认"两行纯文本"（第一行地址、第二行访问码）
+        const ls = raw.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+        if (ls.length >= 2 && /^https?:\/\//i.test(ls[0])) { u = ls[0]; k = ls[1]; n = ls[2] || ''; }
+        else throw bad();
+    }
+    u = u.trim().replace(/\/+$/, '');
+    k = k.trim();
+    if (!u || !/^https?:\/\//i.test(u)) throw new Error('配置串里的地址不合法（要是 http:// 或 https:// 开头）——看看是不是整段没复制全');
+    try { new URL(u); } catch { throw new Error('配置串里的地址不合法：' + u.slice(0, 60) + '（整段重新复制一次）'); }
+    if (!k) throw new Error('配置串里没有访问码（多半是复制时缺了一截）——整段重新复制一次');
+    return { u, k, n: n.slice(0, 64) };
+}
+
+// ★地址提示（0.13.27）：部署脚本每次"重新部署"打印的都是**那一次部署的专属地址**（开头带一段随机码，会变）；
+//   把这个地址里开头的随机码去掉，剩下的 https://项目名.pages.dev 是这个后端的**固定地址**（生产别名）——重新部署也不用改。
+//   作者那套示例后端的固定地址 = https://ywp-sync-f4e30b.pages.dev（性能支实测：与当前部署别名同源同码、行为一样）。
+const CS_CF_ADDR_FIXED_EXAMPLE = 'https://ywp-sync-f4e30b.pages.dev';
+// 0.13.30（作者要求）：地址栏那栏的说明已压到最简（只留一句"部署脚本会给你"）——旧的长解释连 title 一起删；
+//   0.13.31 起界面不再有粘贴入口（作者口径：别干扰、够简单了）⇒ "固定地址"那层解释只留在连接失败的 3 条人话里。
+// 0.13.32（作者 2026-10-10）：一键部署拆成**两行、各自可点复制** —— Windows 只能粘进 CMD，而 CMD 里没有 bash（老那条 .sh 跑不了），
+//   所以 Windows 那条改成只下 deploy.js（_worker.js / schema.sql 由 deploy.js 启动时自己补齐，见仓库里 deploy.js 开头那段"自补齐"）；
+//   手机/Linux/macOS 那条照旧。★两条命令与《教程.md》《失败模式对照表.md》里写的逐字一致（改一处要一起改）。
+const CS_CF_DEPLOY_CMD_WIN = 'curl.exe -fL -O https://gitee.com/satosaki/tavern-synchronization-plugin/raw/master/cf-deploy/deploy.js && node deploy.js';   // Windows（CMD 窗口）那行
+const CS_CF_DEPLOY_CMD_SH = 'curl -fL -O https://gitee.com/satosaki/tavern-synchronization-plugin/raw/master/cf-deploy/cf-deploy.sh && chmod +x cf-deploy.sh && ./cf-deploy.sh';   // 手机 Termux / Linux / macOS 那行
+
+const GitBackend = {
     get base() { return __csBase(); },
     // 双平台: Gitee v5 与 GitHub Contents API 同构(路径/PUT/DELETE/响应 sha 均一致)。
     // 差异仅: GitHub 需 Authorization 头(GET 查询参数不认) + vnd Accept; Gitee 两种认证都认 → 统一发头。
@@ -215,7 +341,7 @@ const Gitee = {
         if (!r) {
             if (lastErr && lastErr.name === 'AbortError')
                 throw new Error('请求超时（' + Math.round(timeout / 1000) + ' 秒）· 网络慢或云端文件多 · 稍后再点一次；反复超时点「连接」自查');
-            throw new Error('连不上云端 · 网络 / 代理问题（不是令牌）· 连 GitHub：国内常被墙，开代理；连 Gitee：相反，请关代理 · 原始信息：' + (((lastErr && lastErr.message) || lastErr) + '').slice(0, 60));
+            throw new Error('连不上云端 · ' + csNetHint() + ' · 原始信息：' + (((lastErr && lastErr.message) || lastErr) + '').slice(0, 60));
         }
         // 404 容忍范围: GET(读不存在→上层返回null/[])与 DELETE(已删=幂等成功); PUT/POST 404(sha冲突/文件被移走)必须抛——
         // 否则 putText 拿不到 content.sha 静默返回 undefined, 上层以为上传成功, 实际云端没写进去(数据丢失风险)
@@ -483,14 +609,301 @@ const Gitee = {
         if (!r.ok) return [];
         return (await r.json()).history || [];
     },
-    // 连接测试(按钮文案「连接」)
+    // 连接测试（等价旧「启动自动连接」那段自己拼的 /user：URL 与请求头逐字保持 ⇒ 三个 git 平台行为不变）
     async test() {
-        const r = await fetch(`${this.base}${this.isGitlab() ? '/user?private_token=' : '/user?access_token='}${encodeURIComponent(settings.token)}`, { headers: this.auth() });
+        const base = this.base;
+        const isGh = this.isGithub(), isGl = this.isGitlab();
+        const url = `${base}/user${isGh ? '' : (isGl ? '?private_token=' : '?access_token=') + encodeURIComponent(settings.token)}`;
+        const headers = isGl ? { 'PRIVATE-TOKEN': settings.token } : (isGh ? { 'Authorization': 'Bearer ' + settings.token, 'Accept': 'application/vnd.github+json' } : { 'Authorization': 'token ' + settings.token });
+        const r = await fetch(url, { headers, cache: 'no-store' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const u = await r.json();
         return u.login || u.username || 'OK';
     },
 };
+
+// ===================== CF 自建后端（M2-CF；设计文档 = CF后端-插件适配设计.md）=====================
+// 用户自己注册 Cloudflare、用脚本部署出来的一个后端（Pages/D1）。接口语义与 GitBackend 对齐、路径布局一致，
+// 所以上层 201 处 Gitee.xxx(...) 调用一行都不用改（靠下面的 facade 转发 8 个方法）。
+// 三条硬差异（写错任一条都会出真 BUG，见设计 §2.3）：
+//   ① 文本文件的 GET content 是**原文**、二进制才是 base64 ⇒ 按 encoding 分流（写错 = 导入的预设全是乱码）
+//   ② 条件写（带 sha）不匹配 ⇒ 409 ⇒ **绝不重试**（那是"两台设备抢写"，重试会掩盖冲突）
+//   ③ raw 直链必须带 ?key=（<img> 标签带不了自定义请求头）
+function __csCfRoot() { return String(settings.cfUrl || '').trim().replace(/\/+$/, ''); }
+function __csCfEncPath(p) { return String(p).split('/').map(encodeURIComponent).join('/'); }
+let __csCfNameFromCfg = ''; // 配置串（ywp1:）里带的显示名；0.13.31 删了粘贴入口后仅保留兼容读取（正常恒为 ''）
+// CF 后端返回的人话（照服务端 error 字段分档；设计 §2.3「错误分档」表）
+function __csCfApiMsg(status, bodyText) {
+    let code = '', msg = '';
+    try { const j = JSON.parse(String(bodyText || '') || '{}'); code = String((j && j.error) || ''); msg = String((j && j.message) || ''); } catch { }
+    const tail = msg ? ' · 后端原话：' + msg.replace(/\s+/g, ' ').slice(0, 150)
+        : (bodyText ? ' · 后端原话：' + String(bodyText).replace(/\s+/g, ' ').slice(0, 150) : '');
+    if (status === 401) {
+        if (code === 'no_key') return '这个后端要访问码：插件里没带上（或没填）——回「设置 → 云平台 → 访问码」填上';
+        return '访问码不对：整段重新贴一遍（注意首尾空格 / 别漏字符）；要是刚改过码，另一台设备也要改' + tail;
+    }
+    if (status === 403) return '后端拒绝了（403）：访问码不对这个部署、或这个部署被限制' + tail;
+    if (status === 404) return '云端没有这个文件 / 地址' + tail;
+    if (status === 409) return '云端这份已经被另一端改过（或正在被写）⇒ 先重新读一遍再点一次，别覆盖掉另一台设备的更新';
+    if (status === 413) return '这个文件太大，后端不收（413）' + tail;
+    if (status === 429) return '请求太密被限流（429）· 等 5~10 秒再点一次';
+    if (status === 502 || status === 503 || status === 504) return '自建后端临时故障（HTTP ' + status + '）· 已自动重试过一轮 · 稍等几秒再点一次';
+    if (status === 500) {
+        if (code === 'no_key_configured') return '后端还没设访问码 ⇒ 回部署脚本最后一步，把 access_key 写进 D1（写好了再点「连接」）';
+        if (code === 'no_d1') return '这个部署还没绑 D1 数据库（绑定名必须是 DB）⇒ 去它的设置里加一个 D1 绑定';
+        if (code === 'db_not_migrated') return '后端数据库还没建表 ⇒ 跑一遍 schema.sql（部署脚本里那一步）';
+        return '自建后端内部出错（HTTP 500）· 稍等几秒再点一次；反复如此就把这行诊断发给开发者' + tail;
+    }
+    if (status === 400) return '后端拒绝了这个请求（400）' + tail;
+    return '自建后端返回 HTTP ' + status + tail;
+}
+// ── 0.13.27 抗抖动（性能支 §10.7；作者那套自建后端"本机 ↔ CF 边缘"这一跳会**间歇性卡死**：
+//     实测 20~90 秒无响应、卡住时响应头连 cf-ray 都没有；同一时段 CF 官方端点却 10/10 正常）──
+//   ① 读请求（GET/HEAD）不再"一次卡死就放弃"：改用"停摆看门狗"——stallMs 内一个字节都没来 ⇒ 掐掉、换一次连接重试；
+//      慢而通的下载不设总时长上限（capMs 只防"永远滴答"的病态流，120 秒）。
+//   ② 大文件读走 ?raw=1（同一份内容少发 JSON 外壳/转义的字节）；写仓前"只拿 sha"改走 HEAD（0 body）。
+//   ③ 最终失败给人话三态（互不相同）：超时（自己等太久）/ 连接被掐（Failed to fetch）/ 云端报错（HTTP n，见 __csCfApiMsg）。
+//   ★CF_NET 是唯一旋钮（e2e 注入假超时靠它调小 stallMs/maxTry）；生产默认值别动。
+const CF_NET = { stallMs: 20000, capMs: 120000, maxTry: 3, waitMinMs: 1000, waitMaxMs: 3000 };
+function cfNetRetryWaitMs() {
+    const a = Math.max(0, Number(CF_NET.waitMinMs) || 0);
+    const b = Math.max(a, Number(CF_NET.waitMaxMs) || a);
+    return a + Math.floor(Math.random() * (b - a + 1));   // 间隔随机 1~3 秒（§10.7-2 的建议）
+}
+// 网络层失败的四要素人话（哪儿错 · 谁的问题 · 怎么办）；与 HTTP 层（errOf/__csCfApiMsg）互不相同。
+function __csCfNetFailMsg(lastErr, retries, isRead) {
+    const aborted = !!(lastErr && lastErr.name === 'AbortError');
+    const how = isRead ? '已自动重试 ' + retries + ' 次仍没通' : '写请求不自动重试（避免重复提交）';
+    const raw = String((lastErr && lastErr.message) || lastErr || '').replace(/\s+/g, ' ').slice(0, 60);
+    return aborted
+        ? '超时（自己等太久）：请求一直没响应 · 这是"你到 Cloudflare 的一跳"不稳，不是地址 / 访问码的问题 · ' + how + ' ⇒ 过一会儿再点一次；经常这样就把「云平台」换成 Gitee/GitHub'
+        : '连接被掐（Failed to fetch）：网络 / 运营商 / 代理把这条连接掐了 · ' + how + ' ⇒ 过一会儿再点一次；经常这样就把「云平台」换成 Gitee/GitHub' + (raw && !/failed to fetch/i.test(raw) ? ' · 原始信息：' + raw : '');
+}
+const CFBackend = {
+    get base() { return __csCfRoot(); },
+    isCf() { return true; },
+    isGithub() { return false; },
+    isGitlab() { return false; },
+    encPath(p) { return __csCfEncPath(p); },
+    url(path) { return `${this.base}/api/${this.encPath(path)}`; },
+    listUrl(dir, recursive) { return `${this.base}/api-list/${this.encPath(dir)}?recursive=${recursive ? 1 : 0}`; },
+    // 行内头像/缩略图直链（<img> 带不了自定义头 ⇒ 只能把码放查询参数；设计 §3.12 的代价已知）
+    rawUrl(path) { return `${this.url(path)}?raw=1&key=${encodeURIComponent(String(settings.cfKey || ''))}`; },
+    auth(extra = {}) { return { 'Content-Type': 'application/json', 'X-YWP-KEY': String(settings.cfKey || ''), ...extra }; },
+    // 单次"带停摆看门狗"的读（GET/HEAD 专用；写请求不走这里）——
+    //   为什么不用"总超时"：慢而通的下载（1MB 段在几十秒里慢速传完）不该被总限误杀；而真卡死的形态是
+    //   "一个字节都不来"（性能支实测：卡住时连 cf-ray 都没有）。⇒ 判据 = CF_NET.stallMs 内没有新字节就掐掉；
+    //   CF_NET.capMs 只防"永远滴答"的病态流。掐掉后由调用方换一次连接重试（这就是"换连接重试"的实现）。
+    async readGuarded(url, method) {
+        const ctl = new AbortController();
+        let stallTimer = 0;
+        const clearAll = () => { clearTimeout(stallTimer); clearTimeout(capTimer); };
+        const arm = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => { try { ctl.abort(); } catch { } }, Math.max(50, Number(CF_NET.stallMs) || 20000)); };
+        const capTimer = setTimeout(() => { try { ctl.abort(); } catch { } }, Math.max(100, Number(CF_NET.capMs) || 120000));
+        arm();
+        let r = null;
+        try { r = await fetch(url, { method: method || 'GET', headers: this.auth(), cache: 'no-store', signal: ctl.signal }); }
+        catch (e) { clearAll(); throw e; }
+        if (!r.body) { clearAll(); return r; }   // HEAD / 204 / 304：没有流，只看"响应到没到"
+        const reader = r.body.getReader();
+        const chunks = []; let total = 0;
+        try {
+            for (;;) {
+                arm();
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value && value.length) { chunks.push(value); total += value.length; }
+            }
+        } catch (e) { clearAll(); throw e; }
+        clearAll();
+        // 重建 Response（调用方照旧用 .json()/.text()/.arrayBuffer()/.clone()；headers 原样带过来，X-YWP-SHA 已由 CORS 放行）
+        try {
+            const all = new Uint8Array(total); let off = 0;
+            for (const c of chunks) { all.set(c, off); off += c.length; }
+            return new Response(all, { status: r.status, statusText: r.statusText, headers: r.headers });
+        } catch { return r; }
+    },
+    // 超时/重试（0.13.27 抗抖动）：读请求 = 停摆看门狗 + 换连接重试（最多 CF_NET.maxTry 次、间隔 1~3 秒随机）；
+    //   写请求 = 只试 1 次（防重复提交；总超时 45 秒照旧）。★409 绝不重试（两台设备抢写，重试会掩盖冲突）。
+    //   ★改动只在 CF 档：GitBackend.req 一个字没动（GitHub/Gitee/GitLab 行为逐字不变）。
+    async req(path, opts = {}) {
+        const method = opts.method || 'GET';
+        const isRead = (method === 'GET' || method === 'HEAD');
+        const timeout = opts.timeout || 45000;   // 写请求（PUT/DELETE）的总超时；读请求走停摆看门狗
+        const url = opts.absUrl ? String(opts.absUrl) : this.url(path);
+        const doFetchWrite = () => {
+            const ctl = new AbortController();
+            const timer = setTimeout(() => ctl.abort(), timeout);
+            return fetch(url, { method, headers: this.auth(), body: opts.body, cache: 'no-store', signal: ctl.signal })
+                .finally(() => clearTimeout(timer));
+        };
+        const maxTry = (isRead && !opts.noRetry) ? Math.max(1, Number(CF_NET.maxTry) || 3) : 1;
+        let r = null, lastErr = null, tries = 0;
+        for (let attempt = 0; attempt < maxTry; attempt++) {
+            tries++;
+            try { r = isRead ? await this.readGuarded(url, method) : await doFetchWrite(); }
+            catch (e) {
+                lastErr = e; r = null;   // 停摆掐断 / 连接被掐 → 换一次连接重试（原来 AbortError 直接 break = 一次卡死就报废）
+                if (attempt < maxTry - 1) await new Promise((rs) => setTimeout(rs, cfNetRetryWaitMs()));
+                continue;
+            }
+            if (r.ok) break;
+            const retryable = isRead && (r.status === 429 || r.status === 502 || r.status === 503 || r.status === 504);
+            if (!retryable || attempt >= maxTry - 1) break;
+            const w = this.retryWaitMs(r);
+            if (w > 8000) break;
+            await new Promise((rs) => setTimeout(rs, Math.max(600, w)));
+        }
+        if (!r) throw new Error(__csCfNetFailMsg(lastErr, Math.max(0, tries - 1), isRead));
+        try { this.captureQuota(r); } catch { }
+        if (!r.ok && r.status !== 404) { const txt = await r.clone().text().catch(() => ''); throw this.errOf(r, path, txt); }
+        if (!r.ok && r.status === 404 && method !== 'GET' && method !== 'HEAD' && method !== 'DELETE') { const txt = await r.clone().text().catch(() => ''); throw this.errOf(r, path, txt); }
+        return r;
+    },
+    // ?raw=1 取原始字节（大文件读专线；0.13.27）：返回 {bytes, sha, size} 或 null（404）。
+    // 语义与 getBase64/getText 的云端 sha 一致（X-YWP-SHA 头 = git blob sha1）。
+    async rawBytes(path) {
+        const r = await this.req('', { absUrl: `${this.url(path)}?raw=1` });
+        if (r.status === 404) return null;
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        return { bytes, sha: String(r.headers.get('X-YWP-SHA') || ''), size: bytes.length };
+    },
+    // ?raw=1 → 文本（与 getText 同语义；只用于"确定是文本"的大文件读取）
+    async rawText(path) {
+        const g = await this.rawBytes(path);
+        if (!g) return null;
+        let s = '';
+        try { s = new TextDecoder('utf-8').decode(g.bytes); } catch { s = ''; }
+        return { content: s, sha: g.sha };
+    },
+    // 只拿 sha / size（HEAD：服务端只读指针行、0 body、1 趟库）——写仓前的条件写用；不存在 ⇒ null
+    async headMeta(path) {
+        const r = await this.req('', { absUrl: this.url(path), method: 'HEAD' });
+        if (r.status === 404) return null;
+        return { sha: String(r.headers.get('X-YWP-SHA') || ''), size: Number(r.headers.get('X-YWP-SIZE')) || 0 };
+    },
+    errOf(r, path, bodyText) {
+        const base = __csCfApiMsg(r && r.status, bodyText);
+        const p = String(path || '');
+        return new Error(p && p.length <= 120 && !base.includes(p) ? base + '（路径 ' + p + '）' : base);
+    },
+    // CF 没有 x-ratelimit-*（免费档不按请求数限流）；把服务端的诊断头记下来供体检
+    captureQuota(r) { try { window.__csDbQueries = Number(r.headers.get('x-ywp-db-queries')) || 0; } catch { } },
+    rateHeaders() { return { remaining: '', limit: '', reset: 0, retryAfter: 0 }; },
+    isRateLimit() { return false; },
+    retryWaitMs() { return 1800; },
+    // ★按 encoding 分流：文本=原文；二进制=base64（设计 §2.3 里"最容易写错的一条"）
+    async getText(path) {
+        const r = await this.req(path);
+        if (r.status === 404) return null;
+        const j = await r.json().catch(() => null);
+        if (!j || typeof j !== 'object' || Array.isArray(j) || j.content === undefined) return null;
+        if (j.encoding === 'base64') return { content: b64Decode(j.content), sha: j.sha };
+        return { content: String(j.content == null ? '' : j.content), sha: j.sha };
+    },
+    // 读取二进制（base64 原串）：★0.13.27 走 ?raw=1 取原始字节、本地转 base64（抗抖动 #2）——
+    //   同一份内容比 JSON 形态少发约 25% 字节（性能支 §10 实测：873,982 → 655,360），字节与 sha 不变。
+    async getBase64(path) {
+        const g = await this.rawBytes(path);
+        if (!g) return null;
+        return { b64: __csBytesToB64(g.bytes), sha: g.sha };
+    },
+    // 写文本；返回值必须是云端算的 **git blob sha1**（上层直接写进 lastCloudSha 当"我上次传的"用）
+    async putText(path, content, sha, message) {
+        const body = { content: b64Encode(content), message: message || `sync ${path}` };
+        if (sha) body.sha = sha;
+        const r = await this.req(path, { method: 'PUT', body: JSON.stringify(body), noRetry: true });
+        const j = await r.json().catch(() => null);
+        const newSha = (j && j.content && j.content.sha) ? j.content.sha : (j && j.sha);
+        __evictChatsDirOf(path);
+        return newSha;
+    },
+    // 写二进制（内容已是 base64，不要再编码）
+    async putBase64(path, b64, sha, message) {
+        const body = { content: String(b64 || '').replace(/\s/g, ''), message: message || `sync ${path}` };
+        if (sha) body.sha = sha;
+        const r = await this.req(path, { method: 'PUT', body: JSON.stringify(body), noRetry: true });
+        const j = await r.json().catch(() => null);
+        const newSha = (j && j.content && j.content.sha) ? j.content.sha : (j && j.sha);
+        __evictChatsDirOf(path);
+        return newSha;
+    },
+    async listDir(path) {
+        const arr = await this.listEntries(path);
+        return arr.filter((x) => x.type === 'dir').map((x) => x.name);
+    },
+    // 列目录：服务端一条 SQL 给全（空目录 = 200 + []，不是 404）
+    async listEntries(path) {
+        const r = await this.req('', { absUrl: this.listUrl(path, false) });
+        if (r.status === 404) return [];
+        const j = await r.json().catch(() => null);
+        if (!Array.isArray(j)) return [];
+        return j.map((x) => ({ name: x.name, path: x.path, type: x.type === 'dir' ? 'dir' : 'file', sha: x.type === 'dir' ? '' : (x.sha || ''), size: Number(x.size) || 0 }));
+    },
+    // 递归列全部文件：一次请求（CF 没有 N+1）
+    async listAllFiles(path, acc = []) {
+        const r = await this.req('', { absUrl: this.listUrl(path, true) });
+        if (r.status === 404) return acc;
+        const j = await r.json().catch(() => null);
+        const out = Array.isArray(j) ? j.filter((x) => x.type === 'file').map((x) => ({ path: x.path, sha: x.sha || '', size: Number(x.size) || 0 })) : [];
+        return acc.concat(out);
+    },
+    // 删除：幂等（不存在也算成功）；给了 sha 但不匹配 ⇒ 409（人话："先重新读一遍再点一次"）
+    // 0.13.27：补 45 秒超时（原来没有超时 —— 这一跳卡死时删除请求会永久挂着）+ 三态人话
+    async deleteFile(path, sha, message = 'delete') {
+        const url = `${this.url(path)}${sha ? '?sha=' + encodeURIComponent(String(sha)) : ''}`;
+        let r = null;
+        try {
+            const ctl = new AbortController();
+            const timer = setTimeout(() => ctl.abort(), 45000);
+            try { r = await fetch(url, { method: 'DELETE', headers: this.auth(), cache: 'no-store', signal: ctl.signal }); }
+            finally { clearTimeout(timer); }
+        }
+        catch (e) { throw new Error(__csCfNetFailMsg(e, 0, false)); }
+        if (r.status === 404) { __evictChatsDirOf(path); return; } // 已删 = 幂等成功
+        if (!r.ok) { const txt = await r.text().catch(() => ''); throw this.errOf(r, path, txt); }
+        __evictChatsDirOf(path);
+    },
+    async history() { return []; },   // 全仓零调用（与 plan §3 结论一致）
+    // 连接自检（等价 GitHub /user）
+    async test() {
+        const r = await this.req('', { absUrl: `${this.base}/api-test` });
+        if (!r.ok) throw this.errOf(r, '/api-test', await r.text().catch(() => ''));
+        const j = await r.json().catch(() => ({}));
+        return j.username || j.login || j.service || 'OK';
+    },
+    // 云端占用（服务端直接给总量，比遍历树便宜）
+    async usage() {
+        const r = await this.req('', { absUrl: `${this.base}/api-test` });
+        if (!r.ok) return null;
+        const j = await r.json().catch(() => ({}));
+        return { bytes: Number(j.bytes) || 0, files: Number(j.files) || 0 };
+    },
+};
+
+// 多后端 facade：上层 201 处调用点全是 Gitee.xxx(...) —— 这里把它接到"当前后端"（git 三平台 或 CF）。
+// ★isGithub/isGitlab 必须在这里短路（设计 §3.1 硬坑①）：GitBackend 是用"字符串包含"判平台的，
+//   用户的 CF 域名里只要出现 github（如 my-github.pages.dev）就会被判成 GitHub ⇒ 全链路走错分支。
+const Gitee = {
+    get base() { return csBackend().base; },
+    isGithub() { return !csIsCF() && GitBackend.isGithub(); },
+    isGitlab() { return !csIsCF() && GitBackend.isGitlab(); },
+    isCf() { return csIsCF(); },
+    getText: (...a) => csBackend().getText(...a),
+    getBase64: (...a) => csBackend().getBase64(...a),
+    putText: (...a) => csBackend().putText(...a),
+    putBase64: (...a) => csBackend().putBase64(...a),
+    listDir: (...a) => csBackend().listDir(...a),
+    listEntries: (...a) => csBackend().listEntries(...a),
+    listAllFiles: (...a) => csBackend().listAllFiles(...a),
+    deleteFile: (...a) => csBackend().deleteFile(...a),
+    history: (...a) => csBackend().history(...a),
+    test: (...a) => csBackend().test(...a),
+    usage: (...a) => csBackend().usage(...a),
+    // CF 专用的直链（git 档返回空串，调用点自己判）
+    cfRawUrl(path) { return csIsCF() ? CFBackend.rawUrl(path) : ''; },
+};
+
 
 // ===================== 数据采集 =====================
 
@@ -541,7 +954,8 @@ function __cardFileOf(dirOrFile) {
 async function __cardPutSmart(dirOrFile, b64) {
     const singlePath = __cardFileOf(dirOrFile);
     if (b64.length <= CARD_CHUNK_CHARS) {
-        const prev = await Gitee.getBase64(singlePath).catch(() => null);
+        // 0.13.27：CF 档"只拿 sha"改走 HEAD（不再把整张卡的字节读回来只为拿 sha）；git 三平台仍走 getBase64（逐字不变）
+        const prev = await csCfShaOnly(singlePath, () => Gitee.getBase64(singlePath).catch(() => null));
         const sha = await Gitee.putBase64(singlePath, b64, prev && prev.sha ? prev.sha : undefined, 'sync card');
         return { mode: 'single', sha };
     }
@@ -552,11 +966,14 @@ async function __cardPutSmart(dirOrFile, b64) {
         (await __cachedListEntries(partsDir)).filter(e => e.type === 'file').forEach(e => oldParts.push({ path: e.path, sha: e.sha }));
     } catch { }
     const total = Math.ceil(b64.length / CARD_CHUNK_CHARS);
-    for (let i = 0; i < total; i++) {
+    // 0.13.26：分块写按 csWriteConc() 并发（CF 档 4；git 档 =1 ⇒ 逐条串行，与旧行为逐字一致）
+    const __wrs = await csMapLimit(Array.from({ length: total }, (_, i) => i), csWriteConc(), async (i) => {
         const slicePath = `${partsDir}/part-${String(i).padStart(4, '0')}`;
         const reuse = oldParts.find(x => x.path === slicePath);
         await Gitee.putText(slicePath, b64.slice(i * CARD_CHUNK_CHARS, (i + 1) * CARD_CHUNK_CHARS), reuse ? reuse.sha : undefined, `card chunk ${i}/${total}`);
-    }
+    });
+    const __partErr = (__wrs || []).find((r) => r && r.e);
+    if (__partErr) throw __partErr.e;   // 与串行一致：任一块失败 ⇒ 整张卡没传成（manifest 不写，避免半张卡）
     // 多余的旧块删除
     for (const x of oldParts) {
         const idx = parseInt(String(x.path).split('part-')[1], 10);
@@ -576,7 +993,8 @@ async function __cardGetSmart(dirOrFile) {
         const man = JSON.parse(manC.content);
         let b64 = '';
         for (let i = 0; i < man.chunks; i++) {
-            const pc = await Gitee.getText(`${base}.parts/part-${String(i).padStart(4, '0')}`);
+            // 0.13.27：分块读走大文件专线（CF 档 = ?raw=1 原始字节；git 档逐字还是 getText）
+            const pc = await csReadBigText(`${base}.parts/part-${String(i).padStart(4, '0')}`);
             if (!pc) throw new Error(`角色卡分块缺失 part-${i}(上传不完整?)`);
             b64 += pc.content;
         }
@@ -712,7 +1130,8 @@ async function getCloudChat(chatPath) {
     if (mf && mf.content) {
         let m = null; try { m = JSON.parse(mf.content); } catch { }
         if (m && Array.isArray(m.parts) && m.parts.length) {
-            const texts = await Promise.all(m.parts.map((pt) => Gitee.getText(pt.file).then((c) => (c && c.content) || '').catch(() => '')));
+            // 0.13.27：分段读走大文件专线（CF 档 = ?raw=1；每段可达 1MB ⇒ 少发 JSON 转义/外壳的字节）
+            const texts = await Promise.all(m.parts.map((pt) => csReadBigText(pt.file).then((c) => (c && c.content) || '').catch(() => '')));
             // v2: header 在独立 meta 文件; v1: 内嵌(兼容旧数据)
             let headerObj = m.header !== undefined ? m.header : null;
             if (m.v >= 2 && m.metaFile) {
@@ -722,7 +1141,7 @@ async function getCloudChat(chatPath) {
             return { content: assembleChatText(headerObj, texts), sha: mf.sha };
         }
     }
-    return (await Gitee.getText(chatPath).catch(() => null)) || null;
+    return (await csReadBigText(chatPath).catch(() => null)) || null;   // legacy 整文件：可能很大 ⇒ 也走大文件专线
 }
 // 写云端一条聊天（jsonlText=整条文本, message=提交说明）。返回 manifest/文件 sha。
 async function putCloudChat(chatPath, jsonlText, message) {
@@ -734,7 +1153,7 @@ async function putCloudChat(chatPath, jsonlText, message) {
         }
         msgLines.push(l);
     });
-    const legacy = await Gitee.getText(chatPath).catch(() => null);
+    const legacy = await csCfShaOnly(chatPath, () => Gitee.getText(chatPath).catch(() => null));   // 0.13.27：CF 档只拿 sha 走 HEAD（legacy 可能是整条大聊天，不再整个读回来）
     if (msgLines.length < SEG_MIN_MSGS) {
         // 短聊天：整文件存储 + 清掉可能存在的旧分段副产物
         const sha = await Gitee.putText(chatPath, jsonlText, legacy?.sha, message);
@@ -755,7 +1174,8 @@ async function putCloudChat(chatPath, jsonlText, message) {
     const diff = diffChatManifestParts(parts, cloudManifest);
     for (const i of diff.uploadIdx) { // 写仓恒串行
         const text = segs[i].join('\n');
-        await Gitee.putText(parts[i].file, text, (await Gitee.getText(parts[i].file).catch(() => null))?.sha, message + ` part ${i + 1}`);
+        // 0.13.27：CF 档"只拿 sha"走 HEAD（原来要把整段 ~1MB 读回来只为算 sha）
+        await Gitee.putText(parts[i].file, text, (await csCfShaOnly(parts[i].file, () => Gitee.getText(parts[i].file).catch(() => null)))?.sha, message + ` part ${i + 1}`);
     }
     // 清失效旧段；全部段写成功后再动 manifest 和 legacy
     await __cleanupSegmentFiles(chatPath, parts);
@@ -766,7 +1186,7 @@ async function putCloudChat(chatPath, jsonlText, message) {
     const metaText = JSON.stringify(headerObj);
     const metaSha = await sha1Text(metaText);
     if (!(cloudManifest && cloudManifest.v >= 2 && cloudManifest.metaSha === metaSha)) {
-        await Gitee.putText(metaPath, metaText, (await Gitee.getText(metaPath).catch(() => null))?.sha, message + ' (meta)');
+        await Gitee.putText(metaPath, metaText, (await csCfShaOnly(metaPath, () => Gitee.getText(metaPath).catch(() => null)))?.sha, message + ' (meta)');
     }
     const manifest = { v: 3, parts, total: msgLines.length, metaFile: stem + '.meta.json', metaSha, mtime: new Date().toISOString() }; // v3: 每段带 start 起始楼层号
     return Gitee.putText(manifestPathOf(chatPath), JSON.stringify(manifest, null, 2), cloudMf?.sha, message + ' (manifest)');
@@ -811,7 +1231,7 @@ async function getCloudChatSmart(chatPath, localMsgLines) {
     for (const i of plan.downloadIdx) {
         let ok = false;
         for (let attempt = 0; attempt < 2 && !ok; attempt++) { // 坏段重试一次
-            const c = await Gitee.getText(m.parts[i].file).catch(() => null);
+            const c = await csReadBigText(m.parts[i].file).catch(() => null);   // 0.13.27：大文件专线（CF 档 = ?raw=1）
             if (c && c.content && (await sha1Text(c.content)) === m.parts[i].sha) {
                 partTexts[i] = c.content; ok = true;
             }
@@ -1062,9 +1482,10 @@ async function __csCardRecheck(localU8, cloudParts, charNameForSingle, cloudSig,
         try {
             if (cloudParts && cloudParts.length) {
                 // 分块卡: parts rest 是完整云路径(sync/名/character.png.parts/part-NNNN), 逐块拉 base64 文本拼接
+                // 0.13.27：走大文件专线（CF 档 = ?raw=1；字节逐字不变）
                 let all = '';
                 for (const cp of cloudParts) {
-                    const g = await Gitee.getText(String(cp.rest)).catch(() => null);
+                    const g = await csReadBigText(String(cp.rest)).catch(() => null);
                     if (g && g.content) all += g.content;
                 }
                 if (all) { const bin = atob(all.replace(/\s/g, '')); cloudU8b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) cloudU8b[i] = bin.charCodeAt(i); }
@@ -1615,6 +2036,29 @@ async function getChatContent(fileName, charName, avatarHint) {
 // 因此强制串行(1=最可靠)，杜绝"该上传却失败"。
 /** 并发写 Gitee 保证：读/比对阶段并行(快)，实际写仓阶段严格串行(防 Gitee 单仓并发写 400 "文件新建失败"竞态)。 */
 const UPLOAD_CONCURRENCY = 1; // 保留：写仓串行的窗口大小(恒1)。实测并发写必踩400 → 阶段B按 plan 顺序一个接一个 putText。
+// 0.13.26（作者："CF 可以并行上传吗…Git 好像不能并行…是否能加速它的上传"）：
+//   CF 自建后端**没有** Gitee 那个"单仓并发写 400"限制（服务端契约已验：8 并发写同一路径不撕裂、
+//   条件写恰好一个成功一个 409）⇒ 只给 CF 档开受控并发写仓（4）。git 三平台仍恒 1（逐字保留原行为）。
+//   ★settings.__benchSerial 是既有基准开关（默认关）——开了就退到串行，用来做"同夹具 串行 vs 并发"对比。
+const CS_CF_WRITE_CONCURRENCY = 4;
+function csWriteConc() { return settings.__benchSerial ? 1 : (csIsCF() ? CS_CF_WRITE_CONCURRENCY : 1); }
+// 受控并发跑 items：limit<=1 时就是逐条串行（与旧代码等价、异常照旧往外抛）；
+// limit>1 时最多 limit 个同时在跑，单条异常收进结果对象（不打断其余），由调用方决定怎么报。
+async function csMapLimit(items, limit, fn) {
+    const arr = Array.from(items || []);
+    const out = new Array(arr.length);
+    const n = Math.max(1, Math.min(Number(limit) || 1, arr.length || 1));
+    if (n <= 1) { for (let i = 0; i < arr.length; i++) out[i] = { v: await fn(arr[i], i) }; return out; }
+    let next = 0;
+    const worker = async () => {
+        for (;;) {
+            const i = next++; if (i >= arr.length) return;
+            try { out[i] = { v: await fn(arr[i], i) }; } catch (e) { out[i] = { e }; }
+        }
+    };
+    await Promise.all(Array.from({ length: n }, () => worker()));
+    return out;
+}
 // 单聊天「读+冲突决策+算好要写文本」→ 返回 job 或 null(跳过)。被 exportChats 阶段A 并行(或 __benchSerial 时串行)调用。
 // 只读不写; 跳过/新增只记 skipped 或返回 job 由阶段B串行写。
 async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuard, skipped, avatar = '') {
@@ -1691,11 +2135,13 @@ async function exportChats(charName, chatItems, preDecisions = null, avatar = ''
             return out;
         })()
         : await Promise.all(plans.map(async (plan) => readJobForPlan(plan, chatItems, charName, preDecisions, batchGuard, skipped, avatar)));
-    // ── 阶段B：串行写 Gitee（严格保序 + 单写不 400），每个聊天先处理「另行保存」再覆盖主 ──
-    for (const job of jobs) {
-        if (!job) continue;
+    // ── 阶段B：写仓。git 三平台严格串行（单写不 400，逐字保留）；CF 自建后端按 csWriteConc() 受控并发 ──
+    //    每个聊天先处理「另行保存」再覆盖主；并发只影响"谁先谁后"，每个 job 各写自己的云路径。
+    const __writeJob = async (job) => {
+        if (!job) return null;
         const { plan, p, text, cloudSha, cloud, decision } = job;
-        if (plans.length > 1) { setStatus(`正在同步角色「${charName}」聊天：${++doneCount}/${plans.length}…`); showBusy(doneCount, plans.length, `上传 ${charName}`); }
+        doneCount++;
+        if (plans.length > 1) { setStatus(`正在同步角色「${charName}」聊天：${doneCount}/${plans.length}…`); showBusy(doneCount, plans.length, `上传 ${charName}`, plan.localName); }
         // save_elsewhere → 先【另行保存】：把云端当前内容另存到新云端路径(两边都留)，再覆盖为主
         if (decision === 'save_elsewhere' && cloud) {
             const backupPath = p.replace(/\.jsonl$/i, `-另行保存-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.jsonl`);
@@ -1709,6 +2155,12 @@ async function exportChats(charName, chatItems, preDecisions = null, avatar = ''
         settings.lastCloudSha[p] = (await putCloudChat(p, text, `${decision === 'save_elsewhere' ? '另行保存后覆盖' : 'sync chat'} ${plan.localName}`)) || settings.lastCloudSha[p];
         if (!plan.mapped) setLocalName(charName, p, plan.localName); // 新聊天：绑定映射
         uploaded.push(plan.localName);
+        return true;
+    };
+    {
+        const __res = await csMapLimit(jobs, csWriteConc(), __writeJob);
+        const __err = (__res || []).find((r) => r && r.e);
+        if (__err) throw __err.e;   // 失败不静默：错误文案与串行同源，抛给上层汇总
     }
     // 2) 写清单（云端文件全集 = 所有映射过的云路径 + 本次新增；供拉取枚举）
     const allCloudPaths = Object.keys(syncMapFor(charName));
@@ -1829,7 +2281,7 @@ async function pushAllCharacters(skipConfirm = false, presetDecision = null) {
         const avatar = __stemOf(chars[i].avatar) + '.png';
         const label = dupNames.has(name) ? `${name}（卡面 ${__stemOf(avatar)}）` : name;
         setStatus(`正在同步全部角色：${i + 1}/${total}（${label}）…`);
-        showBusy(i + 1, total, `正在上传全部角色「${label}」`); // 0.12.134 进度卡片名带上当前角色
+        showBusy(i + 1, total, `正在上传全部角色「${label}」`, label); // 0.12.134 进度卡片名带上当前角色
         try {
             const r = await pushCurrentCharacter(name, { presetDecision, avatar });
             if (r === false) { skipped++; skippedNames.push(label); } // 内部抢锁失败/待确认配对=被跳过, 如实计
@@ -1858,7 +2310,7 @@ async function importAllCharacters() {
     for (let i = 0; i < total; i++) {
         const name = names[i];
         setStatus(`正在导入云端角色：${i + 1}/${total}（${name}）…`);
-        showBusy(i + 1, total, `正在导入全部云端角色「${name}」`); // 0.12.134 进度卡片名带上当前角色
+        showBusy(i + 1, total, `正在导入全部云端角色「${name}」`, name); // 0.12.134 进度卡片名带上当前角色
         try { await importCharFromCloud(name, { noJump: true }); ok++; }
         catch (e) { fail++; failedNames.push(name); console.warn('[chat-sync] 导入失败', name, e); setStatus(`角色「${name}」导入失败`); }
     }
@@ -1901,7 +2353,7 @@ async function pushSelectedCharacters(charNames) {
     for (let i = 0; i < total; i++) {
         const { name, avatar, label } = jobs[i];
         setStatus(`正在上传选中角色：${i + 1}/${total}（${label}）…`);
-        showBusy(i + 1, total, `上传选中角色`);
+        showBusy(i + 1, total, `上传选中角色`, label);
         // 本地没有这张卡（云端视图勾了云端名但本地无同名）→ 跳过并说明
         if (!avatar) { skipLocal++; skipReasons.push({ name, reason: '本地无同名角色' }); continue; }
         try {
@@ -1941,7 +2393,7 @@ async function importSelectedCharacters(charNames) {
             if (it.kind === 'cloud' && it.cardId) { const idx = await __cardsLoad(name); const e = idx ? __entryOf(idx, it.cardId) : null; if (e && e.hint) label = `${name}（卡面 ${__stemOf(e.hint)}）`; }
         } catch { }
         setStatus(`正在导入选中角色：${i + 1}/${total}（${label}）…`);
-        showBusy(i + 1, total, `导入选中角色`);
+        showBusy(i + 1, total, `导入选中角色`, label);
         try {
             const r = await importCharFromCloud(name, { noJump: true, cardId: it.cardId || '', avatar: it.avatar || '' });
             if (r && r.skippedNoCloud) { skipCloud++; skipCloudNames.push(name); }
@@ -2192,7 +2644,7 @@ async function pullCharacterChats(charName) {
     const shaMap = await cloudShaMap(base);
     for (const fileName of fileNameList) {
         i++;
-        if (fileNameList.length > 1) { setStatus(`正在拉取角色「${charName}」聊天：${i}/${fileNameList.length}…`); showBusy(i, fileNameList.length, `拉取 ${charName}`); }
+        if (fileNameList.length > 1) { setStatus(`正在拉取角色「${charName}」聊天：${i}/${fileNameList.length}…`); showBusy(i, fileNameList.length, `拉取 ${charName}`, fileName); }
         const p = `${base}/${fileName}`;
         const cloudSha = shaMap.get(manifestPathOf(p)) || shaMap.get(p); // 分段聊天以 manifest sha 为指纹
         // 云端没变 且 (本地无绑定 或 本地文件还在) → 无新东西可拉。
@@ -2421,6 +2873,51 @@ async function cloudShaMap(dirPath) {
 function escapeHtml(s) {
     return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+// 0.13.26：行内头像加载失败的兜底链（作者实报"云端视图没有头像"）。
+//   data-fb = 候选 URL（'|' 分隔）。链上按序退：GitHub 那条 master→main 仍是第一步（只有 github raw 串才拼得出来，
+//   原行为逐字保留）；再退到"本机这张卡的缩略图"；链走完还失败才隐藏（原来是第一次失败就隐藏，网络抖一下图就没了）。
+function __csAvatarOnErr(img) {
+    try {
+        const chain = String(img.getAttribute('data-fb') || '').split('|').filter(Boolean);
+        const i = Number(img.getAttribute('data-fbi') || 0);
+        if (i < chain.length) { img.setAttribute('data-fbi', String(i + 1)); img.src = chain[i]; return; }
+    } catch { }
+    img.style.visibility = 'hidden';
+}
+window.__csAvatarOnErr = __csAvatarOnErr;
+// 0.13.26（作者："1.19 上按不了"）：整包恢复依赖官方的导入接口 /api/extensions/data-migration/import。
+//   真身 ST 1.19：该路由不存在 ⇒ 探测时 Express 兜底返回 404 + HTML 404 页（读 body 能判死；有该路由的平台回的是 JSON 或别的状态码）。
+//   TT / 新版酒馆：路由在 ⇒ 不判死（fail-open：探测失败/异常一律按"可用"，绝不误禁用）。
+//   判死时 = 按钮 disabled + 一行人话提示；点击路径还有第二层兜底（真 404/403 时给人话并把这颗按钮禁掉）。
+window.__csImportProbe = window.__csImportProbe || { state: 'unknown' };
+function __csProbeNativeImport() {
+    if (window.__csImportProbe.state !== 'unknown') return Promise.resolve(window.__csImportProbe.state);
+    if (window.__csImportProbe.p) return window.__csImportProbe.p;
+    window.__csImportProbe.p = fetch('/api/extensions/data-migration/job?id=__cs_probe__', { cache: 'no-store' })
+        .then(async (r) => {
+            let body = ''; try { body = (await r.text()).slice(0, 300); } catch { }
+            const html404 = (r.status === 404) && /text\/html/i.test(String(r.headers.get('content-type') || '')) && /<!doctype html|not found/i.test(body);
+            window.__csImportProbe.state = html404 ? 'no' : 'yes';
+            return window.__csImportProbe.state;
+        })
+        .catch(() => { window.__csImportProbe.state = 'yes'; return 'yes'; });   // 探测失败 ⇒ 不拦（点的时候再兜底）
+    window.__csImportProbe.p.finally(() => { window.__csImportProbe.p = null; try { __csApplyPkgGate(); } catch { } });
+    return window.__csImportProbe.p;
+}
+function __csApplyPkgGate() {
+    try {
+        const btn = document.getElementById('cs_cfg_full_restore');
+        const hint = document.getElementById('cs_pkg_hint');
+        if (!btn) return;
+        if (window.__csImportProbe && window.__csImportProbe.state === 'no') {
+            btn.disabled = true;
+            btn.style.opacity = '.5';
+            btn.style.cursor = 'not-allowed';
+            btn.title = '这台酒馆没有官方导入接口（需要 TauriTavern 或更新版酒馆）⇒ 用不了「TT 下载并导入」（把云端整包搬进 TauriTavern 用的那一步）';
+            if (hint) hint.textContent = '⚠「TT 下载并导入」这台酒馆用不了（没有官方导入接口）——需要 TauriTavern 或更新版酒馆。';
+        }
+    } catch { }
+}
 
 // 更新面板状态文本(若面板已挂载)；用于上传/下载等过程的实时进度反馈。
 function setStatus(text) {
@@ -2445,18 +2942,51 @@ function __csReleaseBusy() {
 // 0.13.23：忙碌条上的"已等 N 秒"（作者报"切分页只显示一句静态文字，像卡死"）。
 //   ⚠ 起因：showBusy 会把文本镜像到 #cs_cfg2_status，把"正在切换至…"那句覆盖掉 ⇒ 0.13.22 那个
 //     "只在文本以'正在切换至'开头才起表"的计时器**根本起不来**。所以改成：计时跟操作走（showBusy 起、hideBusy 停）。
+// 0.13.26：批量上传/导入的进度行（作者："下面那行"要显示「已上传 3/12 · 当前：X」，简洁）
+//   · 目标元素 = #cs_cfg2_status（"酒馆配置"卡最下面那行，也是 0.13.23 那句"已等 N 秒"落的那行；探针在真页面确认过身份）
+//   · 只在批量（total>0）时写；单条操作保持原样（那行由各 handler 自己写"上传中…"）
+//   · 动词用对：从忙碌文案里取（上传/导入/下载/拉取/恢复/备份/删除/更新）
+function __csVerbOf(msg) {
+    const m = String(msg || '');
+    for (const v of ['导入', '下载', '拉取', '恢复', '备份', '删除', '更新', '上传']) if (m.indexOf(v) >= 0) return v;
+    return '处理';
+}
+function __csProgPaint(verb, done, total, name) {
+    try {
+        if (!(total > 0)) { window.__csProgState = null; return; }
+        const text = '已' + verb + ' ' + done + '/' + total + (name ? ' · 当前：' + name : '');
+        window.__csProgState = { verb, done, total, name: String(name || ''), painted: text };
+        const s2 = document.getElementById('cs_cfg2_status');
+        if (!s2) return;
+        s2.textContent = text;
+        s2.style.color = '';
+        s2.classList.remove('cs-ok', 'cs-err');
+    } catch { }
+}
+function __csProgClear() {
+    try {
+        const st = window.__csProgState;
+        if (!st) return;
+        window.__csProgState = null;
+        const s2 = document.getElementById('cs_cfg2_status');
+        // ★只擦"自己最后画的那一句"：逐字比对 —— 那行被别处（别的模块/别的操作）改过就一律不动（不误伤别人的状态）
+        if (s2 && st.painted && String(s2.textContent || '') === st.painted) { s2.textContent = ''; s2.style.color = ''; }
+    } catch { }
+}
+// 0.13.26：忙碌条/状态行计时刷新 1 秒一跳（作者："没必要做那个 0.5 秒 你就当 1 秒 1 秒做就好了"）
+const CS_TICK_MS = 1000;
 function __csBusyTickPaint() {
     const base = String(window.__csBusyText || '');
     if (!base) return;
-    const secs = Math.max(0.5, (Date.now() - (window.__csBusyT0 || Date.now())) / 1000);
-    const txt = base + ' · 已 ' + (secs >= 10 ? Math.round(secs) : secs.toFixed(1)) + ' 秒';
+    const secs = Math.max(0, (Date.now() - (window.__csBusyT0 || Date.now())) / 1000);
+    const txt = base + ' · 已 ' + Math.floor(secs) + ' 秒';   // 0.13.26：整秒、1 秒 1 跳（floor：不到 1 秒不进位）
     try { if (__csBusyEl) __csBusyEl.textContent = txt; } catch { }
     try {
         const s2 = document.getElementById('cs_cfg2_status');
         if (s2 && String(s2.textContent || '').startsWith('🔄 ')) { s2.textContent = txt; s2.style.color = ''; }
     } catch { }
 }
-function showBusy(page, total, msg) {
+function showBusy(page, total, msg, progName) {
     if (!__csBusyEl) {
         __csBusyEl = document.createElement('div');
         __csBusyEl.id = 'cs_busy_bar';
@@ -2470,17 +3000,20 @@ function showBusy(page, total, msg) {
         try {
             window.__csBusyT0 = Date.now();
             if (window.__csBusyTick) { clearInterval(window.__csBusyTick); window.__csBusyTick = null; }
-            window.__csBusyTick = setInterval(() => { try { __csBusyTickPaint(); } catch { } }, 500);
+            window.__csBusyTick = setInterval(() => { try { __csBusyTickPaint(); } catch { } }, CS_TICK_MS);
         } catch { }
     }
     const label = msg || '同步';
     window.__csBusyText = (total && total > 0)
         ? `🔄 ${label}中：${page}/${total}，请稍后…`
         : `🔄 ${label}中，请稍后…`;
+    // 0.13.26：批量时把「已上传 3/12 · 当前：X」写进「下面那行」（#cs_cfg2_status）——作者点名要的简洁进度
+    if (progName !== undefined) __csProgPaint(__csVerbOf(label), page, total, progName);
     __csBusyTickPaint();   // 文案 + 已等秒数 一起画（镜像到状态行也在里面）
 }
 function hideBusy() {
     if (__csBusyEl) { __csBusyEl.remove(); __csBusyEl = null; }
+    __csProgClear();   // 0.13.26：批量进度行收尾（只擦自己画的那句，别人的状态不动）
     try { if (window.__csBusyTick) { clearInterval(window.__csBusyTick); window.__csBusyTick = null; } window.__csBusyText = ''; } catch { }   // 0.13.23：停表
     try {
         const s2 = document.getElementById('cs_cfg2_status');
@@ -2835,7 +3368,7 @@ async function pushSelectedWorldbooks(names) {
         showBusy(0, names.length, '上传全局世界书');
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
-            showBusy(i + 1, names.length, `上传全局世界书 ${name}`);
+            showBusy(i + 1, names.length, `上传全局世界书 ${name}`, name);
             try {
                 const wc = await getWorldContent(name);
                 if (!wc) { skipLocalWorldbook(fail, failReasons, name, '本地无该世界书'); continue; }
@@ -2872,7 +3405,7 @@ async function importSelectedWorldbooks(names) {
         suppressImportModals(); // 复用: 自动确认同名覆盖弹窗(一次性, 不残留)
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
-            showBusy(i + 1, names.length, `导入全局世界书 ${name}`);
+            showBusy(i + 1, names.length, `导入全局世界书 ${name}`, name);
             try {
                 const p = `worldbooks/${name}.json`;
                 const cloud = await Gitee.getText(p);
@@ -2914,7 +3447,7 @@ async function deleteSelectedWorldbooks(names, mode) {
     try {
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
-            try { showBusy(i + 1, names.length, `正在删除世界书「${name}」`); } catch { }
+            try { showBusy(i + 1, names.length, `正在删除世界书「${name}」`, name); } catch { }
             try {
                 if (mode === 'cloud') {
                     const p = `worldbooks/${name}.json`;
@@ -2945,7 +3478,7 @@ async function deleteBothSidesWorldbooks(names) {
     for (let i = 0; i < names.length; i++) {
         const name = names[i];
         // 0.12.133 逐条进度: 让用户知道正在删哪个、删到第几个
-        try { showBusy(i + 1, names.length, `正在删除双端世界书「${name}」`); } catch { }
+        try { showBusy(i + 1, names.length, `正在删除双端世界书「${name}」`, name); } catch { }
         try {
             // ── 本地 ──
             const existed = Array.isArray(world_names) && world_names.includes(name);
@@ -3092,7 +3625,7 @@ async function deleteChatsBothSides(charName, fileNames, avatarHint) {
     if (lc) { try { listObj = JSON.parse(lc.content || '{}'); } catch { listObj = null; } }
     const cloudEntries = await __cachedListEntries(base).catch(() => []);
     for (const fn of fileNames) {
-        try { showBusy(fileNames.indexOf(fn) + 1, fileNames.length, `正在删除聊天「${fn}」(本地+云端)`); } catch { }
+        try { showBusy(fileNames.indexOf(fn) + 1, fileNames.length, `正在删除聊天「${fn}」(本地+云端)`, fn); } catch { }
         try {
             const stem = String(fn).replace(/\.jsonl$/i, '');
             // 仅云端行不删本地(避免 File not found 噪音); 本地/双端才走本地删除
@@ -3287,7 +3820,7 @@ async function pushSelectedConnPresets(items) { // items: [{apiId, name}]
         for (let i = 0; i < items.length; i++) {
         showBusy(i + 1, items.length, `上传预设 ${items[i] && items[i].name || '未命名'}…`);
             const { apiId, name } = items[i];
-            showBusy(i + 1, items.length, `上传预设 ${name}`);
+            showBusy(i + 1, items.length, `上传预设 ${name}`, name);
             try {
                 const raw = await _getLocalConnPreset(apiId, name);
                 if (!raw) { fail.push(name); failReasons.push({ name, reason: '本地无该预设' }); continue; }
@@ -3367,7 +3900,7 @@ async function importSelectedConnPresets(items) { // items: [{apiId, name}]
         for (let i = 0; i < items.length; i++) {
         showBusy(i + 1, items.length, `导入预设 ${items[i] && items[i].name || '未命名'}…`);
             const { apiId, name } = items[i];
-            showBusy(i + 1, items.length, `导入预设 ${name}`);
+            showBusy(i + 1, items.length, `导入预设 ${name}`, name);
             try {
                 const g = CONN_PRESET_GROUPS.find(x => x.apiId === apiId);
                 if (!g) { fail.push(name); failReasons.push({ name, reason: '仅支持 OpenAI 预设' }); continue; }
@@ -3487,7 +4020,7 @@ async function pushSelectedThemes(names) {
         for (let i = 0; i < names.length; i++) {
         showBusy(i + 1, names.length, `上传主题 ${names[i]}…`);
             const name = names[i];
-            showBusy(i + 1, names.length, `上传主题 ${name}`);
+            showBusy(i + 1, names.length, `上传主题 ${name}`, name);
             try {
                 const item = local.find(t => t.name === name);
                 if (!item) { fail.push(name); failReasons.push({ name, reason: '本地无该主题' }); continue; }
@@ -3621,7 +4154,7 @@ async function importSelectedThemes(names) {
         for (let i = 0; i < names.length; i++) {
         showBusy(i + 1, names.length, `导入主题 ${names[i]}…`);
             const name = names[i];
-            showBusy(i + 1, names.length, `导入主题 ${name}`);
+            showBusy(i + 1, names.length, `导入主题 ${name}`, name);
             try {
                 const p = `${THEME_CLOUD_DIR}/${name}.json`;
                 const cloud = await Gitee.getText(p);
@@ -3692,7 +4225,7 @@ async function pushSelectedRegex(names) {
         for (let i = 0; i < names.length; i++) {
         showBusy(i + 1, names.length, `上传正则 ${names[i]}…`);
             const name = names[i];
-            showBusy(i + 1, names.length, `上传正则 ${name}`);
+            showBusy(i + 1, names.length, `上传正则 ${name}`, name);
             try {
                 const item = local.find(r => r.name === name);
                 if (!item) { fail.push(name); failReasons.push({ name, reason: '本地无该正则' }); continue; }
@@ -3723,7 +4256,7 @@ async function importSelectedRegex(names) {
         for (let i = 0; i < names.length; i++) {
         showBusy(i + 1, names.length, `导入正则 ${names[i]}…`);
             const name = names[i];
-            showBusy(i + 1, names.length, `导入正则 ${name}`);
+            showBusy(i + 1, names.length, `导入正则 ${name}`, name);
             try {
                 const p = `${REGEX_CLOUD_DIR}/${name}.json`;
                 const cloud = await Gitee.getText(p);
@@ -3813,7 +4346,7 @@ async function _userPersonaList() {
 }
 // 备份整个 User（资料 + 头像）→ 存云端（一个 user.json 含资料+头像名）
 async function backupUserToCloud() {
-    if (!settings.owner || !settings.repo || !settings.token) { toastr.error('请先配置云端仓库'); return false; }
+    if (!csConfigured()) { toastr.error('请先配置云端仓库'); return false; }
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
     try {
         const o = await _parseSettingsObj();
@@ -3841,7 +4374,7 @@ async function backupUserToCloud() {
         for (const name of avatars) {
             if (!name || name === 'user-default.png') continue;
             try {
-                showBusy(avOk + 1, avatars.length, `备份头像 ${name}`);
+                showBusy(avOk + 1, avatars.length, `备份头像 ${name}`, name);
                 const r = await fetch(`/User Avatars/${encodeURIComponent(name)}`);
                 if (!r.ok) { avFailNames.push(`${name}:读取HTTP${r.status}`); continue; }
                 const b64 = await blobToBase64(await r.blob());
@@ -3868,7 +4401,7 @@ async function backupUserToCloud() {
 }
 // 恢复 User：从云端 user.json 读回资料(personas/user_avatar/user_name)→写回 settings(经 /api/settings/save)；头像照片本体经官方 /api/avatars/upload(overwrite_name) 自动放回
 async function restoreUserFromCloud() {
-    if (!settings.owner || !settings.repo || !settings.token) { toastr.error('请先配置云端仓库'); return false; }
+    if (!csConfigured()) { toastr.error('请先配置云端仓库'); return false; }
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return null; }
     try {
         const c = await Gitee.getText(`${USER_CLOUD_DIR}/user.json`);
@@ -3887,7 +4420,7 @@ async function restoreUserFromCloud() {
         let avOk = 0; const avFailNames = [];
         for (const e of avEntries) {
             try {
-                showBusy(avOk + 1, avEntries.length, `恢复头像 ${e.name}`);
+                showBusy(avOk + 1, avEntries.length, `恢复头像 ${e.name}`, e.name);
                 const cc = await Gitee.getBase64(e.__dir ? e.__dir + '/' + e.name : e.path);
                 if (!cc || !cc.b64) { avFailNames.push(`${e.name}:云端无内容`); continue; }
                 const file = base64ToFile(cc.b64, e.name, 'image/png');
@@ -3915,12 +4448,51 @@ async function restoreUserFromCloud() {
                 o.power_user.persona_descriptions = Object.assign({}, (o.power_user && o.power_user.persona_descriptions) || {}, pu.persona_descriptions);
             }
         }
+        // ★ 0.13.25 修（M5 验收 §7-U4：头像照片回来了、人设名/描述"写不进设置"）——
+        //   ST/TT 保存设置时会【从各官方模块的活对象重新拼装 payload】（script.js saveSettings(): power_user/extension_settings…），
+        //   只把合并结果写进磁盘快照 o 再 POST /api/settings/save，会被紧随其后的自动保存（活对象里的旧值）整份覆盖掉：
+        //   现象 = 头像文件在、名字/描述没了（同一份代码在 GitHub/Gitee 档上同理）。⇒ 同一份合并结果必须**分派写进 power_user 活对象**。
+        //   （与 restoreConfigFromCloud 的分派写回同源；power_user 是官方导出对象、此处是活绑定，写属性=官方模块立刻可见）
+        let __livePU = null;
+        try { __livePU = (typeof power_user === 'object' && power_user) || (getContext() || {}).powerUserSettings || null; } catch { __livePU = null; }
+        if (__livePU && o.power_user) {
+            const oPU = o.power_user;
+            if (oPU.personas && typeof oPU.personas === 'object') {
+                if (!__livePU.personas || typeof __livePU.personas !== 'object') __livePU.personas = {};
+                Object.assign(__livePU.personas, oPU.personas);
+            }
+            if (oPU.persona_descriptions && typeof oPU.persona_descriptions === 'object') {
+                if (!__livePU.persona_descriptions || typeof __livePU.persona_descriptions !== 'object') __livePU.persona_descriptions = {};
+                Object.assign(__livePU.persona_descriptions, oPU.persona_descriptions);
+            }
+        } else if (!__livePU) {
+            console.warn('[chat-sync] 拿不到 power_user 活对象，人设名/描述改走磁盘快照那条老路（旧版酒馆）');
+        }
         // 0.13.15：恢复完人设后发官方事件（界面即时刷新，不用再手动刷新酒馆）
         try { await __emitPersonaTouched(avEntries.map((e) => e.name), null); } catch { }
-        if (ud.user_avatar) { o.user_avatar = ud.user_avatar; if (settings.user_avatar !== undefined) settings.user_avatar = ud.user_avatar; }
+        if (ud.user_avatar) {
+            o.user_avatar = ud.user_avatar;
+            // 0.13.25 同族：user_avatar 也必须写"活变量"（否则同样被随后的自动保存覆盖）。官方入口 = personas.js 的
+            //   initUserAvatar(设值+刷界面，无聊天副作用)；它未被 script.js 再导出 ⇒ 运行时动态 import + 探测；旧版没有就退回磁盘快照。
+            try {
+                if (String(ud.user_avatar) !== String(__stCompat.user_avatar || '')) {
+                    const __pm = await import('../../../personas.js').catch(() => null);
+                    if (__pm && typeof __pm.initUserAvatar === 'function') __pm.initUserAvatar(String(ud.user_avatar));
+                    else console.warn('[chat-sync] 本版酒馆没有 initUserAvatar，user_avatar 只写磁盘快照');
+                }
+            } catch (e) { console.warn('[chat-sync] 恢复 user_avatar 活变量失败(退回磁盘快照)', e); }
+        }
         const uname = ud.username || ud.user_name;
-        if (uname) { o.username = uname; if (!(o.user_name)) o.user_name = uname; }
-        // 写回 settings：经 /api/settings/save(整包) 最可靠；插件侧 key 同步
+        if (uname) {
+            o.username = uname; if (!o.user_name) o.user_name = uname;
+            // 0.13.25 同族：username 走官方 setUserName(活变量 name1 + 刷界面 + 保存)；旧版没有就退回磁盘快照。
+            try {
+                if (typeof __stCompat.setUserName === 'function' && String(uname) !== String(__stCompat.name1 || '')) {
+                    __stCompat.setUserName(String(uname), { toastPersonaNameChange: false });
+                }
+            } catch (e) { console.warn('[chat-sync] 恢复 username 走官方入口失败(退回磁盘快照)', e); }
+        }
+        // 写回 settings：磁盘快照 POST（旧版/降级兜底；活对象那一份由紧随其后的官方 saveSettingsDebounced 落盘）
         const r = await fetch('/api/settings/save', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(o) });
         if (!r.ok) { toastr.error(`User 写回失败 HTTP ${r.status}（若反复失败，先刷新酒馆页面再试）`); return false; }
         saveSettingsDebounced();
@@ -4005,7 +4577,7 @@ async function uploadUserPersonasToCloud(files) {
     try { showBusy(0, files.length, '正在上传 User 人设与头像'); } catch { }
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        try { showBusy(i + 1, files.length, `正在上传 User 人设/头像「${file}」`); } catch { }
+        try { showBusy(i + 1, files.length, `正在上传 User 人设/头像「${file}」`, file); } catch { }
         try {
             const r = await fetch('/User Avatars/' + encodeURIComponent(file));
             if (!r.ok) { fail.push(file); failReasons.push({ name: file, reason: '读取原图 HTTP ' + r.status }); continue; }
@@ -4036,7 +4608,7 @@ async function downloadUserPersonasFromCloud(files) {
     try { showBusy(0, files.length, '正在下载 User 人设'); } catch { }
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        try { showBusy(i + 1, files.length, `正在下载 User 人设「${file}」`); } catch { }
+        try { showBusy(i + 1, files.length, `正在下载 User 人设「${file}」`, file); } catch { }
         try {
             const img = await Gitee.getBase64(`${dir}/${file}`);
             if (!img || !img.b64) { fail.push(file); failReasons.push({ name: file, reason: '云端无该人设' }); continue; }
@@ -4065,7 +4637,7 @@ async function deleteSelectedUserPersonas(files) {
     try { showBusy(0, files.length, '正在删除 User 人设'); } catch { }
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        try { showBusy(i + 1, files.length, `正在删除 User 人设「${file}」`); } catch { }
+        try { showBusy(i + 1, files.length, `正在删除 User 人设「${file}」`, file); } catch { }
         try {
             const req = await fetch('/api/avatars/delete', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar: file }) });
             if (!req.ok) { fail.push(file); failReasons.push({ name: file, reason: '头像删除 HTTP ' + req.status }); continue; }
@@ -4098,7 +4670,9 @@ function applyPersonaRemoval(pu, avatarId, lockedPersonaId) {
 // ============ 酒馆配置 一键保存 / 一键下载应用（阶段4） ============
 // 备份：POST /api/settings/get 读当前 settings.json 完整内容 → 上传 Gitee sync-config/settings-<时间戳>.json
 // 恢复：从 Gitee sync-config/ 读最新 settings-*.json → 保留下方关键字段(避免把云端连接/令牌/syncMap覆盖掉) → POST /api/settings/save 写回(整个酒馆配置恢复)
-const CONFIG_KEEP_KEYS = new Set(['owner','repo','token','lastCloudSha','lastLocalMTime','syncMap']);
+// M2-CF 硬坑④：CF 的 4 个新键必须进保留名单，否则「一键下载应用」恢复一份旧备份就把 CF 连接抹掉。
+//   顺带补 4 个现存缺口（设计 §3.5）：cardBind/cardPending/connSlots/gitlabBranch —— 恢复旧备份原本会丢卡绑定关系。
+const CONFIG_KEEP_KEYS = new Set(['owner','repo','token','lastCloudSha','lastLocalMTime','syncMap','backend','cfUrl','cfKey','cfName','cardBind','cardPending','connSlots','gitlabBranch']);
 const CONFIG_CHUNK_MAX = 800000; // 每块字符数(安全<Gitee单文件~1MB)
 // 分块上传一段文本到 sync-config/<ts>/ part-NNN.json, 返回块数
 async function __cfgPutChunks(dirPath, fullJson) {
@@ -4106,7 +4680,8 @@ async function __cfgPutChunks(dirPath, fullJson) {
     for (let i = 0; i < fullJson.length; i += CONFIG_CHUNK_MAX) chunks.push(fullJson.slice(i, i + CONFIG_CHUNK_MAX));
     for (let i = 0; i < chunks.length; i++) {
         const p = `${dirPath}/part-${String(i).padStart(3, '0')}.json`;
-        const sha = (await Gitee.getText(p))?.sha;
+        // 0.13.27：CF 档"只拿 sha"走 HEAD（配置块 800KB 一块，不再整块读回来）；git 档照旧 getText（连异常都照旧抛）
+        const sha = (await csCfShaOnly(p, () => Gitee.getText(p)))?.sha;
         try { await Gitee.putText(p, chunks[i], sha, 'cfg chunk'); }
         catch (e) { console.warn('[chat-sync] 写配置块失败', p, e); throw e; }
     }
@@ -4114,7 +4689,7 @@ async function __cfgPutChunks(dirPath, fullJson) {
 }
 async function backupConfigToCloud() {
     try {
-        if (!settings.owner || !settings.repo || !settings.token) { toastr.error('请先配置云端仓库'); return; }
+        if (!csConfigured()) { toastr.error('请先配置云端仓库'); return; }
         const r = await fetch('/api/settings/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({}) });
         if (!r.ok) { toastr.error('读取酒馆配置失败 HTTP ' + r.status); return false; }
         const text = await r.text();
@@ -4134,6 +4709,93 @@ async function backupConfigToCloud() {
         return true;
     } catch (e) { console.warn('[chat-sync] 配置备份失败', e); toastr.error('配置备份失败：' + (e.message || e)); return false; }
 }
+// ============ 整包归档（换设备用；0.13.28）============
+// 为什么改成"酒馆官方导出"：TT 内置的 data-migration 导入页明说吃 zip / tar / tar.gz / tgz，导入是**合并**进本机、
+//   **同名（同路径）文件被覆盖**、用户标识统一成 default-user ⇒ ST 官方整包导出（POST /api/users/backup 出的就是 zip）
+//   TT 直接能吃，不必再依赖那个根本不存在的 st-full-backup.py。
+// 上传 = 分块 base64 文本（与角色卡分块同一口径 CARD_CHUNK_CHARS ≤1MB/块）；读回走 csReadBigText 大文件专线（CF 档 = ?raw=1）。
+// 云端布局与旧 tar.gz 时代**逐字相同**（sync-config/full/<ts>/part-NNNN + sync-config/full-latest.json），
+//   清单里多记 format/file/bytes/sha ⇒ 旧清单照样能被「⬇ TT 下载并导入」吃下（向后兼容）。
+const FULL_ARCHIVE_LATEST = 'sync-config/full-latest.json';
+// 当前用户 handle：官方 /api/users/me（ST 单用户模式也回 default-user；TT 同类）。拿不到返回 ''（调用方给人话并跳过这一步）。
+async function csCurrentUserHandle() {
+    try {
+        const r = await fetch('/api/users/me', { method: 'GET', headers: getRequestHeaders({ omitContentType: true }), cache: 'no-store' });
+        if (r.ok) { const j = await r.json().catch(() => null); if (j && j.handle) return String(j.handle); }
+    } catch { }
+    return '';
+}
+// 官方整包导出：POST /api/users/backup {handle} → zip 字节 + 官方给的文件名（Content-Disposition；读不到就自己拼一个）
+async function csFetchOfficialBackupZip(handle) {
+    const r = await fetch('/api/users/backup', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ handle }) });
+    if (!r.ok) {
+        if (r.status === 403) throw new Error('酒馆官方导出被拒（403）：这台酒馆关了"允许整包备份"，或这个账号没权限');
+        throw new Error('酒馆官方导出失败 HTTP ' + r.status + '：' + String(await r.text().catch(() => '')).slice(0, 160));
+    }
+    const cd = String(r.headers.get('Content-Disposition') || '');
+    let file = '';
+    const m1 = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(cd);
+    const m2 = /filename\s*=\s*"?([^";]+)"?/i.exec(cd);
+    try { file = decodeURIComponent(String((m1 && m1[1]) || (m2 && m2[1]) || '').trim()); } catch { file = String((m2 && m2[1]) || '').trim(); }
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    return { bytes, file: file || (handle + '-' + __csLocalStamp() + '.zip') };
+}
+// 本地时间戳（与「酒馆配置备份」同一形态：2026-10-10T22-41-07）
+function __csLocalStamp() {
+    const d = new Date(); const p2 = (n) => String(n).padStart(2, '0');
+    return [d.getFullYear(), p2(d.getMonth() + 1), p2(d.getDate())].join('-') + 'T' + [p2(d.getHours()), p2(d.getMinutes()), p2(d.getSeconds())].join('-');
+}
+// 清单 → 喂给官方导入的文件名/类型（纯函数，供探针直驱）。
+//   新清单 format:'zip'（官方导出）⇒ zip 名 + application/zip；老清单（tar.gz / 没写 format）⇒ 逐字照旧，向后兼容。
+function csArchiveFeedMeta(meta) {
+    const m = meta || {};
+    const isZip = String(m.format || '').toLowerCase() === 'zip';
+    const ts = String(m.ts || '');
+    const file = String(m.file || '').trim() || (isZip ? 'st-data-' + ts + '.zip' : 'st-data-' + ts + '.tar.gz');
+    return { isZip, file, type: isZip ? 'application/zip' : 'application/gzip' };
+}
+// 「⬆ ST 打包」= 官方导出打整包 → 分块上传 + 写指针（指针最后写：中途失败不会留下"半份"指针）
+//   返回 { skipped:true }（云端指针里已是同一份 ⇒ 不重复传，省几十上百 MB）或 { ts, chunks, bytes, sha, file }
+async function backupFullArchiveToCloud(onStat) {
+    if (!csConfigured()) { toastr.error('请先配置云端仓库'); return false; }
+    const stat = (m) => { try { onStat && onStat(m); } catch { } };
+    stat('正在用酒馆官方导出打整包…');
+    const handle = await csCurrentUserHandle();
+    if (!handle) throw new Error('读不到当前用户名（官方 /api/users/me 没回应）⇒ 这一步先跳过（其余几类不受影响）');
+    const zb = await csFetchOfficialBackupZip(handle);
+    const bytes = zb.bytes.length;
+    const sha = await gitBlobSha(zb.bytes);
+    // 省额度（作者要求）：云端指针里已经是同一份 ⇒ 直接跳过（zip 各条目时间戳来自文件 mtime ⇒ 内容没变时字节相同）
+    let cur = { ptr: null, sha: undefined };
+    try {
+        const c = await Gitee.getText(FULL_ARCHIVE_LATEST);
+        if (c && c.content) cur = { ptr: JSON.parse(c.content), sha: c.sha };
+    } catch { }
+    if (cur.ptr && String(cur.ptr.format || '').toLowerCase() === 'zip' && cur.ptr.sha && String(cur.ptr.sha) === sha) {
+        stat('整包内容没变（' + (bytes / 1048576).toFixed(1) + ' MB），已跳过上传');
+        return { skipped: true, bytes, sha, file: cur.ptr.file || zb.file, ts: cur.ptr.ts };
+    }
+    const ts = __csLocalStamp();
+    const dir = 'sync-config/full/' + ts;
+    const b64 = __csBytesToB64(zb.bytes);
+    const chunks = Math.max(1, Math.ceil(b64.length / CARD_CHUNK_CHARS));
+    try { showBusy(0, chunks, '正在上传整包归档'); } catch { }
+    try {   // 失败也要把浮层收掉（① 的第⑦步失败时没人替它收）
+    for (let i = 0; i < chunks; i++) {
+        stat('正在上传整包归档：第 ' + (i + 1) + '/' + chunks + ' 块（共 ' + (bytes / 1048576).toFixed(1) + ' MB）');
+        try { showBusy(i + 1, chunks, '正在上传整包归档'); } catch { }
+        const p = dir + '/part-' + String(i).padStart(4, '0');
+        // CF 档"只拿 sha"走 HEAD（新建目录 ⇒ null）；git 三平台照旧 getText（不存在 = 404 = null）
+        const sha0 = (await csCfShaOnly(p, () => Gitee.getText(p)))?.sha;
+        await Gitee.putText(p, b64.slice(i * CARD_CHUNK_CHARS, (i + 1) * CARD_CHUNK_CHARS), sha0, 'full archive chunk ' + (i + 1) + '/' + chunks);
+    }
+    } catch (e) { try { hideBusy(); } catch { } throw e; }
+    const man = JSON.stringify({ ts, chunks, bytes, sha, format: 'zip', file: zb.file, savedAt: new Date().toISOString() }, null, 2);
+    await Gitee.putText(FULL_ARCHIVE_LATEST, man, cur.sha, 'full archive pointer');
+    try { hideBusy(); } catch { }
+    return { skipped: false, ts, chunks, bytes, sha, file: zb.file };
+}
+
 // 目录条目缓存(5min): 列表渲染与差异比对共用, 避免对同一目录反复 listEntries
 const __dirEntryCache = {}; // {dir: {ts, arr}}
 // 0.13.21：GitHub「整仓树」缓存（/git/trees/HEAD?recursive=1 —— 1 次请求拿到全部路径+sha）。
@@ -4206,7 +4868,8 @@ async function __cfgReadBackup(ts) {
     const n = man.chunks;
     let full = '';
     for (let i = 0; i < n; i++) {
-        const c = await Gitee.getText(`${dir}/part-${String(i).padStart(3, '0')}.json`);
+        // 0.13.27：配置块读走大文件专线（CF 档 = ?raw=1；每块 800KB）
+        const c = await csReadBigText(`${dir}/part-${String(i).padStart(3, '0')}.json`);
         if (!c) return { err: '缺块 ' + i };
         full += c.content;
     }
@@ -4214,7 +4877,7 @@ async function __cfgReadBackup(ts) {
 }
 async function restoreConfigFromCloud(ts) {
     try {
-        if (!settings.owner || !settings.repo || !settings.token) { toastr.error('请先配置云端仓库'); return; }
+        if (!csConfigured()) { toastr.error('请先配置云端仓库'); return; }
         // 未指定 ts → 取最新(writeBackup 时存 .latest)
         let target = ts;
         if (!target) {
@@ -4242,7 +4905,9 @@ async function restoreConfigFromCloud(ts) {
         if (!payload || typeof payload !== 'object') { toastr.error('云端配置备份为空'); return false; }
         // 🔴 TT/ST 保存设置时会【从各官方模块的活对象重新拼装 payload】—— 往页面 settings 对象任意键上写内容,
         //    保存时全部被丢弃(0.2.23~0.2.29 三轮假成功的总根源)。恢复内容必须分派写回各自的活对象:
-        const CONN_KEYS = ['owner', 'repo', 'token', 'server'];
+        // M2-CF-FIX2：CF 档的 4 个键也必须在这张名单里 —— 恢复一份"还没有 CF 键"的旧备份时，
+        //   extension_settings[本插件] 会被整份替换成备份里那份 ⇒ 不加进来 = 一次恢复就把自建后端连接抹掉。
+        const CONN_KEYS = ['owner', 'repo', 'token', 'server', 'backend', 'cfUrl', 'cfKey', 'cfName'];
         // 活对象全部取自 getContext() 的官方引用(oai_settings/textgen 未以该名导出, 不能乱 import——会炸掉整个模块)
         const __ctx = getContext() || {};
         const liveTargets = [
@@ -4424,7 +5089,7 @@ async function __localCardForEntry(charName, entry, cloudCardCount) {
 
 async function importCharFromCloud(charName, opts = {}) {
     // opts.noJump=true 表示「只导入不跳转」（批量导入时用：不切换当前角色、不加载聊天进窗口）
-    if (!settings.owner || !settings.repo || !settings.token) { toastr.error('请先配置'); return; }
+    if (!csConfigured()) { toastr.error('请先配置'); return; }
     // 导入期间用【安全版一次性扫描】自动确认官方「内置世界书/正则/嵌入式脚本」弹窗：不冻结、不残留(见 suppressImportModals)。
     suppressImportModals();
     toastr.info(`开始从云端导入角色「${charName}」…`);
@@ -5427,7 +6092,7 @@ function ensureChatJsonlHeader(jsonlText, userName, charName2) {
 // silent=true：批量删除用（0.12.97 双端删除）。此时不弹 info/success toast（汇总由调用方给），
 //   并返回 {deleted, missing} 供调用方统计；默认 false 行为与历史一致（各自 toast + 无返回值）。
 async function deleteCharFromCloud(charName, silent = false, opts = {}) {
-    if (!settings.owner || !settings.repo || !settings.token) { if (!silent) toastr.error('请先配置'); return { deleted: 0, missing: true, unconfigured: true }; }
+    if (!csConfigured()) { if (!silent) toastr.error('请先配置'); return { deleted: 0, missing: true, unconfigured: true }; }
     if (!charName) { if (!silent) toastr.error('未选择要删除的角色'); return { deleted: 0, missing: true }; }
     // 0.13.0 卡级：指定 cardId 时只删那一张卡（同名卡的另一张不能受连累）
     if (opts && opts.cardId) return await deleteCardFromCloud(charName, opts.cardId, silent);
@@ -5614,7 +6279,9 @@ function __fmtBytes(n) {
     return n + ' B';
 }
 async function __cloudUsage() {
-    if (!settings.owner || !settings.repo || !settings.token) return null;
+    // M2-CF：CF 后端一次 api-test 直接给 {files,bytes}（比树遍历更省；设计 §1 第 7 条）
+    if (csIsCF()) { try { return await Gitee.usage(); } catch { return null; } }
+    if (!csConfigured()) return null;
     const base = __csBase();
     const isGh = base.includes('github');
     const isGl = base.includes('gitlab.com');
@@ -5659,19 +6326,19 @@ async function __fillCloudUsage() {
 function __refreshCurRepoLine() {
     const el = document.getElementById('cs_cur_repo');
     if (!el) return;
-    const curRepo = settings.owner && settings.repo ? `${settings.owner}/${settings.repo}` : '（未配置）';
-    const platName = String(settings.server || '').includes('github') ? 'GitHub' : (String(settings.server || '').includes('gitlab.com') ? 'GitLab' : 'Gitee');
+    const curRepo = csIsCF() ? csBackendLabel() : (settings.owner && settings.repo ? `${settings.owner}/${settings.repo}` : '（未配置）');
+    const platName = csPlatformName();
     let lastConn = '—';
     try { if (settings.lastConnectAt) { const d = new Date(settings.lastConnectAt); lastConn = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } } catch { }
     el.innerHTML = `<b>🌐 仓库槽位：</b>${escapeHtml(platName)} · ${escapeHtml(curRepo)} · 最近连接 ${lastConn}<br><div id="cs_usage" style="opacity:.75;margin-top:5px">📦 云端占用统计中…</div><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px"><b style="color:var(--SmartThemeQuoteColor,#f0a35e)">🟢 插件版本 v${PLUGIN_VERSION}</b><span id="${'cs_upd_slot'}"></span><button id="cs_chk_manual" class="cs-chk-btn" type="button" title="手动检测是否有新版本">检测更新</button></div><label style="display:flex!important;align-items:center;gap:4px;font-size:1em;margin-top:5px;white-space:nowrap;width:auto;cursor:pointer" title="勾选后每次打开/启动插件时自动检查更新, 有新版自动升级并刷新页面"><input type="checkbox" id="cs_auto_upd" style="margin:0;flex:none;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.autoUpdate ? 'checked' : ''}><span>自动更新插件至最新</span></label>`;
     const slot2 = document.getElementById('cs_slot2');
     if (slot2) {
         const arr = Array.isArray(settings.connSlots) ? settings.connSlots : [];
-        const cur = `${settings.owner}/${settings.repo}`;
-        const curKey = String(settings.server || '') + '|' + cur;
+        const cur = csIsCF() ? csBackendLabel() : `${settings.owner}/${settings.repo}`;
+        const curKey = (csIsCF() ? ('cf:' + __csCfRoot()) : String(settings.server || '')) + '|' + cur;
         // 0.12.73 槽位改回下拉式(用户要求), 放大字号与删除按钮; 原生 select 弹出层已配 color-scheme:dark + option 深底浅字
         const opts = arr.map((x, i) => {
-            const nm = (String(x.platform || '').includes('github') ? 'GitHub' : (String(x.platform || '').includes('gitlab.com') ? 'GitLab' : 'Gitee')) + ' · ' + x.repo;
+            const nm = (String(x.platform || '').startsWith('cf:') ? 'Cloudflare(自建)' : (String(x.platform || '').includes('gitlab.com') ? 'GitLab' : (String(x.platform || '').includes('github') ? 'GitHub' : 'Gitee'))) + ' · ' + x.repo;
             const key = String(x.platform || '') + '|' + x.repo;
             return `<option value="${i}" ${key === curKey ? 'selected' : ''}>${escapeHtml(nm)}</option>`;
         }).join('');
@@ -5685,6 +6352,7 @@ function __refreshCurRepoLine() {
         const sd2 = document.getElementById('cs_slot_del');
         if (sd2) sd2.addEventListener('click', () => window.__csDeleteSlot(Number((document.getElementById('cs_slot_sel') || {}).value)));
     }
+    try { if (typeof window.__csSyncBackendRows === 'function') window.__csSyncBackendRows(); } catch { } // CF 行显隐（模块级看不到 wirePanelEvents 里的函数，走 window）
     __fillCloudUsage();
     try {
         if (typeof window.__csCheckUpdate === 'function') window.__csCheckUpdate();
@@ -5941,26 +6609,49 @@ window.__csManualCheck = async function (btn) {
                 <p id="${id}_cur_repo" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(128,128,128,0.08)"></p>
 
                 <div class="cs-card">
-                    <details class="cs-fold" ${(!settings.token || !settings.repo) ? 'open' : ''}>
+                    <details class="cs-fold" ${!csConfigured() ? 'open' : ''}>
                     <summary><i class="fa-solid fa-plug cs-ico" aria-hidden="true"></i>连接配置</summary>
                     <div class="cs-body">
                         <div id="${id}_slot2" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(128,128,128,0.08)"></div>
                         <label class="cs-label" for="${id}_platform">云平台：</label>
                         <select id="${id}_platform" class="text_pole" style="width:100%;box-sizing:border-box">
-                            <option value="https://api.github.com" ${(!settings.server && !settings.owner) || String(settings.server || '').includes('github') ? 'selected' : ''}>GitHub（需能访问外网·单仓库建议&lt;1GB，上限约100GB，默认）</option>
-                            <option value="https://gitee.com/api/v5" ${String(settings.server || '').includes('gitee') || (!settings.server && settings.owner) ? 'selected' : ''}>Gitee（国内直连·单仓库约500MB）</option>
-                            <option value="https://gitlab.com/api/v4" ${String(settings.server || '').includes('gitlab.com') ? 'selected' : ''}>GitLab（需能访问外网·单仓库10GiB）</option>
+                            <option value="https://api.github.com" ${String(settings.backend || '') !== 'cf' && ((!settings.server && !settings.owner) || String(settings.server || '').includes('github')) ? 'selected' : ''}>GitHub（需能访问外网·单仓库建议&lt;1GB，上限约100GB，默认）</option>
+                            <option value="https://gitee.com/api/v5" ${String(settings.backend || '') !== 'cf' && (String(settings.server || '').includes('gitee') || (!settings.server && settings.owner)) ? 'selected' : ''}>Gitee（国内直连·单仓库约500MB）</option>
+                            <option value="https://gitlab.com/api/v4" ${String(settings.backend || '') !== 'cf' && String(settings.server || '').includes('gitlab.com') ? 'selected' : ''}>GitLab（需能访问外网·单仓库10GiB）</option>
+                            <option value="cf" ${String(settings.backend || '') === 'cf' ? 'selected' : ''}>自建Cloudflare（脚本一键部署，推荐用这个；GitHub 一次传太多会撞每小时上限）</option>
                         </select>
                         <div class="cs-sep"></div>
+                        <div id="${id}_repo_row">
                         <label class="cs-label" for="${id}_repoinput">云数据仓库（私有空仓库；先建一个）</label>
                         <input id="${id}_repoinput" class="text_pole" style="width:100%;box-sizing:border-box" placeholder="如 satosaki/chat-sync 或 chat-sync" value="${escapeHtml(settings.owner && settings.repo ? settings.owner + '/' + settings.repo : '')}">
-                        <div class="cs-sep"></div>
+                        </div>
+                        <div class="cs-sep" id="${id}_sep_before_token"></div>
+                        <div id="${id}_token_row">
                         <label class="cs-label" for="${id}_token">访问令牌 token（点右侧 ❓ 看各平台图文获取教程）</label>
                         <div style="display:flex;gap:4px;align-items:center">
                             <input id="${id}_token" type="password" class="text_pole" style="flex:1;min-width:0;box-sizing:border-box" placeholder="粘贴你的私人令牌" value="${escapeHtml(settings.token)}" autocomplete="off">
                             <button id="${id}_token_eye" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="点击查看/隐藏令牌（检查有没有复制漏/多）">👁</button>
                             <button id="${id}_token_copy" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="复制当前令牌到剪贴板">📋</button>
                             <button id="${id}_token_help" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="获取口令图文指引（含各平台直达链接与最长有效期）">❓</button>
+                        </div>
+                        </div>
+                        <div id="${id}_cf_row" style="display:none">
+                        <div id="${id}_cf_deploy">
+                        <div class="cs-group-title">一键部署（点下面那行命令＝复制，粘到电脑CMD或手机 Termux 里跑）</div>
+                        <button id="${id}_cf_cmd_win" type="button" class="cs-btn cs-btn-cmd" title="点一下就是复制这行命令（Windows：粘进 CMD 窗口按回车）"><span class="cs-cmd-tag">Windows（CMD）</span>${escapeHtml(CS_CF_DEPLOY_CMD_WIN)}</button>
+                        <button id="${id}_cf_cmd_sh" type="button" class="cs-btn cs-btn-cmd" title="点一下就是复制这行命令（手机 Termux / Linux / macOS）"><span class="cs-cmd-tag">手机/Linux/macOS</span>${escapeHtml(CS_CF_DEPLOY_CMD_SH)}</button>
+                        </div>
+                        <div class="cs-sep"></div>
+                        <label class="cs-label" for="${id}_cf_url">后端地址（部署脚本会给你）</label>
+                        <input id="${id}_cf_url" class="text_pole" style="width:100%;box-sizing:border-box" placeholder="https://ywp-sync-xxxxxx.pages.dev（固定地址）" value="${escapeHtml(settings.cfUrl || '')}" autocomplete="off">
+                        <div class="cs-sep"></div>
+                        <label class="cs-label" for="${id}_cf_key">访问码（部署脚本给你的那串）</label>
+                        <div style="display:flex;gap:4px;align-items:center">
+                            <input id="${id}_cf_key" type="password" class="text_pole" style="flex:1;min-width:0;box-sizing:border-box" placeholder="粘贴访问码" value="${escapeHtml(settings.cfKey || '')}" autocomplete="off">
+                            <button id="${id}_cf_key_eye" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="点击查看/隐藏访问码（检查有没有复制漏/多）">👁</button>
+                            <button id="${id}_cf_key_copy" type="button" class="cs-btn" style="flex:none;padding:2px 8px;min-height:24px" title="复制当前访问码到剪贴板">📋</button>
+                            <button id="${id}_cf_help" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="怎么弄：注册 → 拿部署令牌 → 跑部署脚本 → 把打印出的配置串贴回来">❓</button>
+                        </div>
                         </div>
                         <div class="cs-row" style="margin-top:8px">
                             <button id="${id}_test" type="button" class="cs-btn">连接</button>
@@ -6165,6 +6856,24 @@ window.__csManualCheck = async function (btn) {
                             <button id="${id}_cfg_user_br" type="button" class="cs-btn" style="display:none" title="一键备份：用户名+全部人设+全部头像照片">💾 一键备份全部</button>
                             <button id="${id}_cfg_user_rr" type="button" class="cs-btn" style="display:none" title="一键恢复：从云端取回全部用户资料与头像照片">📥 一键恢复全部</button>
                                                     </div>
+                        <!-- 0.13.28（作者拍板，二稿）：这一组只做「换设备」——两个按钮都走酒馆官方接口：
+                             ⬆ ST 打包（官方导出 zip → 传云端）/ ⬇ TT 下载并导入（取回 → 交 TT 官方导入）。
+                             ★二稿删掉「⬆ 一键全量云端上传」（作者实测多类没传上去、还干扰选择；各分页的「上传选中/全选」
+                             照旧可用，六步底层函数一个没动）。ST 1.19 上「TT 下载并导入」仍探测判死 → disabled + 人话。 -->
+                        <div class="cs-sep"></div>
+                        <div class="cs-label">ST → TT 转移</div>
+                        <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
+                            <button id="${id}_cfg_pack_upload" type="button" class="cs-btn cs-eq" title="打包的是 ST 整套数据（角色卡/聊天/世界书/预设/主题/界面设置），会连 ST 自己的旧备份一起打进去、所以包比较大（常见几百 MB）；介意占空间就用上面各分页手动勾选上传/导入。">⬆ ST 打包</button>
+                            <button id="${id}_cfg_full_restore" type="button" class="cs-btn cs-danger-btn cs-eq" title="打包的是 ST 整套数据（角色卡/聊天/世界书/预设/主题/界面设置），会连 ST 自己的旧备份一起打进去、所以包比较大（常见几百 MB）；介意占空间就用上面各分页手动勾选上传/导入。">⬇ TT 下载并导入</button>
+                        </div>
+                        <div id="${id}_pack_foldbox">
+                            <button id="${id}_pack_fold" type="button" class="cs-tellbtn" aria-expanded="false" title="点开看：打包的是什么、为什么包大、介意占空间怎么办">❓ 点我查看说明</button>
+                            <div id="${id}_pack_foldbody" style="display:none;margin-top:2px">
+                                <p id="${id}_pack_tell" class="cs-hint" style="margin:2px 0 0">打包的是 ST 的整套数据：角色卡、聊天、世界书、预设、主题、界面设置等（连酒馆设置一起打包，到 TT 会按同名覆盖）。<br>它是酒馆自带的打包功能，会连 ST 自己的 backups（旧备份）一起打进去，所以包比较大（常见几百 MB）。<br>如果你觉得旧的 backups 没必要留着占空间，用上面各分页手动勾选上传 / 导入更合适（只传你要的那部分）。</p>
+                                <p id="${id}_pkg_hint" class="cs-hint" style="margin:2px 0 0">⬇ 从云端取回整包，交给 TT 官方导入（会合并、同名覆盖）</p>
+                            </div>
+                        </div>
+                        <p id="${id}_backup_status" class="cs-hint" style="margin-top:4px"></p>
                         <p id="${id}_cfg2_status" class="cs-hint" style="margin-top:4px"></p>
                     </div>
                     </details>
@@ -6195,6 +6904,7 @@ window.__csManualCheck = async function (btn) {
     `;
     // 折叠：ST 全局委托 $(document).on('click','.inline-drawer-toggle') 自动处理展开/收起，无需自绑
     wirePanelEvents();
+    try { __csApplyPkgGate(); __csProbeNativeImport(); } catch { }   // 0.13.26：整包恢复的可用性闸门
     // 0.12.108 手风琴初始收敛: 模板默认可能同时 open 多张(如未配置时 连接配置 + 快捷入口都开)——
     //   手风琴语义下首次只留第一张开, 其余收起(用 requestAnimationFrame 等 details 初始 toggle 落定后再收)
     try {
@@ -6290,16 +7000,43 @@ function wirePanelEvents() {
         }
         // 行内头像: 本地卡→官方缩略图; 云端卡→仓库卡PNG直链(分块卡没有单文件→占位); 加载失败→占位
         const isGh = String(settings.server || '').includes('github');
-        const rawUrl = (p) => (isGh
-            ? `https://raw.githubusercontent.com/${settings.owner}/${settings.repo}/master/${p}`
-            : `https://gitee.com/${settings.owner}/${settings.repo}/raw/master/${p}?access_token=${encodeURIComponent(settings.token || '')}`);
+        // M2-CF：CF 档直链 = <root>/api/<路径>?raw=1&key=<访问码>（<img> 带不了自定义头）；分块卡仍走占位图（没有单文件直链）
+        // ★p 是"已逐段编码"的路径（调用处 encodeURIComponent(r.name)），这里不能再编码一次（会变双编码 → 404）
+        const rawUrl = (p) => (csIsCF()
+            ? `${__csCfRoot()}/api/${p}?raw=1&key=${encodeURIComponent(String(settings.cfKey || ''))}`
+            : (isGh
+                ? `https://raw.githubusercontent.com/${settings.owner}/${settings.repo}/master/${p}`
+                : `https://gitee.com/${settings.owner}/${settings.repo}/raw/master/${p}?access_token=${encodeURIComponent(settings.token || '')}`));
         const chunkedSet = new Set();
-        for (const f of (cloudFiles || [])) { const m = String(f.path).match(/^sync\/[^/]+\/(.+)\.manifest\.json$/); if (m) chunkedSet.add(m[1]); }
-        const rowSrc = (r) => {
-            if (r.avatar) return '/thumbnail?type=avatar&file=' + encodeURIComponent(r.avatar);
-            const enc = encodeURIComponent(r.name);
-            if (!r.legacy && chunkedSet.has(r.cloudFile)) return ''; // 分块卡：没有单文件直链
-            return rawUrl(`sync/${enc}/${r.cloudFile}`);
+        // ★键必须是「<角色>/<文件>」整条：原来只存文件名（'character.png'）⇒ 只要**任何一个**角色有大卡分块，
+        //   别的角色的同名单文件也会被误判成"分块"（0.13.26 把分块判据铺到老数据行后当场把这条照出来）
+        for (const f of (cloudFiles || [])) { const m = String(f.path).match(/^sync\/([^/]+)\/(.+)\.manifest\.json$/); if (m) chunkedSet.add(m[1] + '/' + m[2]); }
+        // 本机这张卡的缩略图文件名（同名多卡先按卡面文件名精确对，对不上再按名字取第一张）；取不到 ⇒ ''
+        const localThumbOf = (r) => {
+            try {
+                const chars = (getContext().characters || []).filter((x) => x && x.avatar && x.name === r.name);
+                if (!chars.length) return '';
+                let hit = null;
+                if (r.hint) { const hs = __stemOf(r.hint); hit = chars.find((x) => __stemOf(x.avatar) === hs); }
+                if (!hit) hit = chars[0];
+                return __stemOf(hit.avatar) + '.png';
+            } catch { return ''; }
+        };
+        const thumbUrl = (f) => '/thumbnail?type=avatar&file=' + encodeURIComponent(f);
+        // 行内头像：{src, fb[]（失败兜底链）, ph（没有可显示的图时给占位图的说明）}
+        // 0.13.26：★分块卡（含老数据行 legacy）云端**没有**单文件 —— 那个直链真发出去是 404（浏览器按 ORB 整条拦掉，
+        //   图整块不显、占位也没有）。所以分块一律不拼直链：有本机同名卡就显本机缩略图，没有才显示占位图。
+        const rowImg = (r) => {
+            if (r.avatar) return { src: thumbUrl(r.avatar), fb: [] };
+            const loc = localThumbOf(r);
+            if (chunkedSet.has(r.name + '/' + r.cloudFile)) {
+                return loc ? { src: thumbUrl(loc), fb: [], localThumb: true } : { src: '', fb: [], ph: '分块存储的大卡（没有单文件直链）' };
+            }
+            const s0 = rawUrl(`sync/${encodeURIComponent(r.name)}/${r.cloudFile}`);
+            const fb = [];
+            if (!csIsCF() && /\/master\//.test(s0)) fb.push(s0.replace('/master/', '/main/'));   // git 档专属回退（原行为第一步）；CF 直链不套（角色名里也可能出现 /master/，回退会拼出假地址）
+            if (loc) fb.push(thumbUrl(loc));                                        // 再退：本机这张卡的缩略图
+            return { src: s0, fb };
         };
         // 同名分组：同名的卡挨着排 + 按卡面文件名稳定编号（只影响同名组，其它行保持原顺序）
         const ordered = []; const seenName = new Set();
@@ -6318,10 +7055,11 @@ function wirePanelEvents() {
                 const grpSize = r.groupSize || 1;
                 const pend = r.avatar && __cardPendingOf(r.name, r.avatar);
                 const chipPend = pend ? `<span class="cs-cln-tag cs-cln-tag-warn" data-pair="${escapeHtml(r.key)}" title="这张卡分不清对应云端哪一张，点这里确认配对">⚠ 待确认配对</span>` : '';
-                const srcR = rowSrc(r);
-                const img = srcR
-                    ? `<img class="cs-role-avatar" loading="lazy" src="${escapeHtml(srcR)}" title="${escapeHtml(r.hint || r.name)}" onerror="if(!this.dataset.f){this.dataset.f=1;this.src=this.src.replace('/master/','/main/');}else{this.style.visibility='hidden';}">`
-                    : `<span class="cs-role-avatar cs-av-ph" title="分块存储的大卡（没有单文件直链）">🖼</span>`;
+                const ri = rowImg(r);
+                const avTip = (r.hint || r.name) + (ri.localThumb ? '（云端分块存储，这行缩略图取自本机这张卡）' : '');
+                const img = ri.src
+                    ? `<img class="cs-role-avatar" loading="lazy" src="${escapeHtml(ri.src)}" data-fb="${escapeHtml((ri.fb || []).join('|'))}" title="${escapeHtml(avTip)}" onerror="window.__csAvatarOnErr&&window.__csAvatarOnErr(this)">`
+                    : `<span class="cs-role-avatar cs-av-ph" title="${escapeHtml(ri.ph || '分块存储的大卡（没有单文件直链）')}">🖼</span>`;
                 // 同名卡：名字后跟紧凑序号「·2/5」（第几张/共几张），完整卡面文件名放悬浮提示
                 const label = grpSize > 1 ? `${r.name} ·${r.idxInGroup}/${grpSize}` : r.name;
                 const tip = `${r.name}${grpSize > 1 ? `（同名第 ${r.idxInGroup}/共 ${grpSize} 张）` : ''} · 卡面文件 ${r.hint || r.name}.png${r.primary ? ' · 主卡' : ''}`;
@@ -6561,11 +7299,161 @@ function wirePanelEvents() {
     })();
     // 面板初始化后填充一次角色多选列表
     if (window.__renderRoleMultiList) window.__renderRoleMultiList();
-    // 平台选择(Gitee/GitHub)即时生效并保存
+    // 平台选择(Gitee/GitHub/GitLab/自建CF)即时生效并保存
     $('cs_platform')?.addEventListener('change', () => {
-        settings.server = String($('cs_platform').value || '').trim();
+        const v = String($('cs_platform').value || '').trim();
+        const wasCF = csIsCF();
+        if (v === 'cf') { settings.backend = 'cf'; settings.server = ''; }
+        else { settings.backend = ''; settings.server = v; }
+        try { __csSyncBackendRows(); } catch { }
+        // 切平台 = 换后端 ⇒ 清缓存 + 清"云端 sha 记忆"（硬坑③：不清就会拿上一个后端的 sha 当"我上次传的"）
+        if (wasCF !== (v === 'cf')) { try { csClearCaches(); csSwitchBackendReset(); } catch { } }
         saveSettingsDebounced();
     });
+
+    // M2-CF-UI：CF 档的界面逻辑（显隐 / 👁 / 说明折叠 / 帮助 / 连接自检）
+    function __csSyncBackendRows() {
+        const sel = document.getElementById('cs_platform');
+        const isCF = sel ? String(sel.value || '') === 'cf' : csIsCF();
+        const rr = document.getElementById('cs_repo_row');
+        const tr = document.getElementById('cs_token_row');
+        const ts = document.getElementById('cs_sep_before_token');
+        const cr = document.getElementById('cs_cf_row');
+        if (rr) rr.style.display = isCF ? 'none' : '';
+        if (tr) tr.style.display = isCF ? 'none' : '';
+        if (ts) ts.style.display = isCF ? 'none' : '';
+        if (cr) cr.style.display = isCF ? '' : 'none';
+    }
+    window.__csSyncBackendRows = __csSyncBackendRows;
+    // CF 档：👁 看/藏访问码
+    $('cs_cf_key_eye')?.addEventListener('click', () => {
+        const inp = document.getElementById('cs_cf_key');
+        const eye = document.getElementById('cs_cf_key_eye');
+        if (!inp || !eye) return;
+        const show = inp.type !== 'text';
+        inp.type = show ? 'text' : 'password';
+        eye.textContent = show ? '🙈' : '👁';
+        eye.title = show ? '点击隐藏访问码' : '点击查看访问码';
+    });
+    // 0.13.31 说明折叠：自管显隐（不走 <details>——手风琴会把外层「酒馆配置」卡一起关了；
+    //   也不靠默认行为：ST 全局"点外面收抽屉"看的是 mousedown，mousedown / click 都要拦住）。
+    const tellBtn = $('cs_pack_fold'), tellBody = $('cs_pack_foldbody');
+    if (tellBtn && tellBody && !tellBtn.dataset.csTellBound) {
+        tellBtn.dataset.csTellBound = '1';
+        const setTell = (open) => {
+            tellBody.style.display = open ? '' : 'none';
+            tellBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
+        const stopTell = (e) => { try { e.preventDefault(); e.stopPropagation(); } catch { } };
+        const stopTellTouch = (e) => { try { e.stopPropagation(); } catch { } };   // 触屏只拦冒泡：preventDefault(touchstart) 会把随后的 click 一起掐掉、手机就点不开了
+        tellBtn.addEventListener('mousedown', stopTell);
+        tellBtn.addEventListener('touchstart', stopTellTouch, { passive: false });
+        tellBtn.addEventListener('click', (e) => { stopTell(e); setTell(tellBody.style.display === 'none'); });
+    }
+    $('cs_cf_help')?.addEventListener('click', () => __csCfGuide());
+    function __csCfGuide() {
+        try { if (window.__csCfGuideOpen) return; } catch { }
+        const m = __csOpenMask(() => { try { window.__csCfGuideOpen = false; } catch { } __csUnlockBgScroll(); });
+        m.id = 'cs_cf_guide_modal';
+        m.innerHTML = `<div style="position:relative;width:min(620px,94vw);max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);display:flex;flex-direction:column;background:var(--SmartThemeBlurTintColor,#1b1b1b);border:1px solid var(--SmartThemeBorderColor,#333);border-radius:12px;padding:14px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.5)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--SmartThemeBorderColor,#333)">
+                <b style="font-size:.95em">❓ 自建 Cloudflare 后端怎么弄</b>
+                <button id="__cfg_close" style="padding:3px 14px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#555);background:rgba(255,255,255,0.05);color:var(--SmartThemeBodyColor,#eee);cursor:pointer;font-size:.9em">✕ 关闭</button>
+            </div>
+            <div style="flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;font-size:.86em;line-height:1.7">
+                <div style="border:1px solid var(--SmartThemeBorderColor,#333);border-radius:10px;padding:8px 10px">
+                    ① 复制上面那行适合你的命令（电脑选「Windows（CMD）」那条、手机选另一条），粘进去跑；<br>
+                    ② 它会带你注册、拿令牌、自动部署，最后把地址和访问码（连成一行的配置串）打给你；<br>
+                    ③ 脚本最后会把地址和访问码打给你——分别填进下面两个框（地址一框、访问码一框），再点「连接」。
+                </div>
+            </div>
+        </div>`;
+        __csLockBgScroll();
+        window.__csCfGuideOpen = true;
+        m.addEventListener('click', (ev) => { ev.stopPropagation(); });
+        document.getElementById('__cfg_close').addEventListener('click', () => { try { window.__csCfGuideOpen = false; } catch { } __csCloseMask(m); __csUnlockBgScroll(); });
+    }
+    // CF 档「连接」自检（设计 §2.6：① 存活探针 → ② 带码问身份 → ③ 五目录盘点 → ④ 成功才固化 + 清残留）
+    async function __csCfConnect() {
+        const out = document.getElementById('cs_testresult');
+        const write = (t) => { if (out) out.textContent = t; };
+        const append = (t) => { if (out) out.textContent = String(out.textContent || '') + t; };
+        write('测试中…');
+        const root = String(($('cs_cf_url') || {}).value || '').trim().replace(/\/+$/, '');
+        const key = String(($('cs_cf_key') || {}).value || '').trim();
+        const diagBase = { server: 'cf · ' + root, tokenLen: key.length, tokenHead: key.slice(0, 4), tokenTail: key.slice(-4) };
+        try {
+            if (!root) throw new Error('请填后端地址：部署脚本打印的那一行里的 https://…pages.dev（去掉开头随机码的 https://项目名.pages.dev 是固定地址，示例后端 = ' + CS_CF_ADDR_FIXED_EXAMPLE + '）');
+            let u0 = null;
+            try { u0 = new URL(root); } catch { throw new Error('这个地址不合法：要以 http:// 或 https:// 开头，整段复制部署脚本打印的那一行'); }
+            if (!/^https?:$/.test(u0.protocol)) throw new Error('后端地址只支持 http/https');
+            if (!key) throw new Error('请填访问码（部署脚本给你的那串）');
+            // ① 存活探针（不带码）——先分清"地址不对"和"码不对"
+            let alive = null, aliveErr = '';
+            try {
+                const r0 = await fetch(root + '/', { cache: 'no-store', signal: AbortSignal.timeout(20000) });
+                if (r0.ok) alive = await r0.json().catch(() => null);
+                else aliveErr = 'HTTP ' + r0.status;
+            } catch (e) { aliveErr = String((e && e.message) || e).slice(0, 80); }
+            if (!alive || alive.ok !== true || alive.service !== 'ywp-sync-cf') {
+                const extra = aliveErr ? ' · 原始信息：' + aliveErr
+                    : ' · 这个地址答的不是本插件的自建后端（看到的是别的服务：' + String((alive && (alive.service || alive.hint)) || '?').slice(0, 40) + '）';
+                const e = new Error('地址打不开：域名 / DNS / 部署还没生效（Pages 首次约 1 分钟）/ 运营商拦截 · 也核一下地址是不是填错了（脚本每次重新部署打印的地址带随机码、会变；去掉开头随机码的 https://项目名.pages.dev 才是固定地址，示例 = ' + CS_CF_ADDR_FIXED_EXAMPLE + '）' + extra);
+                e.csDiag = { url: root + '/', status: 0, statusText: aliveErr, ...diagBase, body: '' };
+                throw e;
+            }
+            // ② 带访问码问身份（等价 GitHub /user）
+            let r = null, txt = '';
+            try {
+                r = await fetch(root + '/api-test', { headers: { 'X-YWP-KEY': key }, cache: 'no-store', signal: AbortSignal.timeout(30000) });
+                txt = await r.clone().text().catch(() => '');
+            } catch (e) {
+                const e2 = new Error('连不上：请求发不出去（网络 / 代理 / 拦截）· 原始信息：' + String((e && e.message) || e).slice(0, 80));
+                e2.csDiag = { url: root + '/api-test', status: 0, statusText: '', ...diagBase, body: '' };
+                throw e2;
+            }
+            if (!r.ok) {
+                const e = new Error(__csCfApiMsg(r.status, txt));
+                e.csDiag = { url: root + '/api-test', status: r.status, statusText: r.statusText || '', ...diagBase, body: String(txt || '').slice(0, 200) };
+                throw e;
+            }
+            let j = {}; try { j = JSON.parse(txt) || {}; } catch { j = {}; }
+            const dbq = r.headers.get('x-ywp-db-queries');
+            write(`✅ 已连接：${String(j.service || 'ywp-sync')} v${String(j.version || '?')} · 云端已有 ${Number(j.files) || 0} 个文件 / ${__fmtBytes(Number(j.bytes) || 0)}\n（免费档不按请求数限流，所以没有"本小时还剩"那一行${dbq ? '；这次请求用了 ' + dbq + ' 趟数据库' : ''}）`);
+            // ③ 五目录盘点（与 git 档同一套读取方法，直证各列表链路）
+            const parts = ['角色(sync)', '预设(connections/openai)', '主题(themes)', '全局正则(regex)', '人设(personas)'];
+            const dirs = ['sync', 'config-sync/connections/openai', 'config-sync/themes', 'config-sync/regex', 'config-sync/user/personas'];
+            for (let i = 0; i < parts.length; i++) {
+                try {
+                    const arr = await Gitee.listEntries(dirs[i]);
+                    const n = Array.isArray(arr) ? arr.filter((x) => x.type === (dirs[i] === 'sync' ? 'dir' : 'file')).length : 0;
+                    append(`\n${parts[i]}: ${n} 个${dirs[i] === 'sync' ? '角色' : '文件'}`);
+                } catch (e2) { append(`\n${parts[i]}: ❌ ${(e2 && e2.message) || e2}`); }
+            }
+            // ④ 成功才固化（与现有"连接成功才写 settings"口径一致）+ 换后端清残留（硬坑③）
+            const changed = !csIsCF() || __csCfRoot() !== root || String(settings.cfKey || '') !== key;
+            settings.backend = 'cf';
+            settings.cfUrl = root;
+            settings.cfKey = key;
+            settings.cfName = String(__csCfNameFromCfg || settings.cfName || u0.host || '').trim().slice(0, 64) || u0.host;
+            settings.lastConnectAt = Date.now();
+            saveSettingsDebounced();
+            __csUpsertSlot('cf:' + root, settings.cfName, key);
+            try { __csSyncBackendRows(); } catch { }
+            if (changed) { try { csClearCaches(); csSwitchBackendReset(); } catch { } }
+            __refreshCurRepoLine();
+            try { toastr.success('✅ 已连接自建后端：' + (settings.cfName || u0.host)); } catch { }
+        } catch (e) {
+            write('❌ 连接失败：' + ((e && e.message) || e));
+            if (e && e.csDiag) {
+                const d = e.csDiag;
+                console.log('[chat-sync 连接诊断]', d);
+                append(`\n\n📋 诊断信息（复制发给开发者）：\n请求地址: ${d.url}\nHTTP ${d.status} ${d.statusText || ''}\n平台判定: ${d.server}\n访问码长度: ${d.tokenLen}（首 ${d.tokenHead}… 尾 ${d.tokenTail}）\n响应: ${d.body}`);
+            }
+        }
+    }
+    window.__csCfConnect = __csCfConnect;
+
     // 0.12.48 令牌👁显示/隐藏(用户反馈: 常有人复制错口令看不出问题)
     $('cs_token_eye')?.addEventListener('click', () => {
         const inp = document.getElementById('cs_token');
@@ -6585,6 +7473,31 @@ function wirePanelEvents() {
             const ta = document.createElement('textarea');
             ta.value = v; document.body.appendChild(ta); ta.select();
             try { document.execCommand('copy'); toastr.success('✅ 令牌已复制'); } catch (e2) { toastr.error('复制失败，请手动选中复制'); }
+            ta.remove();
+        }
+    });
+    // 0.13.32：一键部署两行命令块 —— 点哪行就复制哪行（与令牌复制同一套：clipboard + execCommand 兜底，手机也能用；
+    //   复制源是常量、不是屏幕上的字 —— 就算界面被改字也复制不错）
+    const __csBindCopyCmd = (btnId, text, tipOk) => $(btnId)?.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(text); toastr.success(tipOk); }
+        catch (e) {
+            const ta = document.createElement('textarea');
+            ta.value = text; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); toastr.success('✅ 已复制'); } catch (e2) { toastr.error('复制失败，请手动选中复制'); }
+            ta.remove();
+        }
+    });
+    __csBindCopyCmd('cs_cf_cmd_win', CS_CF_DEPLOY_CMD_WIN, '✅ 已复制 Windows 命令：粘进 CMD 窗口按回车');
+    __csBindCopyCmd('cs_cf_cmd_sh', CS_CF_DEPLOY_CMD_SH, '✅ 已复制手机/Linux 命令：粘进 Termux（或 Linux/macOS 命令行）按回车');
+    // 0.13.32：访问码「点击即复制」（与令牌/命令同一套；框里空的时候给人话、不复制空、不报错）
+    $('cs_cf_key_copy')?.addEventListener('click', async () => {
+        const v = String((document.getElementById('cs_cf_key') || {}).value || '');
+        if (!v.trim()) { toastr.warning('先填访问码，再点复制'); return; }
+        try { await navigator.clipboard.writeText(v); toastr.success('✅ 访问码已复制'); }
+        catch (e) {
+            const ta = document.createElement('textarea');
+            ta.value = v; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); toastr.success('✅ 访问码已复制'); } catch (e2) { toastr.error('复制失败，请手动选中复制'); }
             ta.remove();
         }
     });
@@ -6622,6 +7535,24 @@ function wirePanelEvents() {
         document.getElementById('__tg_close').addEventListener('click', () => { try { window.__csTokenGuideOpen = false; } catch { } __csCloseMask(m); __csUnlockBgScroll(); });
     };
     $('cs_save')?.addEventListener('click', async () => {
+        // M2-CF：CF 档不解析仓库（resolveRepo/parseRepoInput 会去请求 <root>/user，CF 后端没有那个路由）
+        if (String($('cs_platform')?.value || '') === 'cf') {
+            const root = String($('cs_cf_url')?.value || '').trim().replace(/\/+$/, '');
+            const key = String($('cs_cf_key')?.value || '').trim();
+            if (!root) { toastr.error('请填后端地址：部署脚本打印的那一行里的 https://…pages.dev（去掉开头随机码的 https://项目名.pages.dev 是固定地址，示例 = ' + CS_CF_ADDR_FIXED_EXAMPLE + '）'); return; }
+            if (!/^https?:\/\//i.test(root)) { toastr.error('后端地址要以 http:// 或 https:// 开头（整段复制部署脚本打印的那一行）'); return; }
+            if (!key) { toastr.error('请填访问码（部署脚本给你的那串）'); return; }
+            let host = ''; try { host = new URL(root).host; } catch { }
+            settings.backend = 'cf'; settings.cfUrl = root; settings.cfKey = key;
+            settings.cfName = String(__csCfNameFromCfg || settings.cfName || host || '').slice(0, 64) || host;
+            __csUpsertSlot('cf:' + root, settings.cfName, key);
+            try { __csSyncBackendRows(); } catch { }
+            __refreshCurRepoLine();
+            saveSettingsDebounced();
+            __refreshCurRepoLine();
+            toastr.success('配置已保存（自建后端：' + (settings.cfName || host) + '）');
+            return;
+        }
         const repoInput = $('cs_repoinput').value.trim();
         const token = $('cs_token').value;
         settings.server = String($('cs_platform')?.value || '').trim();
@@ -6639,6 +7570,8 @@ function wirePanelEvents() {
         toastr.success(owner ? `配置已保存（用户识别为：${owner}/${repo}）` : '配置已保存');
     });
     $('cs_test')?.addEventListener('click', async () => {
+        // M2-CF：CF 档走独立自检（先分清"地址不对"与"码不对"，再盘点五目录；设计 §2.6）
+        if (String($('cs_platform')?.value || '') === 'cf') { await __csCfConnect(); return; }
         const repoInput = $('cs_repoinput').value.trim();
         const token = $('cs_token').value;
         const out = $('cs_testresult');
@@ -6747,79 +7680,45 @@ function wirePanelEvents() {
         catch (e) { toastr.error('批量导入失败：' + e.message); }
     });
     // 酒馆配置一键保存 / 一键恢复
-    // ── 全量上传(本设备→云端): 手机端也能用的反向全量 —— 逐类复用现有官方通道, 顺序执行 ──
-    $('cs_cfg_full_upload')?.addEventListener('click', async () => {
+    // 0.13.27：作者拍板删掉「⬆ 备份设置到云端 / ⬇ 从云端恢复设置」这一对按钮（"想不到任何使用场景"）——
+    //   界面入口与它的绑定都在本轮移除；★底层函数 backupConfigToCloud / restoreConfigFromCloud 保留（仍挂在调试出口、
+    //   被「ST 上传」的 ⑥ 与 run-cf-core 的 Y 阶段直驱调用）⇒ 别删、别给别处加调用。
+    // ── ⬆ ST 打包（换设备用的一半）: 酒馆官方导出打整包 → 传云端 ──
+    $('cs_cfg_pack_upload')?.addEventListener('click', async () => {
         const st = $('cs_backup_status');
         const setStat = (m) => { if (st) st.textContent = m; };
-        if (window.__csFullUploadRunning) { toastr.warning('全量上传正在进行中'); return; }
-        const okc = await csConfirm('📤 全量上传（本设备→云端）', '将把本设备可同步的全部数据<b>依次上传</b>到云端对应位置：<br>① 全部角色(卡+绑定世界书+聊天) ② 全部连接预设 ③ 全部主题 ④ 全局正则 ⑤ User资料+头像 ⑥ 扩展设置快照<br><small>同名内容有差异时会弹个别确认框；云端多出来的数据不会被删除。</small><br>确定开始吗？');
-        if (!okc) return;
-        window.__csFullUploadRunning = true;
-        const results = [];
-        let step = 0; const totalSteps = 6;
-        const runStep = async (label, fn) => {
-            step++;
-            setStat(`[${step}/${totalSteps}] ${label}中…`);
-            try { const r = await fn(); results.push(`✅${label}`); return r; }
-            catch (e) { results.push(`❌${label}:${(e && e.message) || e}`); return null; }
-        };
+        if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return; }
         try {
-            // ① 全部角色(内部自拿锁)
-            await runStep('全部角色', pushAllCharacters);
-            // ② 全部连接预设(PresetManager 活列表枚举)
-            await runStep('连接预设', async () => {
-                let names = [];
-                try {
-                    const pm = getContext().getPresetManager && getContext().getPresetManager('openai');
-                    if (pm) { const { preset_names } = pm.getPresetList('openai'); presetNames = preset_names; }
-                } catch { }
-                var presetNames = Array.isArray(presetNames) ? presetNames : [];
-                if (!presetNames.length) presetNames = (await _connPresetNamesOf(CONN_PRESET_GROUPS[0])) || [];
-                presetNames = presetNames.filter((n) => _connPresetVisible(String(n)));
-                if (!presetNames.length) { results.push('➖连接预设(无)'); return null; }
-                return await pushSelectedConnPresets(presetNames.map((n) => ({ apiId: 'openai', name: String(n) })));
-            });
-            // ③ 全部主题(settings.themes 数组枚举)
-            await runStep('全部主题', async () => {
-                const names = (await _themeLocalList()).map((t) => t.name).filter(Boolean);
-                if (!names.length) { results.push('➖主题(无)'); return null; }
-                return await pushSelectedThemes(names);
-            });
-            // ④ 全局正则
-            await runStep('全局正则', async () => {
-                const names = (await _regexLocalList()).map((r2) => r2.name).filter(Boolean);
-                if (!names.length) { results.push('➖正则(无)'); return null; }
-                return await pushSelectedRegex(names);
-            });
-            // ⑤ User 资料+头像
-            await runStep('User 资料', backupUserToCloud);
-            // ⑥ extension_settings 快照
-            await runStep('扩展设置快照', backupConfigToCloud);
-        } finally {
-            window.__csFullUploadRunning = false;
-            setStat('全量上传结束：' + results.join('　'));
-            toastr.info('全量上传结束：' + results.join('　'), null, { timeOut: 8000 });
-        }
+            const r = await backupFullArchiveToCloud(setStat);
+            if (r === false) { setStat(''); return; }
+            if (r && r.skipped) { setStat('整包内容没变，已跳过上传（云端留的还是那一份）'); toastr.info('整包内容没变，已跳过上传'); return; }
+            setStat('✅ 整包已传到云端（' + r.chunks + ' 块 · ' + (r.bytes / 1048576).toFixed(1) + ' MB）');
+            toastr.success('✅ 整包已传到云端（' + (r.bytes / 1048576).toFixed(1) + ' MB）', null, { timeOut: 6000 });
+        } catch (e) { setStat(''); toastr.error('ST 打包失败：' + ((e && e.message) || e)); }
+        finally { __csReleaseBusy(); }
     });
-    // ── 从云端恢复【全量数据归档】: ST 端用 st-full-backup.py 上传的 tar.gz → 官方 data-migration import ──
+    // ── ⬇ TT 下载并导入（换设备的另一半）: 云端整包 → 交给 TT 官方导入（吃 zip/tar/tar.gz/tgz；合并 + 同名覆盖 + 标识统一 default-user）──
     $('cs_cfg_full_restore')?.addEventListener('click', async () => {
         const st = $('cs_backup_status');
         const setStat = (m) => { if (st) st.textContent = m; };
-        const okc = await csConfirm('⚠⚠ 从云端恢复全量数据', '将把云端的全量数据归档<b>整个替换</b>当前设备的角色、聊天、世界书、预设、主题等全部数据！<br><b style="color:#e66">本机现有的一切会被覆盖，且无法在本机找回。</b><br>确认要继续吗？');
+        // 0.13.26：探测已判死 ⇒ 直接给人话（按钮通常已 disabled，这里是兜底）
+        if (window.__csImportProbe && window.__csImportProbe.state === 'no') { toastr.info('这台酒馆没有官方导入接口（需要 TauriTavern 或更新版酒馆）⇒「TT 下载并导入」用不了'); return; }
+        // 0.13.28：文案按 TT 内置导入页的原话对齐 —— 是**合并**（同名文件被覆盖），不是"整个替换"
+        const okc = await csConfirm('⚠ TT 下载并导入（会合并进本机）', '会把云端那份整包交给 TauriTavern 官方导入，<b>合并</b>进本机：<br>· 归档里的数据与本机合并，<b>同名文件（同一路径）会被归档里那份覆盖</b>；<br>· 用户标识会统一成 <b>default-user</b>；<br>· 本机多出来的数据不会被删。<br>确认要继续吗？');
         if (!okc) return;
         if (!__csTryBusy()) { toastr.warning('已有同步在进行中'); return; }
         try {
             // ① 读指针
-            setStat('正在读取云端全量备份指针…');
-            const lc = await Gitee.getText('sync-config/full-latest.json');
-            if (!lc || !lc.content) { toastr.error('云端没有全量数据归档——请先在电脑端运行 st-full-backup.py 上传'); return; }
+            setStat('正在读取云端整包指针…');
+            const lc = await Gitee.getText(FULL_ARCHIVE_LATEST);
+            if (!lc || !lc.content) { toastr.error('云端还没有整包归档——先在 ST 上点「⬆ ST 打包」传一份上去'); return; }
             const meta = JSON.parse(lc.content);
             const dir = `sync-config/full/${meta.ts}`;
             // ② 分块下载拼装
             const parts = [];
             for (let i = 0; i < (meta.chunks || 0); i++) {
                 setStat(`正在下载全量归档：第 ${i + 1}/${meta.chunks} 块…`);
-                const pc = await Gitee.getText(`${dir}/part-${String(i).padStart(4, '0')}`);
+                const pc = await csReadBigText(`${dir}/part-${String(i).padStart(4, '0')}`);   // 0.13.28：大文件专线（CF 档 = ?raw=1；git 档逐字还是 getText）
                 if (!pc) { throw new Error(`归档分块 part-${i} 缺失(上传不完整?)`); }
                 const bin = atob(String(pc.content).replace(/\s/g, ''));
                 const u8 = new Uint8Array(bin.length);
@@ -6827,19 +7726,35 @@ function wirePanelEvents() {
                 parts.push(u8);
             }
             let totalLen = 0; parts.forEach((u) => totalLen += u.length);
-            const blobParts = []; let off = 0;
-            for (const u of parts) { blobParts.push(u); off += u.length; }
-            const archiveBlob = new Blob(parts, { type: 'application/gzip' });
-            setStat(`下载完成（${(totalLen / 1048576).toFixed(1)} MB），正在提交官方迁移…`);
-            // ③ 官方 data-migration import(multipart)
-            const file = new File([archiveBlob], `st-data-${meta.ts}.tar.gz`, { type: 'application/gzip' });
+            // ③ 按清单里的格式投喂：format:'zip'（ST 官方导出）⇒ zip 名 + application/zip；老清单（tar.gz/没写 format）⇒ 逐字照旧
+            const feed = csArchiveFeedMeta(meta);
+            const archiveBlob = new Blob(parts, { type: feed.type });
+            const mb = (totalLen / 1048576).toFixed(1);
+            // 新清单带 sha ⇒ 逐字节核对（sha 算法与云端一致 = git blob sha1）；对不上 = 云端这份不是当初传上去的那份 ⇒ 不喂给 TT
+            if (feed.isZip && meta.sha) {
+                const got = await gitBlobSha(new Uint8Array(await archiveBlob.arrayBuffer()));
+                if (got !== String(meta.sha)) { throw new Error('云端整包和上传时对不上（sha 不符）⇒ 先别导入，回 ST 重新点一次「⬆ ST 打包」'); }
+                setStat(`整包取回并核对通过（${mb} MB），正在交给官方导入…`);
+            } else {
+                setStat(`整包取回（${mb} MB），正在交给官方导入…`);
+            }
+            // ④ 官方 data-migration import(multipart)
+            const file = new File([archiveBlob], feed.file, { type: feed.type });
             const fd = new FormData(); fd.append('archive', file);
             const resp = await fetch('/api/extensions/data-migration/import', { method: 'POST', body: fd });
-            if (!resp.ok) { throw new Error('导入任务启动失败 HTTP ' + resp.status + '：' + (await resp.text()).slice(0, 200)); }
+            if (!resp.ok) {
+                // 0.13.26：404/403 = 这台的酒馆没有官方导入接口（ST 1.19 实测）⇒ 给人话 + 把按钮永久禁掉
+                if (resp.status === 404 || resp.status === 403) {
+                    try { window.__csImportProbe.state = 'no'; __csApplyPkgGate(); } catch { }
+                    throw new Error('这台酒馆没有官方导入接口（需要 TauriTavern 或更新版酒馆）⇒「TT 下载并导入」用不了');
+                }
+                throw new Error('导入任务启动失败 HTTP ' + resp.status + '：' + (await resp.text()).slice(0, 200));
+            }
             const jobPayload = await resp.json();
             const jobId = String(jobPayload.job_id || '');
             if (!jobId) { throw new Error('迁移任务未返回 job_id'); }
-            // ④ 轮询到完成
+            setStat('官方导入已受理（任务 ' + jobId + '），正在等它跑完…');
+            // ⑤ 轮询到完成
             let done = false;
             for (let tick = 0; tick < 400; tick++) {
                 await new Promise((r) => setTimeout(r, 1500));
@@ -6855,23 +7770,16 @@ function wirePanelEvents() {
                 }
                 if (done) break;
             }
-            setStat(done ? '✅ 全量数据迁移完成！页面将自动刷新…' : '迁移超时未确认，请稍后刷新查看');
+            setStat(done ? '✅ 整包已导入完成！页面将自动刷新…' : '迁移超时未确认，请稍后刷新查看');
             toastr.success('✅ 全量数据迁移完成，即将刷新酒馆', null, { timeOut: 6000 });
             setTimeout(() => location.reload(), 2500);
         } catch (e) {
             setStat('');
-            toastr.error('全量恢复失败：' + ((e && e.message) || e));
+            toastr.error('TT 下载并导入失败：' + ((e && e.message) || e));
         } finally { __csReleaseBusy(); }
     });
-    $('cs_cfg_restore')?.addEventListener('click', async () => {
-        const st = $('cs_cfg_status'); if (st) st.textContent = '正在从云端恢复酒馆配置…';
-        const target = window.__cfgSelectedBackup || undefined; // 未拉列表时=恢复最新
-        const prettyT = target ? String(target).replace('T', ' ') : '最新一份';
-        const ok = await csConfirm('⚠ 恢复酒馆配置', `确定用云端的 <b>${escapeHtml(prettyT)}</b> 整包覆盖当前配置吗？恢复后请刷新/重载酒馆生效。<br>（插件的连接仓库/令牌/同步映射不会被覆盖）`);
-        if (!ok) { if (st) st.textContent = '已取消'; return; }
-        await restoreConfigFromCloud(target);
-        if (st) st.textContent = '';
-    });
+    // 0.13.27：作者拍板删掉「⬇ 从云端恢复设置」按钮（与它的绑定）；★底层函数 restoreConfigFromCloud 保留
+    //   （仍挂在调试出口、被 run-cf-core 的 Y 阶段直驱调用）⇒ 别删、别给别处加调用。
     // ── 聊天记录清理器 ──
     window.__clnView = window.__clnView || 'local';
     window.__clnDesc = window.__clnDesc !== false; // 默认按最新修改时间倒序(最新在前)
@@ -7729,7 +8637,7 @@ async function pushSelectedApiProfiles(names) {
         showBusy(0, names.length, '上传Api配置');
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
-            showBusy(i + 1, names.length, `上传Api配置 ${name}`);
+            showBusy(i + 1, names.length, `上传Api配置 ${name}`, name);
             try {
                 const p = _apiProfileByName(name);
                 if (!p) { fail.push(name); failReasons.push({ name, reason: '本地无该配置' }); continue; }
@@ -7780,7 +8688,7 @@ async function importSelectedApiProfiles(names) {
         showBusy(0, names.length, '导入Api配置');
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
-            showBusy(i + 1, names.length, `导入Api配置 ${name}`);
+            showBusy(i + 1, names.length, `导入Api配置 ${name}`, name);
             try {
                 const c = await Gitee.getText(`${API_CLOUD_DIR}/${__safeName(name)}.json`);
                 if (!c) { fail.push(name); failReasons.push({ name, reason: '云端无该配置' }); continue; }
@@ -7985,7 +8893,7 @@ ext: {
             async push(items) {
                 const ok = [], fail = [];
 
-                let __i = 0; const __n = items.length; for (const full of items) { __i++; showBusy(__i, __n, '上传拓展 ' + String(full).split('/').pop() + '…');
+                let __i = 0; const __n = items.length; for (const full of items) { __i++; showBusy(__i, __n, '上传拓展 ' + String(full).split('/').pop() + '…', String(full).split('/').pop());
                     const sname = String(full).split('/').pop();
                     const skey = __extSettingsKey(sname);
                     try {
@@ -8018,7 +8926,7 @@ ext: {
                 const ok = [], fail = [], failReasons = [];
                 let man = {};
                 try { man = JSON.parse((await Gitee.getText(EXT_MANIFEST_PATH))?.content || '{}'); } catch { }
-                let __i2 = 0; const __n2 = items.length; for (const full of items) { __i2++; showBusy(__i2, __n2, '导入拓展 ' + String(full).split('/').pop() + '…');
+                let __i2 = 0; const __n2 = items.length; for (const full of items) { __i2++; showBusy(__i2, __n2, '导入拓展 ' + String(full).split('/').pop() + '…', String(full).split('/').pop());
                     const sname = String(full).split('/').pop();
                     try {
                         const entry = man[sname] || {};
@@ -8169,7 +9077,7 @@ ext: {
                     }
                 }
                 const ok = [], fail = [];
-                let __t = 0; const __tn = items.length; for (const it of items) { __t++; showBusy(__t, __tn, '上传脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…');
+                let __t = 0; const __tn = items.length; for (const it of items) { __t++; showBusy(__t, __tn, '上传脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…', it.replace(/^\[(脚本|文件夹)\]/, ''));
                     // 行值格式: [类型]名字
                     const type = it.startsWith('[文件夹]') ? 'folder' : 'script';
                     const name = it.replace(/^\[(脚本|文件夹)\]/, '');
@@ -8205,7 +9113,7 @@ ext: {
                 let disabledImported = 0;
                 window.__thWriteFellBack = false;
                 const replaceMode = !!settings.thReplace;
-                let __t2 = 0; const __tn2 = items.length; for (const it of items) { __t2++; showBusy(__t2, __tn2, '导入脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…');
+                let __t2 = 0; const __tn2 = items.length; for (const it of items) { __t2++; showBusy(__t2, __tn2, '导入脚本 ' + it.replace(/[^\w一-龥-]/g, '') + '…', it.replace(/^\[(脚本|文件夹)\]/, ''));
                     const type = it.startsWith('[文件夹]') ? 'folder' : 'script';
                     const name = it.replace(/^\[(脚本|文件夹)\]/, '');
                     let renamed = false;
@@ -8535,11 +9443,11 @@ ext: {
                 window.__csTabTick2 = setInterval(() => {
                     try {
                         if (!st2.isConnected || window.__cfgRenderGen !== __genB) { clearInterval(window.__csTabTick2); window.__csTabTick2 = null; return; }
-                        if (String(st2.textContent || '').startsWith('🔄 ')) return;   // 让位给忙碌条（它自己也带秒数）
+                        if (String(st2.textContent || '').startsWith('🔄 ') || window.__csProgState) return;   // 让位给忙碌条/批量进度行
                         const sec = (Date.now() - __t0b) / 1000;
-                        st2.textContent = '正在切换至「' + __nmB + '」分页… 已 ' + (sec >= 10 ? Math.round(sec) : sec.toFixed(1)) + ' 秒' + (sec >= 4 ? '（在拉云端目录、逐条比对；慢一点属正常，不是卡住）' : '');
+                        st2.textContent = '正在切换至「' + __nmB + '」分页… 已 ' + Math.floor(sec) + ' 秒' + (sec >= 4 ? '（在拉云端目录、逐条比对；慢一点属正常，不是卡住）' : '');
                     } catch { }
-                }, 500);
+                }, CS_TICK_MS);
             }
         } catch { }
         const whereSets = { localSet: new Set(), cloudSet: new Set() };
@@ -8840,7 +9748,28 @@ ext: {
             const arr = (settings.connSlots = Array.isArray(settings.connSlots) ? settings.connSlots : []);
             const sl = arr[idx];
             if (!sl) return;
+            const wasCF = csIsCF(), prevRoot = __csCfRoot();
+            // M2-CF：CF 槽位（platform = 'cf:<root>'，repo = 显示名，token = 访问码）
+            if (String(sl.platform || '').startsWith('cf:')) {
+                settings.backend = 'cf';
+                settings.cfUrl = String(sl.platform).slice(3);
+                settings.cfName = String(sl.repo || '');
+                settings.cfKey = String(sl.token || '');
+                settings.lastConnectAt = Date.now();
+                saveSettingsDebounced();
+                const sel = document.getElementById('cs_platform'); if (sel) sel.value = 'cf';
+                const ui = document.getElementById('cs_cf_url'); if (ui) ui.value = settings.cfUrl;
+                const ki = document.getElementById('cs_cf_key'); if (ki) ki.value = settings.cfKey;
+                try { __csSyncBackendRows(); } catch { }
+                if (!wasCF || prevRoot !== String(settings.cfUrl)) { try { csClearCaches(); csSwitchBackendReset(); } catch { } }
+                __refreshCurRepoLine();
+                autoConnectIfConfigured();
+                toastr.success('已切换后端：' + (settings.cfName || settings.cfUrl));
+                return;
+            }
             const [o, r] = String(sl.repo || '').split('/');
+            if (wasCF) { try { csClearCaches(); csSwitchBackendReset(); } catch { } } // CF → git：清残留（硬坑③）
+            settings.backend = '';
             settings.server = sl.platform || ''; settings.owner = o || ''; settings.repo = r || ''; settings.token = sl.token || '';
             settings.lastConnectAt = Date.now();
             saveSettingsDebounced();
@@ -9104,7 +10033,7 @@ ext: {
         for (let i = 0; i < sel.length; i++) {
             const full = sel[i];
             const pure = String(full).split('/').pop();
-            showBusy(i + 1, sel.length, '更新拓展 ' + pure + '…');
+            showBusy(i + 1, sel.length, '更新拓展 ' + pure + '…', pure);
             try {
                 const gF = (window.__extType && window.__extType[full]) === 'global';
                 const combos = [{ n: full, g: gF }, { n: full, g: !gF }, { n: pure, g: gF }, { n: pure, g: !gF }];
@@ -9168,7 +10097,7 @@ ext: {
         const drv = window.__cfgDrivers && window.__cfgDrivers[tab];
         const sel = [...document.querySelectorAll('input[name="cs_cfg_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { if (st2) st2.textContent = '请先在上方勾选要删除的项'; return; }
-        if (!settings.owner || !settings.repo || !settings.token) {
+        if (!csConfigured()) {
             if (st2) __csSetStatus(st2, '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中」', 'err');
             return;
         }
@@ -9191,7 +10120,7 @@ ext: {
             let okN = 0, skipLocalN = 0, skipCloudN = 0, failN = 0; const failed = [];
             for (let i = 0; i < sel.length; i++) {
                 const item = sel[i];
-                showBusy(i + 1, sel.length, `删除双端${tabLbl} ${String(item).split('|').pop()}`);
+                showBusy(i + 1, sel.length, `删除双端${tabLbl} ${String(item).split('|').pop()}`, String(item).split('|').pop());
                 let localOk = true, cloudOk = true;
                 // ── 本地 ──
                 try {
@@ -9460,7 +10389,7 @@ ext: {
         const mode = window.__wbListMode || 'local';
         const sel = [...document.querySelectorAll('input[name="cs_wb_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { if (st) st.textContent = '请先在上方勾选要删除的世界书'; return; }
-        if (!settings.owner || !settings.repo || !settings.token) {
+        if (!csConfigured()) {
             if (st) __csSetStatus(st, '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中世界书」', 'err');
             return;
         }
@@ -9535,7 +10464,7 @@ ext: {
             else if (origPopupConfirm) P.confirm = () => true;
             for (let i = 0; i < items.length; i++) {
                 const it = items[i];
-                showBusy(i + 1, items.length, mode === 'cloud' ? '删除云端' : '删除本地');
+                showBusy(i + 1, items.length, mode === 'cloud' ? '删除云端' : '删除本地', it.name);
                 try {
                     if (mode === 'cloud') {
                         // 有 cardId → 只删那一张卡；老数据行（无 cardId）→ 仍按整名字删（与旧行为一致）
@@ -9560,7 +10489,7 @@ ext: {
         const sel = [...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value);
         if (!sel.length) { if (st) st.textContent = '请先在上方勾选要删除的角色'; return; }
         // 防呆：双端删除依赖云端可用。未配置则阻止并指引(否则会出现"本地删了云端没删"的假双删)。
-        if (!settings.owner || !settings.repo || !settings.token) {
+        if (!csConfigured()) {
             if (st) __csSetStatus(st, '⚠ 未完成连接配置(token+仓库)，无法删除云端。请先配置；只想删本地请用上方「删除选中」', 'err');
             return;
         }
@@ -9586,7 +10515,7 @@ ext: {
             for (let i = 0; i < items.length; i++) {
                 const it = items[i];
                 const name = it.name;
-                showBusy(i + 1, items.length, `删除双端 ${it.label}`);
+                showBusy(i + 1, items.length, `删除双端 ${it.label}`, it.label);
                 const reasons = [];
                 try {
                     // ── 本地：先删角色(卡+全部聊天)，成功后再处理绑定世界书 ──
@@ -9667,6 +10596,10 @@ const CHAT_SYNC_CSS = `
 .cs-body { padding:10px 12px; }
 .cs-label { display:block; margin-bottom:4px; font-size:.88em; font-weight:600; color:var(--SmartThemeBodyColor,var(--grey_color)); opacity:.9; }
 .cs-hint { font-size:.78em; color:var(--SmartThemeBodyColor,var(--grey_color)); opacity:.82; line-height:1.5; margin:4px 0 0; } /* 0.12.136 提示字号 .72→.78 可读性(仍小于正文保持层级) */
+/* 0.13.31 说明折叠：一行小字（视觉小、热区 24+；点开才见三行 + ⚠） */
+.cs-tellbtn { display:inline-flex; align-items:center; gap:3px; margin:2px 0 0; padding:4px 8px; border:0; background:transparent; box-shadow:none; color:var(--SmartThemeBodyColor,var(--grey_color)); opacity:.85; font-size:12px; line-height:1.4; cursor:pointer; border-radius:6px; text-align:left; }
+.cs-tellbtn:hover { opacity:1; background:rgba(128,128,128,.12); }
+.cs-tellbtn:focus-visible { outline:1px solid var(--SmartThemeBorderColor,#666); }
 .cs-ok { color:#6fce6f !important; }   /* 0.12.136 成功状态统一色 */
 .cs-err { color:#e66 !important; }     /* 0.12.136 失败状态统一色(替换散落的内联 #e66) */
 .cs-stack { margin-top:6px; } .cs-stack-sm { margin-top:4px; } /* 0.12.136 间距两档 */
@@ -9682,10 +10615,20 @@ const CHAT_SYNC_CSS = `
 .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor, inherit); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 .cs-btn:hover { filter:brightness(1.15); }
 .cs-btn.cs-primary { border-color:var(--SmartThemeQuoteColor); color:var(--SmartThemeQuoteColor); }
+/* 0.13.30 一键部署命令块：等宽小字、整行铺满、可换行（长 URL 手机不横溢）；点击＝复制
+   0.13.32：一条变两条（Windows 那条 / 手机那条），每条带一枚平台小标签 —— 点哪条复制哪条 */
+.cs-btn.cs-btn-cmd { display:block; width:100%; box-sizing:border-box; text-align:left; white-space:normal; word-break:break-all; font-family:monospace; font-size:.72em; line-height:1.55; padding:6px 8px; }
+.cs-btn.cs-btn-cmd + .cs-btn.cs-btn-cmd { margin-top:4px; }
+.cs-cmd-tag { display:inline-block; margin-right:6px; padding:0 5px; border-radius:6px; border:1px solid var(--SmartThemeBorderColor,#444); background:rgba(128,128,128,.14); font-size:.95em; white-space:nowrap; }
 .cs-current { font-size:.9em; color:var(--SmartThemeBodyColor,inherit); }
+/* 0.13.30 危险红跟主题走：旧值 #ff8787 硬编码，浅色主题下与卡片底只有 2.32:1（正文/控件需 ≥3.0）。
+   与主题正文色混合 ⇒ 深色主题混出浅红、浅色主题混出深红，一个公式两边都够对比度（同余温商店 -ink 那套）。
+   :root 这一层 = ST 自己声明 --SmartTheme* 的那一层（style.css 的 :root + 主题走 documentElement 内联）。
+   实测（家族口径/复合口径）：浅色 7.11 / 5.59（弹窗 4.77）；深色 9.82 / 8.26 —— 改前 2.32 / 1.82 与 7.12 / 5.99（读数与三档几何见 CF后端-M2进展.md §17）。 */
+:root { --cs-danger-ink: color-mix(in srgb, #ff8787 35%, var(--SmartThemeBodyColor, #e1e1e1)); }
 .cs-danger { border:1px solid #a33; border-radius:10px; padding:8px 10px; background:rgba(170,51,51,.08); }
-.cs-danger-title { color:#e06666; font-weight:600; font-size:.88em; display:flex; align-items:center; gap:6px; margin-bottom:4px; }
-.cs-btn.cs-danger-btn { border-color:#a33; color:#ff8787; background:rgba(170,51,51,.15); font-weight:400 !important; }
+.cs-danger-title { color:var(--cs-danger-ink); font-weight:600; font-size:.88em; display:flex; align-items:center; gap:6px; margin-bottom:4px; }
+.cs-btn.cs-danger-btn { border-color:#a33; color:var(--cs-danger-ink); background:rgba(170,51,51,.15); font-weight:400 !important; }
 .cs-btn.cs-danger-btn:hover { filter:brightness(1.2); }
 /* 刷新按钮配色：本地=绿 / 云端=蓝（用户要求与 emoji 一样有辨识色） */
 .cs-btn.cs-btn-local { color:#6fce6f; border-color:rgba(111,206,111,.55); }
@@ -9770,7 +10713,7 @@ const CHAT_SYNC_CSS = `
 .cs-cln-modal .cs-btn { padding:3px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); background:rgba(255,255,255,0.05); color:var(--SmartThemeBodyColor, inherit); cursor:pointer; font-size:.85em; transition:filter .15s ease; }
 .cs-cln-modal .cs-btn:hover:not(:disabled) { filter:brightness(1.25); }
 .cs-cln-modal .cs-btn:disabled { opacity:.4; cursor:not-allowed; }
-.cs-cln-modal .cs-btn.cs-danger-btn { border-color:#a33; color:#ff8787; background:rgba(170,51,51,.2); }
+.cs-cln-modal .cs-btn.cs-danger-btn { border-color:#a33; color:var(--cs-danger-ink); background:rgba(170,51,51,.2); }
 .cs-cln-modal .text_pole { background:rgba(0,0,0,.25); border:1px solid var(--SmartThemeBorderColor,#555); border-radius:6px; color:var(--SmartThemeBodyColor,#eee); padding:2px 6px; font-size:.85em; }
 .cs-cln-fnav { flex:none; display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 12px 6px; border-bottom:1px solid var(--SmartThemeBorderColor,#333); background:linear-gradient(var(--SmartThemeBlurTintColor,#1b1b1b), var(--SmartThemeBlurTintColor,#1b1b1b)), rgb(22,22,26); box-shadow:0 2px 8px rgba(0,0,0,.3); }
 /* 正文独立滚动区: 导航物理固定在其上方, 不依赖 sticky */
@@ -9924,24 +10867,15 @@ async function registerSlashCommand() {
 // ===================== 初始化 =====================
 // 页面加载后：若已保存完整配置，自动静默验证连接（不打扰），并把结果更新到面板状态
 async function autoConnectIfConfigured() {
-    if (!settings.owner || !settings.repo || !settings.token) return;
+    // M2-CF 硬坑⑤：不再自己拼 /user（CF 后端没有那个路由）——四后端统一走 Gitee.test()（git 档 URL/请求头逐字不变）
+    if (!csConfigured()) return;
     try {
-        const base = __csBase();
-        const isGh = base.includes('github'), isGl = base.includes('gitlab.com');
-        const url = `${base}/user${isGh ? '' : (isGl ? '?private_token=' : '?access_token=') + encodeURIComponent(settings.token)}`;
-        const headers = isGl ? { 'PRIVATE-TOKEN': settings.token } : (isGh ? { 'Authorization': 'Bearer ' + settings.token, 'Accept': 'application/vnd.github+json' } : { 'Authorization': 'token ' + settings.token });
-        const r = await fetch(url, { headers, cache: 'no-store' });
-        if (!r.ok) {
-            // 0.12.133 启动自动连接失败也给提示(用户有配置却连不上时不该无声)——轻量 warning 非 error
-            toastr.warning(`⚠️ 启动自动连接失败（HTTP ${r.status}）——点插件设置里的「连接」可重试`, null, { timeOut: 6000 });
-            return;
-        }
-        const u = await r.json();
+        const who = await Gitee.test();
         settings.lastConnectAt = Date.now();
         saveSettingsDebounced();
         __refreshCurRepoLine();
         const st = document.getElementById('cs_testresult');
-        if (st) st.textContent = `✅ 已自动连接：${u.login || u.username}`;
+        if (st) st.textContent = `✅ 已自动连接：${who}`;
     } catch (e) {
         // 0.12.133 同上: 网络异常也给一条轻提示
         try { toastr.warning(`⚠️ 启动自动连接失败：${String((e && e.message) || e).slice(0, 80)}（点「连接」可重试）`, null, { timeOut: 6000 }); } catch { }
@@ -10530,6 +11464,11 @@ window.__stChatSyncDebug = {
     backupConfigToCloud,
     restoreConfigFromCloud,
     listConfigBackups,
+    // 0.13.28 换设备（探针/调试直驱）：官方整包导出 → 分块上云 + 清单判据（纯函数）
+    backupFullArchiveToCloud,
+    csCurrentUserHandle,
+    csFetchOfficialBackupZip,
+    csArchiveFeedMeta,
     pushSelectedWorldbooks,
     importSelectedWorldbooks,
     deleteSelectedWorldbooks,
@@ -10541,6 +11480,10 @@ window.__stChatSyncDebug = {
     putCloudChat,
     getCloudChatSmart,
     planPartialDownload,
+    // 0.13.27 抗抖动（测试/调试）：大卡读取器 + 网络旋钮（CF_NET 就是那个对象本身；e2e 用注入假超时）
+    cardGetSmart: __cardGetSmart,
+    cfNetTuning: CF_NET,
+    csReadBigText,
     get power_user_ref() { return power_user; }, // QA/调试: 官方导出对象(人设表)
     listUserPersonas,
     deleteSelectedUserPersonas,
@@ -10595,9 +11538,46 @@ window.__stChatSyncDebug = {
         if (owner !== undefined) settings.owner = owner;
         if (repo !== undefined) settings.repo = repo;
         if (token !== undefined) settings.token = token;
+        settings.backend = ''; // M2-CF：setConfig 的语义 = "配 git 后端" ⇒ 顺手把后端切回三件套（防上一轮 CF 残留污染 git 套件）
         saveSettingsDebounced();
         return this.configured;
     },
+    // M2-CF：e2e / 真机调试用（切到 CF 后端并清跨后端残留；不传的字段不动）
+    setBackend(be, url, key, name) {
+        settings.backend = (String(be || '') === 'cf') ? 'cf' : '';
+        if (url !== undefined) settings.cfUrl = String(url || '');
+        if (key !== undefined) settings.cfKey = String(key || '');
+        if (name !== undefined) settings.cfName = String(name || '');
+        csClearCaches();
+        csSwitchBackendReset();
+        saveSettingsDebounced();
+        return this.configured;
+    },
+    get backend() { return String(settings.backend || ''); },
+    get connSlots() { return Array.isArray(settings.connSlots) ? settings.connSlots : []; },
+    get lastCloudShaMap() { return settings.lastCloudSha || {}; },
+    // e2e 用：往"云路径键记忆"里塞脏值（验"换后端必须清残留"那把尺子）
+    dirtyMemoryForTest() {
+        settings.lastCloudSha = settings.lastCloudSha || {};
+        settings.lastCloudSha['sync/残留测试/character.png'] = 'aaaa';
+        settings.lastLocalMTime = settings.lastLocalMTime || {};
+        settings.lastLocalMTime['sync/残留测试/character.png'] = 1;
+        settings.cardPending = settings.cardPending || {};
+        settings.cardPending['残留测试'] = { '残留卡': { reason: 'x', ts: 1 } };
+        return { sha: Object.keys(settings.lastCloudSha).length, pend: Object.keys(settings.cardPending).length };
+    },
+    autoConnectIfConfigured,
+    // M2-CF-DBG：e2e 用（快照/恢复连接配置，跑完把副本 restore 回原样，防污染 git 套件）
+    get cfg() { return { backend: settings.backend || '', cfUrl: settings.cfUrl || '', cfKey: settings.cfKey || '', cfName: settings.cfName || '', owner: settings.owner || '', repo: settings.repo || '', token: settings.token || '', server: settings.server || '' }; },
+    applyCfg(o) {
+        for (const k of ['backend', 'cfUrl', 'cfKey', 'cfName', 'owner', 'repo', 'token', 'server']) if (o && o[k] !== undefined) settings[k] = o[k];
+        csClearCaches();
+        saveSettingsDebounced();
+        return this.cfg;
+    },
+    CONFIG_KEEP_KEYS,
+    get backendName() { return csPlatformName(); },
+    csCfgEncode, csCfgDecode, csClearCaches, csConfigured, csIsCF, CFBackend, GitBackend,
     // 基准开关: true→exportChats 阶段A 降级纯串行(读+决策逐条), 仅并发基准用, 默认关
     setBenchSerial(v) { settings.__benchSerial = !!v; saveSettingsDebounced(); return settings.__benchSerial; },
     // 调试: 强制设置生成标志(测试补楼写回时若 __csGenerating 误卡真可清) —— 仅供测试, 平时勿用
@@ -10613,7 +11593,7 @@ window.__stChatSyncDebug = {
     deleteLocalCharacter,
     deleteCharFromCloud,
     get currentCharName() { return currentCharName(); },
-    get configured() { return Boolean(settings.owner && settings.repo && settings.token); },
+    get configured() { return csConfigured(); },
     get lastImport() { return diag.lastRun; },
     chatState(charName) { return chatStateSnapshot(charName || currentCharName() || ''); },
     async loadChat(realFileName, charIdx) { return loadImportedChat(realFileName, charIdx); },
