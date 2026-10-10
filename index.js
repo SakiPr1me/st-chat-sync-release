@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.32'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.34'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -109,7 +109,10 @@ function __csBytesToB64(buf) {
 }
 
 // 0.12.55 默认平台统一: settings.server 为空时按 owner 消解(Gitee 选项本就存空值)——owner 非空=老 Gitee 用户(
-// 或保存过 Gitee), owner 也为空=未配置→默认 GitHub(与面板下拉 selected 判定完全同构; 修"显示 GitHub 却发去 Gitee"的 401)
+// 或保存过 Gitee), owner 也为空=未配置→这里仍回退 GitHub(修"显示 GitHub 却发去 Gitee"的 401)。
+// ★0.13.34（作者 2026-10-11 调下拉顺序）：面板下拉的"未配置默认项"已改成 **自建Cloudflare**（第一项），
+//   但**这段推断一个字不动** —— 它只服务"已经选了某个 Git 平台"的老用户（server 空 + owner 有值 ⇒
+//   还是解析到 Gitee），改它就会动到老用户的连接地址（红线：他们的连接一个字节都不能变）。
 function __csBase() {
     if (csIsCF()) return __csCfRoot(); // M2-CF：CF 档不看 server/owner，只用 cfUrl（硬坑②）
     const v = String(settings.server || '').trim();
@@ -631,7 +634,7 @@ const GitBackend = {
 //   ③ raw 直链必须带 ?key=（<img> 标签带不了自定义请求头）
 function __csCfRoot() { return String(settings.cfUrl || '').trim().replace(/\/+$/, ''); }
 function __csCfEncPath(p) { return String(p).split('/').map(encodeURIComponent).join('/'); }
-let __csCfNameFromCfg = ''; // 配置串（ywp1:）里带的显示名；0.13.31 删了粘贴入口后仅保留兼容读取（正常恒为 ''）
+let __csCfNameFromCfg = ''; // 配置串（ywp1:）里带的显示名：0.13.33 起由"往地址框贴配置串"那条路填（没贴过则为 ''）
 // CF 后端返回的人话（照服务端 error 字段分档；设计 §2.3「错误分档」表）
 function __csCfApiMsg(status, bodyText) {
     let code = '', msg = '';
@@ -6615,10 +6618,10 @@ window.__csManualCheck = async function (btn) {
                         <div id="${id}_slot2" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(128,128,128,0.08)"></div>
                         <label class="cs-label" for="${id}_platform">云平台：</label>
                         <select id="${id}_platform" class="text_pole" style="width:100%;box-sizing:border-box">
-                            <option value="https://api.github.com" ${String(settings.backend || '') !== 'cf' && ((!settings.server && !settings.owner) || String(settings.server || '').includes('github')) ? 'selected' : ''}>GitHub（需能访问外网·单仓库建议&lt;1GB，上限约100GB，默认）</option>
+                            <option value="cf" ${String(settings.backend || '') === 'cf' || (!settings.server && !settings.owner) ? 'selected' : ''}>自建Cloudflare（脚本一键部署 · 速度更快 · 推荐用这个；GitHub 一次传太多会撞每小时上限）</option>
+                            <option value="https://api.github.com" ${String(settings.backend || '') !== 'cf' && String(settings.server || '').includes('github') ? 'selected' : ''}>GitHub（需能访问外网·单仓库建议&lt;1GB，上限约100GB）</option>
                             <option value="https://gitee.com/api/v5" ${String(settings.backend || '') !== 'cf' && (String(settings.server || '').includes('gitee') || (!settings.server && settings.owner)) ? 'selected' : ''}>Gitee（国内直连·单仓库约500MB）</option>
                             <option value="https://gitlab.com/api/v4" ${String(settings.backend || '') !== 'cf' && String(settings.server || '').includes('gitlab.com') ? 'selected' : ''}>GitLab（需能访问外网·单仓库10GiB）</option>
-                            <option value="cf" ${String(settings.backend || '') === 'cf' ? 'selected' : ''}>自建Cloudflare（脚本一键部署，推荐用这个；GitHub 一次传太多会撞每小时上限）</option>
                         </select>
                         <div class="cs-sep"></div>
                         <div id="${id}_repo_row">
@@ -6642,6 +6645,9 @@ window.__csManualCheck = async function (btn) {
                         <button id="${id}_cf_cmd_sh" type="button" class="cs-btn cs-btn-cmd" title="点一下就是复制这行命令（手机 Termux / Linux / macOS）"><span class="cs-cmd-tag">手机/Linux/macOS</span>${escapeHtml(CS_CF_DEPLOY_CMD_SH)}</button>
                         </div>
                         <div class="cs-sep"></div>
+                        <label class="cs-label" for="${id}_cf_cfg">配置串（贴进来自动填好下面两栏）</label>
+                        <input id="${id}_cf_cfg" class="text_pole" style="width:100%;box-sizing:border-box" placeholder="粘贴 ywp1: 开头的那一整行" value="" autocomplete="off">
+                        <div class="cs-sep"></div>
                         <label class="cs-label" for="${id}_cf_url">后端地址（部署脚本会给你）</label>
                         <input id="${id}_cf_url" class="text_pole" style="width:100%;box-sizing:border-box" placeholder="https://ywp-sync-xxxxxx.pages.dev（固定地址）" value="${escapeHtml(settings.cfUrl || '')}" autocomplete="off">
                         <div class="cs-sep"></div>
@@ -6650,7 +6656,7 @@ window.__csManualCheck = async function (btn) {
                             <input id="${id}_cf_key" type="password" class="text_pole" style="flex:1;min-width:0;box-sizing:border-box" placeholder="粘贴访问码" value="${escapeHtml(settings.cfKey || '')}" autocomplete="off">
                             <button id="${id}_cf_key_eye" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="点击查看/隐藏访问码（检查有没有复制漏/多）">👁</button>
                             <button id="${id}_cf_key_copy" type="button" class="cs-btn" style="flex:none;padding:2px 8px;min-height:24px" title="复制当前访问码到剪贴板">📋</button>
-                            <button id="${id}_cf_help" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="怎么弄：注册 → 拿部署令牌 → 跑部署脚本 → 把打印出的配置串贴回来">❓</button>
+                            <button id="${id}_cf_help" type="button" class="cs-btn" style="flex:none;padding:2px 8px" title="怎么弄：注册 → 拿部署令牌 → 跑部署脚本 → 把打印出的整行配置串贴进上面的「配置串」框（会自动填好地址和访问码）">❓</button>
                         </div>
                         </div>
                         <div class="cs-row" style="margin-top:8px">
@@ -7335,6 +7341,62 @@ function wirePanelEvents() {
         eye.textContent = show ? '🙈' : '👁';
         eye.title = show ? '点击隐藏访问码' : '点击查看访问码';
     });
+    // 0.13.33/0.13.34（作者 2026-10-10 / 2026-10-11）：
+    //   ① 「后端地址」框里贴/敲含 ywp1: 的整段 ⇒ 自动拆成地址 + 访问码（0.13.33）
+    //   ② 「配置串」专用小框（0.13.34，就在两栏上面）：贴进去 ⇒ 自动填好下面两栏，
+    //      实现作者那句"直接给出这个框 然后直接复制进去 就会变成下面两个同时好了的样子"
+    //   ★作者明确删过「📋 粘贴配置串一键填」按钮，这里**不加按钮**：只认"往框里贴/敲"这个动作。
+    //   解析用现成的 csCfgDecode（不新写一套解析）；解析失败给一句人话，不刷屏、不乱填。
+    (function __csBindCfgSplit() {
+        const urlInp = document.getElementById('cs_cf_url');
+        const cfgInp = document.getElementById('cs_cf_cfg');
+        const keyInp = document.getElementById('cs_cf_key');
+        if ((!urlInp && !cfgInp) || (!urlInp && !keyInp)) return;
+        if (cfgInp && cfgInp.dataset.csCfgSplitBound) return;
+        if (cfgInp) cfgInp.dataset.csCfgSplitBound = '1';
+        const hint = (t) => { const o = document.getElementById('cs_testresult'); if (o) o.textContent = t; };
+        /** 把"一整段"（可能带着「配置串：」前缀）拆好填进两个栏；成功 true。
+         *  fromDedicatedBox=true 时（配置串框），连 ywp1: 都没有的串也要给一句人话。 */
+        const fillFrom = (text, fromDedicatedBox) => {
+            const raw = String(text == null ? '' : text).trim();
+            // 容错：整行复制时可能把脚本那行的前缀一起带上（"配置串：ywp1:…"）⇒ 从 ywp1: 处起算
+            const at = raw.indexOf('ywp1:');
+            if (at < 0) {
+                if (fromDedicatedBox) hint('这不像配置串：应该是 ywp1: 开头的一整行（部署脚本最后打印的那行）');
+                return false;
+            }
+            let cfg = null;
+            try { cfg = csCfgDecode(raw.slice(at)); }
+            catch (err) { hint(String((err && err.message) || err)); return false; }
+            if (urlInp) urlInp.value = cfg.u;
+            if (keyInp) keyInp.value = cfg.k;
+            __csCfNameFromCfg = String(cfg.n || '');
+            hint('✅ 已自动填写地址和访问码');
+            return true;
+        };
+        // ① 地址框：只认"含 ywp1: 的整段"，普通地址（手输/粘贴）绝不插手
+        if (urlInp) {
+            urlInp.addEventListener('paste', (e) => {
+                const t = (e.clipboardData && e.clipboardData.getData && e.clipboardData.getData('text')) || '';
+                if (t.indexOf('ywp1:') < 0) return;   // 普通粘贴（地址之类）：照旧
+                e.preventDefault();                    // 别把整段配置串原样留在地址框里
+                fillFrom(t, false);
+            });
+            // 兜底：别的途径进来的一整行（右键菜单粘贴 / 拖进来 / 手敲）
+            urlInp.addEventListener('input', () => { if (String(urlInp.value || '').indexOf('ywp1:') >= 0) fillFrom(urlInp.value, false); });
+        }
+        // ② 配置串专用小框：贴进去 ⇒ 填好下面两栏，然后把小框清干净（成功时）
+        if (cfgInp) {
+            cfgInp.addEventListener('paste', (e) => {
+                const t = (e.clipboardData && e.clipboardData.getData && e.clipboardData.getData('text')) || '';
+                e.preventDefault();                    // 别让整段留在小框里（成功与否都靠下面两栏说话）
+                if (fillFrom(t, true)) cfgInp.value = '';
+            });
+            cfgInp.addEventListener('input', () => {
+                if (String(cfgInp.value || '').indexOf('ywp1:') >= 0 && fillFrom(cfgInp.value, true)) cfgInp.value = '';
+            });
+        }
+    })();
     // 0.13.31 说明折叠：自管显隐（不走 <details>——手风琴会把外层「酒馆配置」卡一起关了；
     //   也不靠默认行为：ST 全局"点外面收抽屉"看的是 mousedown，mousedown / click 都要拦住）。
     const tellBtn = $('cs_pack_fold'), tellBody = $('cs_pack_foldbody');
@@ -7364,7 +7426,7 @@ function wirePanelEvents() {
                 <div style="border:1px solid var(--SmartThemeBorderColor,#333);border-radius:10px;padding:8px 10px">
                     ① 复制上面那行适合你的命令（电脑选「Windows（CMD）」那条、手机选另一条），粘进去跑；<br>
                     ② 它会带你注册、拿令牌、自动部署，最后把地址和访问码（连成一行的配置串）打给你；<br>
-                    ③ 脚本最后会把地址和访问码打给你——分别填进下面两个框（地址一框、访问码一框），再点「连接」。
+                    ③ 把那一整行配置串贴进下面的「配置串」框——会自动填好地址和访问码，再点「连接」。
                 </div>
             </div>
         </div>`;
@@ -7523,8 +7585,8 @@ function wirePanelEvents() {
             </div>
             <div style="flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;font-size:.86em;line-height:1.7">
                 <p style="opacity:.9">口令是你在平台账号里创建的一串密钥，插件用它读写你的云端仓库。<b>插件无法替你创建</b>——必须在平台网站登录后自己点一次生成。跟着下面做（三选一，和顶上「云平台」选的一致）：</p>
-                ${row('Gitee（国内直连）', 'https://gitee.com/personal_access_tokens/new', '<br>右上头像 → 设置 → 私人令牌 → 生成新令牌：<b>全选权限</b>，有效期选<b>永久</b>，生成后立即复制（只显示一次）')}
                 ${row('GitHub', 'https://github.com/settings/tokens/new', '<br>进页面后选 <b>Generate new token (classic)</b>：勾选 <b>repo</b> 权限，有效期选 <b>No expiration</b>，生成后复制（只显示一次）。<small>（别选 Fine-grained——还需逐个仓库授权，容易漏）</small>')}
+                ${row('Gitee（国内直连）', 'https://gitee.com/personal_access_tokens/new', '<br>右上头像 → 设置 → 私人令牌 → 生成新令牌：<b>全选权限</b>，有效期选<b>永久</b>，生成后立即复制（只显示一次）')}
                 ${row('GitLab', 'https://gitlab.com/-/user_settings/personal_access_tokens', '<br>Name 随意，Scopes 勾 <b>api</b>（或全选），有效期改到<b>最长（365天）</b>后重新生成，生成后复制（用完新口令后旧的作废）')}
                 <div style="border:1px dashed var(--SmartThemeBorderColor,#444);border-radius:8px;padding:8px 10px;opacity:.9">完成后把口令粘贴到上面「私人令牌」输入框 → 点「连接」验证 → 成功再点「保存配置」。</div>
             </div>
