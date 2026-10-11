@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.43'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.44'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -9922,8 +9922,28 @@ try {
             return v;
         } catch { return null; }
     }
+    // ★0.13.44 防烧穿闸（作者 CF 免费额度被烧穿）：同一 tab 10 秒滑窗内 force（含 force 云拉取）超过 6 次 ⇒
+    //   自动降级为"不带 force"（只用缓存）+ 一次 console.warn；窗口滑出自动恢复。正常手动点「刷新」连点几下不会触发。
+    const CS_FORCE_MAX = 6, CS_FORCE_WIN = 10000;
+    window.__csForceWin = window.__csForceWin || {};
+    function __csForceGuard(tab) {
+        try {
+            const now = Date.now();
+            const arr = (window.__csForceWin[tab] = (window.__csForceWin[tab] || []).filter((t) => now - t < CS_FORCE_WIN));
+            if (arr.length >= CS_FORCE_MAX) {
+                if (!window.__csForceWarnedAt || now - window.__csForceWarnedAt > CS_FORCE_WIN) {
+                    window.__csForceWarnedAt = now;
+                    try { console.warn('检测到异常高频刷新，已自动放慢（防额度被烧）'); } catch { }
+                }
+                return false;
+            }
+            arr.push(now);
+            return true;
+        } catch { return true; }   // fail-open：闸本身出错绝不拦人
+    }
     window.__renderCfgList = async function (mode, opts) {
-        const __force = !!(opts && opts.force);
+        let __force = !!(opts && opts.force);
+        if (__force && !__csForceGuard(window.__cfgTab || '?')) __force = false;   // ★0.13.44：超频 ⇒ 降级为只读缓存
         mode = mode || window.__cfgMode;
         window.__cfgMode = mode;
         const list = $('cs_cfg_list'); const tgt = $('cs_cfg_target'); const st2 = $('cs_cfg2_status');
