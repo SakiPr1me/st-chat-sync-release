@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.42'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.43'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -8677,7 +8677,7 @@ async function __discoverExts() {
     //   缓存 60s: 缓存期内先秒回上次列表, 只有真正超时才重新 discover; 后端 meta 另由 __extMetaFetchedAt 60s 门控异步刷新。
     if (window.__extListAt && Date.now() - window.__extListAt < 60000 && Array.isArray(window.__extListCache)) {
         // 后台兜底: 超 60s 的 meta 刷新(不阻塞返回)
-        if (window.__extMetaFetchedAt && Date.now() - window.__extMetaFetchedAt > 60000) { window.__extMetaFetchedAt = Date.now(); __extMetaFillAsync().catch(() => { }); }
+        if (window.__extMetaFetchedAt && Date.now() - window.__extMetaFetchedAt > 60000) { window.__extMetaFetchedAt = Date.now(); __extMetaFillKick(); }
         return window.__extListCache.slice().sort();
     }
     const r = await fetch('/api/extensions/discover', { cache: 'no-store' });
@@ -8702,15 +8702,25 @@ async function __discoverExts() {
     // 详情( url/branch/commit )并发取
     window.__extMeta = window.__extMeta || {};
     // 后台异步填充元数据(不阻塞列表渲染); 60s 缓存
-    __extMetaFillAsync().catch(() => { });
+    __extMetaFillKick();   // ★0.13.43：延后 200ms + 只在列表画完/仍在拓展页才开跑（限流入口）
     return out.sort();
 }
 // 0.12.105 抽出 meta 填充(列表缓存命中也只刷新 meta, 不重查 discover)
+// ★0.13.43（作者实报"切拓展页特别容易卡、只显示一句静态文字"）：三个死结 ——
+//   ① 老实现 = 全体 Promise.all 无上限并发（几十上百个 /api/extensions/version＝服务端 git ⇒ 把单线程酒馆压住）；
+//   ② 完成回调里 renderCfgList(force:true) ⇒ force 清 discover/meta 缓存(9886) ⇒ 下一次 discover 又踢填充(8705) ⇒
+//      **渲染↔填充死循环**（实测 0.13.42：152 秒 6921 次 force 渲染 + 6922 次 discover，计秒器永远来不及画）；
+//   ③ 分不清"前台在不在拓展页"。⇒ 并发 2 + 每项错峰 150ms、完成只做**不带 force 的**重渲染、防重入。
+const CS_EXT_META_CONC = 2;      // 同时最多 2 个拓展在查（别再出现"请求风暴"）
+const CS_EXT_META_GAP = 150;     // 每项之间错峰(ms)
 async function __extMetaFillAsync() {
+    if (window.__extMetaFilling) return;   // ★防重入（断"填充→渲染→再踢填充"的环）
     const out = window.__extListCache || [];
     if (window.__extMetaFetchedAt && Date.now() - window.__extMetaFetchedAt < 60000 && out.every((f) => window.__extMeta[f])) return;
+    window.__extMetaFilling = true;
     window.__extMetaFetchedAt = Date.now();
-    await Promise.all(out.map(async (full) => {
+    let __qi = 0;
+    const __one = async (full) => {
         const sname = String(full).split('/').pop();
         const jobs = [];
         if (!window.__extDisplayBy[sname]) {
@@ -8766,11 +8776,32 @@ async function __extMetaFillAsync() {
             })().catch(() => { }));
         }
         await Promise.all(jobs);
-    })).then(() => {
-        window.__extMetaReady = true;
-        if (window.__cfgTab === 'ext') { try { window.__renderCfgList(window.__cfgMode, { force: true }); } catch { } }
-    }).catch(() => { });
+    };
+    const __worker = async () => {
+        while (__qi < out.length) {
+            if (window.__cfgTab !== 'ext') return;   // 前台不在拓展页 ⇒ 本轮先停（下次渲染会再踢）
+            const full = out[__qi++];
+            try { await __one(full); } catch { }
+            await new Promise((r) => setTimeout(r, CS_EXT_META_GAP));   // 错峰，别把酒馆服务端打满
+        }
+    };
+    try {
+        const __n2 = Math.max(1, Math.min(CS_EXT_META_CONC, out.length));
+        await Promise.all(Array.from({ length: __n2 }, __worker));
+    } finally { window.__extMetaFilling = false; }
+    window.__extMetaReady = true;
+    if (window.__cfgTab === 'ext') { try { window.__renderCfgList(window.__cfgMode); } catch { } }   // ★不带 force（force 会清缓存 ⇒ 又把填充踢起来 = 死循环）
     return out.sort();
+}
+// ★0.13.43：统一入口 —— 延后 200ms、只在"列表已渲染且还在拓展页、且确实有没问到 meta 的项"才真开跑（其它情况等下次渲染再踢）
+function __extMetaFillKick() {
+    try {
+        if (window.__extMetaFillTimer) return;
+        window.__extMetaFillTimer = setTimeout(() => {
+            window.__extMetaFillTimer = null;
+            try { if (window.__cfgTab !== 'ext') return; const out = window.__extListCache || []; if (!out.some((f) => !window.__extMeta[f])) return; __extMetaFillAsync().catch(() => { }); } catch { }
+        }, 200);
+    } catch { }
 }
 // 扩展名 → extension_settings 键: 无通用规则, 用特例表+规范化匹配(源码实证: JSR=tavern_helper, kimi=kimi_reasoning_injector)
 const EXT_SETTINGS_MAP = { 'JS-Slash-Runner': 'tavern_helper', 'st-kimi-reasoning-injector': 'kimi_reasoning_injector' };
@@ -9910,17 +9941,23 @@ try {
         // ⚠️ 竞态: whereSets 的 listLocal/listCloud 是异步的, renderId 必须先于它生效——否则快速切换时
         //    旧集合会被渲染到新列表上("点了预设没出双端, 再点一次就好了")
         const renderId = ++window.__cfgRenderGen;
+        // ★0.13.43：本地拓展这一页要逐项查版本（慢）⇒ 立刻把忙碌条亮起来（角上那条自带'已 N 秒'），别等列表拉完才亮
+        try { if (tab === 'ext' && mode !== 'cloud') showBusy(0, 0, '正在逐个读取拓展的版本信息…'); } catch { }
         // 0.13.23：无条件起表（每 500ms 刷一次，0.x 秒也显示）；若此刻"忙碌条"正在镜像这条状态行（以 🔄 开头），就让位给它
         try {
             if (window.__csTabTick2) { clearInterval(window.__csTabTick2); window.__csTabTick2 = null; }
+            // ★0.13.43：清"陈旧批量进度"——没有真在跑的忙碌条/批量操作却留着 __csProgState ⇒ 计秒器永久让位 ⇒ 那句静态文字冻住
+            try { if (window.__csProgState && !__csSyncBusy && !__csBusyEl) window.__csProgState = null; } catch { }
             if (st2) {
-                const __t0b = Date.now(); const __genB = renderId; const __nmB = TAB_NAMES[window.__cfgTab] || window.__cfgTab;
+                let __t0b = Date.now(); let __genB = renderId;
                 window.__csTabTick2 = setInterval(() => {
                     try {
-                        if (!st2.isConnected || window.__cfgRenderGen !== __genB) { clearInterval(window.__csTabTick2); window.__csTabTick2 = null; return; }
-                        if (String(st2.textContent || '').startsWith('🔄 ') || window.__csProgState) return;   // 让位给忙碌条/批量进度行
+                        const el = document.getElementById('cs_cfg2_status');   // ★实时取（元素被换掉也不停表）
+                        if (!el) { clearInterval(window.__csTabTick2); window.__csTabTick2 = null; return; }
+                        if (window.__cfgRenderGen !== __genB) { __genB = window.__cfgRenderGen; __t0b = Date.now(); }   // ★有更新的渲染 ⇒ 接管（不自杀；新一轮渲染本来会清掉本表）
+                        if (String(el.textContent || '').startsWith('🔄 ') || window.__csProgState) return;   // 让位给忙碌条/批量进度行（那两处的秒数在角上忙碌条里）
                         const sec = (Date.now() - __t0b) / 1000;
-                        st2.textContent = '正在切换至「' + __nmB + '」分页… 已 ' + Math.floor(sec) + ' 秒' + (sec >= 4 ? '（在拉云端目录、逐条比对；慢一点属正常，不是卡住）' : '');
+                        el.textContent = '正在切换至「' + (TAB_NAMES[window.__cfgTab] || window.__cfgTab) + '」分页… 已 ' + Math.floor(sec) + ' 秒' + (sec >= 4 ? '（在拉云端目录、逐条比对；慢一点属正常，不是卡住）' : '');
                     } catch { }
                 }, CS_TICK_MS);
             }
@@ -10006,10 +10043,11 @@ try {
         //   很慢(正常), 必须让用户知道在加载, 否则像卡死/以为只显示部分
         const slowLocal = (mode !== 'cloud' && tab === 'ext');
         if (mode === 'cloud' || slowLocal) {
-            showBusy(0, 0, mode === 'cloud' ? '正在获取云端列表…' : '正在读取本地拓展…');
+            // ★0.13.43：本地拓展的忙碌条已在上面提前亮起（角上那条自带'已 N 秒'）⇒ 这里只管列表里那句等待文案
+            if (mode === 'cloud') showBusy(0, 0, '正在获取云端列表…');
             list.innerHTML = mode === 'cloud'
                 ? '<p class="cs-hint">⏳ 正在获取云端列表…（云端响应慢时请稍候，最多约 45 秒）</p>'
-                : '<p class="cs-hint">⏳ 正在读取本地拓展…（逐个读取版本/仓库地址，拓展多时稍慢，请稍候）</p>';
+                : '<p class="cs-hint">⏳ 正在逐个读取拓展的版本信息（拓展多时稍慢），请稍候…</p>';
         }
         let names = (mode === 'cloud' ? __cc : __lc);
         try { if (!Array.isArray(names)) names = mode === 'cloud' ? await drv.listCloud() : await drv.listLocal(); }
@@ -10056,6 +10094,7 @@ try {
             : `<p class="cs-hint">${mode === 'cloud' ? '✅ 云端确实没有' + drv.label + '（不是获取失败）——切「本地' + drv.label + '」勾选后点「📤 上传选中」即可传上去' : '（无本地' + drv.label + '）'}</p>`;
         __applyCfgFilter(); // 应用当前筛选(徽章已就位)
         __fillDiffBadges(); // 异步补差异徽章(存在性先行, 内容位渐进显示, 不阻塞列表)
+        if (tab === 'ext' && mode !== 'cloud') __extMetaFillKick();   // ★0.13.43：列表已画完才踢 meta 填充（限流+只在拓展页）
     };
     // 分类切换
     // 分项视图按钮文案跟随 tab(用户要求: 本地预设/云端预设、本地主题/云端主题、本地正则/云端正则; User 栏隐藏)
