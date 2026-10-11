@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.35'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.38'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -311,6 +311,25 @@ const GitBackend = {
             }
         } catch { }
     },
+    // ★0.13.38（§21.2 静默失败审计 · 后端专属）：网络层失败给"四要素人话"（哪儿错 · 谁的问题 · 怎么办 · 原始信息）——
+    //   原来 getText/getBase64 的 GitLab/GitHub 直连 fetch 会把裸 `Failed to fetch` / AbortError 冒给用户。
+    //   （req() 那条路本来就有话术；这里只补"绕过 req 的几处直连"。）
+    async fetchWrapped(url, opts) {
+        try { return await fetch(url, opts); }
+        catch (e) {
+            const raw = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 60);
+            const plat = (typeof csPlatformName === 'function') ? csPlatformName() : '云端';
+            if (e && e.name === 'AbortError') {
+                const er = new Error('超时（自己等太久）：' + plat + ' 一直没响应 · 这是「你到云端的这一跳」不稳（不是仓库名/令牌的问题）⇒ 过一会儿再点一次；反复如此就点「连接」自查 · 原始信息：' + raw);
+                er.csNetErr = true; throw er;
+            }
+            if (/failed to fetch|network|load failed|err_/i.test(raw)) {
+                const er = new Error('连接被掐（Failed to fetch）：网络 / 运营商 / 代理把这条连接掐了 · 云端（' + plat + '）本身没故障 ⇒ 过一会儿再点一次；反复如此就点「连接」自查（开/关代理、换网络）· 原始信息：' + raw);
+                er.csNetErr = true; throw er;
+            }
+            throw new Error('请求失败（' + plat + '）：' + raw);
+        }
+    },
     async req(path, opts = {}) {
         const method = opts.method || 'GET';
         const timeout = opts.timeout || 45000;
@@ -362,7 +381,7 @@ const GitBackend = {
         if (this.isGitlab()) {
             const base = (settings.server || '').replace(/\/$/, '');
             const branch = await this.glEnsureBranch();
-            const r = await fetch(`${base}/projects/${encodeURIComponent(`${settings.owner}/${settings.repo}`)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(branch)}`, { headers: { 'PRIVATE-TOKEN': settings.token }, cache: 'no-store' });
+            const r = await this.fetchWrapped(`${base}/projects/${encodeURIComponent(`${settings.owner}/${settings.repo}`)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(branch)}`, { headers: { 'PRIVATE-TOKEN': settings.token }, cache: 'no-store' });   // ★0.13.38
             if (r.status === 404) return null;
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return { content: await r.text(), sha: '1' };
@@ -372,7 +391,7 @@ const GitBackend = {
             const j = await this._ghContentsGet(path);
             if (!j) return null;
             if (!j.content && j.sha) {
-                const b = await fetch(`${this.base}/repos/${settings.owner}/${settings.repo}/git/blobs/${j.sha}`, { headers: this.auth() });
+                const b = await this.fetchWrapped(`${this.base}/repos/${settings.owner}/${settings.repo}/git/blobs/${j.sha}`, { headers: this.auth() });   // ★0.13.38
                 if (b.ok) { const bj = await b.json(); if (bj.content && bj.encoding === 'base64') return { content: b64Decode(bj.content), sha: j.sha }; }
                 return null;
             }
@@ -390,7 +409,7 @@ const GitBackend = {
         if (this.isGitlab()) {
             const base = (settings.server || '').replace(/\/$/, '');
             const branch = await this.glEnsureBranch();
-            const r = await fetch(`${base}/projects/${encodeURIComponent(`${settings.owner}/${settings.repo}`)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(branch)}`, { headers: { 'PRIVATE-TOKEN': settings.token }, cache: 'no-store' });
+            const r = await this.fetchWrapped(`${base}/projects/${encodeURIComponent(`${settings.owner}/${settings.repo}`)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(branch)}`, { headers: { 'PRIVATE-TOKEN': settings.token }, cache: 'no-store' });   // ★0.13.38
             if (r.status === 404) return null;
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const buf = new Uint8Array(await r.arrayBuffer());
@@ -402,7 +421,7 @@ const GitBackend = {
             const j = await this._ghContentsGet(path);
             if (!j) return null;
             if (!j.content && j.sha) {
-                const b = await fetch(`${this.base}/repos/${settings.owner}/${settings.repo}/git/blobs/${j.sha}`, { headers: this.auth() });
+                const b = await this.fetchWrapped(`${this.base}/repos/${settings.owner}/${settings.repo}/git/blobs/${j.sha}`, { headers: this.auth() });   // ★0.13.38
                 if (b.ok) { const bj = await b.json(); if (bj.content && bj.encoding === 'base64') return { b64: bj.content, sha: j.sha }; }
                 return null;
             }
@@ -437,7 +456,7 @@ const GitBackend = {
     async glCommit(actions, message) {
         const base = (settings.server || '').replace(/\/$/, '');
         const branch = await this.glEnsureBranch();
-        const r = await fetch(`${base}/projects/${encodeURIComponent(`${settings.owner}/${settings.repo}`)}/repository/commits`, {
+        const r = await this.fetchWrapped(`${base}/projects/${encodeURIComponent(`${settings.owner}/${settings.repo}`)}/repository/commits`, {   // ★0.13.38
             method: 'POST', headers: this.auth(), body: JSON.stringify({ branch, commit_message: message || 'sync', actions }),
         });
         if (!r.ok) throw new Error('GitLab写入失败 HTTP ' + r.status + ' ' + (await r.text()).slice(0, 90));
@@ -676,11 +695,24 @@ function cfNetRetryWaitMs() {
 // 网络层失败的四要素人话（哪儿错 · 谁的问题 · 怎么办）；与 HTTP 层（errOf/__csCfApiMsg）互不相同。
 function __csCfNetFailMsg(lastErr, retries, isRead) {
     const aborted = !!(lastErr && lastErr.name === 'AbortError');
-    const how = isRead ? '已自动重试 ' + retries + ' 次仍没通' : '写请求不自动重试（避免重复提交）';
+    const how = isRead ? '已自动重试 ' + retries + ' 次仍没通' : '写请求不重复提交（只有无 sha 的覆盖式写会自动重试一次；带 sha 的条件写不重试）';   // ★0.13.37 文案随写重试改
     const raw = String((lastErr && lastErr.message) || lastErr || '').replace(/\s+/g, ' ').slice(0, 60);
     return aborted
         ? '超时（自己等太久）：请求一直没响应 · 这是"你到 Cloudflare 的一跳"不稳，不是地址 / 访问码的问题 · ' + how + ' ⇒ 过一会儿再点一次；经常这样就把「云平台」换成 Gitee/GitHub'
         : '连接被掐（Failed to fetch）：网络 / 运营商 / 代理把这条连接掐了 · ' + how + ' ⇒ 过一会儿再点一次；经常这样就把「云平台」换成 Gitee/GitHub' + (raw && !/failed to fetch/i.test(raw) ? ' · 原始信息：' + raw : '');
+}
+// ★0.13.37（作者"能修的都修"；静默失败审计的配套）：判定"这个写失败是不是**连接层/瞬时**"——
+//   只有这一档才允许对**无 sha 的幂等写**重试一次。
+//   ✅ 算：连接层（req 里连不上/被掐抛的"超时（自己等太久）"/"连接被掐（Failed to fetch）"）·
+//          网关/后端瞬时（502/503/504 · 500（含 D1 瞬时：D1_ERROR …/db 相关））。
+//   ❌ 不算：一切 4xx（401/403/404/409/413/429…）—— 重试没意义、409 更会掩盖"两台设备抢写"。
+function __csCfWriteRetryable(e) {
+    const m = String((e && e.message) || e || '');
+    if (/^自建后端临时故障（HTTP (502|503|504)）/.test(m)) return true;
+    if (/^自建后端内部出错（HTTP 500）/.test(m)) return true;
+    if (/^超时（自己等太久）/.test(m)) return true;
+    if (/^连接被掐（Failed to fetch）/.test(m)) return true;
+    return false;
 }
 const CFBackend = {
     get base() { return __csCfRoot(); },
@@ -726,8 +758,9 @@ const CFBackend = {
             return new Response(all, { status: r.status, statusText: r.statusText, headers: r.headers });
         } catch { return r; }
     },
-    // 超时/重试（0.13.27 抗抖动）：读请求 = 停摆看门狗 + 换连接重试（最多 CF_NET.maxTry 次、间隔 1~3 秒随机）；
-    //   写请求 = 只试 1 次（防重复提交；总超时 45 秒照旧）。★409 绝不重试（两台设备抢写，重试会掩盖冲突）。
+    // 超时/重试（0.13.27 抗抖动，0.13.37 起写侧补一档）：读请求 = 停摆看门狗 + 换连接重试（CF_NET.maxTry 次）；
+    //   写请求 = 这一层仍只试 1 次（总超时 45 秒）；**无 sha 的幂等写**的"瞬时失败重试一次"在 putIdempotent() 里做，
+    //   带 sha 的条件写与 409 一律不重试（两台设备抢写，重试会掩盖冲突）。
     //   ★改动只在 CF 档：GitBackend.req 一个字没动（GitHub/Gitee/GitLab 行为逐字不变）。
     async req(path, opts = {}) {
         const method = opts.method || 'GET';
@@ -815,17 +848,34 @@ const CFBackend = {
     async putText(path, content, sha, message) {
         const body = { content: b64Encode(content), message: message || `sync ${path}` };
         if (sha) body.sha = sha;
-        const r = await this.req(path, { method: 'PUT', body: JSON.stringify(body), noRetry: true });
+        const r = await this.putIdempotent(path, body);   // ★0.13.37：无 sha 的写走"瞬时失败重试一次"
         const j = await r.json().catch(() => null);
         const newSha = (j && j.content && j.content.sha) ? j.content.sha : (j && j.sha);
         __evictChatsDirOf(path);
         return newSha;
     },
+    // ★0.13.37：**无 sha 的幂等写**专线（纯新建/覆盖式 PUT）——遇"连接层/瞬时"失败自动重试一次。
+    //   为什么安全：无 sha 的 PUT 是绝对覆盖（同一份 body 重发结果相同）；为什么要做：真后端一次 D1 瞬时错
+    //   （Network connection lost ⇒ HTTP 500）就把 1.2MB 大卡的第 2 块打断、manifest 没写成（云端"半份"）。
+    //   ★带 sha 的条件写**不**走这里（仍单发、409 原样透出）；重试打一句 console.warn，不静默。
+    async putIdempotent(path, bodyObj) {
+        const body = JSON.stringify(bodyObj);
+        const one = () => this.req(path, { method: 'PUT', body, noRetry: true });
+        try { return await one(); }
+        catch (e) {
+            if (bodyObj && bodyObj.sha) throw e;                    // 条件写：绝不重试
+            if (!__csCfWriteRetryable(e)) throw e;                  // 非瞬时：不重试
+            try { console.warn('[chat-sync] 写 ' + path + ' 遇到瞬时错误，自动重试一次：' + String((e && e.message) || e).slice(0, 140)); } catch { }
+            await new Promise((rs) => setTimeout(rs, 1200));
+            try { return await one(); }
+            catch (e2) { const m = String((e2 && e2.message) || e2); const err = new Error(m + '（这个写已自动重试一次，仍失败）'); err.cause = e2; throw err; }
+        }
+    },
     // 写二进制（内容已是 base64，不要再编码）
     async putBase64(path, b64, sha, message) {
         const body = { content: String(b64 || '').replace(/\s/g, ''), message: message || `sync ${path}` };
         if (sha) body.sha = sha;
-        const r = await this.req(path, { method: 'PUT', body: JSON.stringify(body), noRetry: true });
+        const r = await this.putIdempotent(path, body);   // ★0.13.37：无 sha 的写走"瞬时失败重试一次"
         const j = await r.json().catch(() => null);
         const newSha = (j && j.content && j.content.sha) ? j.content.sha : (j && j.sha);
         __evictChatsDirOf(path);
@@ -837,17 +887,26 @@ const CFBackend = {
     },
     // 列目录：服务端一条 SQL 给全（空目录 = 200 + []，不是 404）
     async listEntries(path) {
-        const r = await this.req('', { absUrl: this.listUrl(path, false) });
+        const abs = this.listUrl(path, false);
+        const r = await this.req('', { absUrl: abs });
         if (r.status === 404) return [];
         const j = await r.json().catch(() => null);
-        if (!Array.isArray(j)) return [];
+        if (!Array.isArray(j)) {
+            // ★0.13.36（TT 冒烟支 P2）：响应不是 JSON 时以前**静默当"空目录"** ⇒ 出过"首次连接五行恒 0"的假读数
+            //   （典型成因：base 还没落定 ⇒ URL 退化成相对路径 ⇒ 打到酒馆自己的源、SPA 兜底 200+HTML）。
+            //   留一句 warn（带落点 URL），读数不再无声无息。
+            if (r.status === 200) { try { console.warn('[chat-sync] 列目录响应不是 JSON（可能地址未落定 / 被 SPA 兜底页接管）· 落点 ' + abs); } catch { } }
+            return [];
+        }
         return j.map((x) => ({ name: x.name, path: x.path, type: x.type === 'dir' ? 'dir' : 'file', sha: x.type === 'dir' ? '' : (x.sha || ''), size: Number(x.size) || 0 }));
     },
     // 递归列全部文件：一次请求（CF 没有 N+1）
     async listAllFiles(path, acc = []) {
-        const r = await this.req('', { absUrl: this.listUrl(path, true) });
+        const abs = this.listUrl(path, true);
+        const r = await this.req('', { absUrl: abs });
         if (r.status === 404) return acc;
         const j = await r.json().catch(() => null);
+        if (r.status === 200 && !Array.isArray(j)) { try { console.warn('[chat-sync] 递归列目录响应不是 JSON（可能地址未落定 / 被 SPA 兜底页接管）· 落点 ' + abs); } catch { } }   // ★0.13.36（同 listEntries：不再静默当空）
         const out = Array.isArray(j) ? j.filter((x) => x.type === 'file').map((x) => ({ path: x.path, sha: x.sha || '', size: Number(x.size) || 0 })) : [];
         return acc.concat(out);
     },
@@ -941,6 +1000,24 @@ async function getWorldContent(name) {
     } catch {
         return null;
     }
+}
+
+// ★0.13.36-③（§20 观察 3 · TT 冒烟支）：世界书"本地到底还有没有"这一步**以服务端文件为准**。
+//   背景：loadWorldInfo 走前端 worldInfoCache —— 删过的世界书在"缓存没被清"的宿主上仍返回旧对象（诈尸）⇒
+//   我们拿旧内容判成"同名不同内容"、云端导入时多弹一次冲突框。这里直读 /api/worldinfo/get（ST 对"文件不存在"
+//   回空壳 {entries:{}}），只在"要判同名同内容"且缓存说"有"时调一次（不引入无谓请求）。
+//   返回 true = 服务端有实体（或读失败/异常 ⇒ 保守不改原判定）；false = 服务端明确没有实体。
+async function worldInfoExistsOnServer(name) {
+    try {
+        if (!name) return true;
+        const c = getContext();
+        const r = await fetch('/api/worldinfo/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ name }), cache: 'no-store' });
+        if (!r.ok) return true;   // 服务端读失败 ⇒ 保守：按"有"处理（回退改前判定，不误伤）
+        const j = await r.json().catch(() => null);
+        if (!j || typeof j !== 'object') return true;
+        const e = j.entries;
+        return !!(e && typeof e === 'object' && Object.keys(e).length > 0);
+    } catch { return true; }
 }
 
 // 取完整角色卡 PNG base64（走 ST 官方 export 接口）
@@ -1051,7 +1128,25 @@ const SEG_MIN_MSGS = 200;   // 低于此楼数不分段（避免小聊天文件�
 const SEG_PART_SIZE = 100;  // (保留兼容)固定每段楼数 —— 仅老数据/单测用, 生产已改按大小自适应
 const SEG_TARGET_BYTES = 1024 * 1024; // 每段目标大小 ~1MB(自适应切段): 重楼层自动少几楼一段/轻楼层自动多几楼一段; 续写只重传 ≤1MB 的末段, 整条取回请求数=大小MB数
 // ── 纯函数（单测覆盖）──
+// ★0.13.38-⑧（§21.1-15）：批量汇总——**只要带失败项就改用警示色**（文案一个字不改；只换 toastr 档位）。
+function csSumToast(msg, failN, okStyle) {
+    try {
+        const s2 = String(msg);
+        if (Number(failN) > 0) { toastr.warning(s2); return; }
+        (okStyle === 'success' ? toastr.success : toastr.info)(s2);
+    } catch { }
+}
 function manifestPathOf(chatPath) { return String(chatPath).replace(/\.jsonl$/i, '.manifest.json'); }
+// ★0.13.38（§21.1-5/6）：聊天的「逻辑名」归一 —— 云端文件名有两种形态（<名>.jsonl / <名>.jsonl.jsonl，取决于那条上传路径
+//   是否已带扩展名；实见 chat-list.json 里存 `X.jsonl.jsonl`、分段文件却是 `X.jsonl.p001.jsonl`）⇒ 比较前把重复的
+//   `.jsonl` 尾巴与副产物后缀一律削干净，避免把「同一场聊天」判成两个名字（假报未登记）。
+function __csChatStemOf(name) {
+    return String(name || '')
+        .replace(/^chats\//, '')
+        .replace(/\.meta\.json$/, '')
+        .replace(/\.manifest\.json$/, '')
+        .replace(/(\.p\d{3}\.jsonl|\.jsonl)+$/i, '');
+}
 function partFileName(stem, i) { return `${stem}.p${String(i + 1).padStart(3, '0')}.jsonl`; }
 function splitChatSegments(messages, partSize) {
     const out = [];
@@ -2368,7 +2463,7 @@ async function pushSelectedCharacters(charNames) {
     hideBusy();
     const skipTxt = skipReasons.length ? `，跳过 ${skipLocal}（${csShortList(skipReasons.map(x=>`${x.name}:${x.reason}`))}）` : '';
     const failTxt = failReasons.length ? `，失败 ${fail}（${csShortList(failReasons.map(x=>`${x.name}:${x.reason}`))}）` : '';
-    toastr.info(`选中角色上传：成功 ${ok} / 共 ${total}${skipTxt}${failTxt}`);
+    csSumToast(`选中角色上传：成功 ${ok} / 共 ${total}${skipTxt}${failTxt}`, fail);   // ★0.13.38-⑧：带失败项 ⇒ 警示色（文案不改）
     return { ok, fail, skipLocal, skipReasons, failReasons };
 }
 
@@ -2415,7 +2510,7 @@ async function importSelectedCharacters(charNames) {
     hideBusy();
     const skipTxt = skipCloudNames.length ? `，跳过(云端无该角色) ${skipCloud}（${skipCloudNames.join('、')}）` : '';
     const failTxt = failedReasons.length ? `，失败 ${fail}（${failedReasons.map(x=>`${x.name}:${x.reason}`).join('、')}）` : '';
-    toastr.info(`选中角色导入：成功 ${ok} / 共 ${total}${skipTxt}${failTxt}`);
+    csSumToast(`选中角色导入：成功 ${ok} / 共 ${total}${skipTxt}${failTxt}`, fail);   // ★0.13.38-⑧
     return { ok, fail, skipCloud, skipCloudNames, failReasons: failedReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -3414,7 +3509,10 @@ async function importSelectedWorldbooks(names) {
                 const cloud = await Gitee.getText(p);
                 if (!cloud) { fail.push(name); failReasons.push({ name, reason: '云端无该世界书' }); continue; }
                 // 本地已有且内容一致 → 跳过；不同 → 冲突弹窗（替换/统统替换/另存副本/统统另存副本），与分项导入同一套
-                const localW = await getWorldContent(name);
+                // ★0.13.36-③（§20 观察 3）：前端缓存可能"诈尸"（删过的世界书 loadWorldInfo 仍返回旧对象）⇒
+                //   缓存说"本地有"时，用一次服务端读复核（绕开缓存）；服务端明确没有 ⇒ 按"本地无"处理，不再误弹冲突框。
+                let localW = await getWorldContent(name);
+                if (localW && !(await worldInfoExistsOnServer(name))) localW = null;
                 let importName = name;
                 if (localW && String(localW) === String(cloud.content)) { skipped.push(name); settings.lastCloudSha[p] = cloud.sha; continue; }
                 if (localW) {
@@ -3852,7 +3950,7 @@ async function pushSelectedConnPresets(items) { // items: [{apiId, name}]
         }
         hideBusy();
         saveSettingsDebounced(); // 落盘 lastCloudSha 记忆
-        toastr.info(`上传预设：成功 ${ok.length} / 共 ${items.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`);
+        csSumToast(`上传预设：成功 ${ok.length} / 共 ${items.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`, fail.length, 'info');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -3955,7 +4053,7 @@ async function importSelectedConnPresets(items) { // items: [{apiId, name}]
         }
         saveSettingsDebounced();
         hideBusy();
-        toastr.info(`导入预设：成功 ${ok.length} / 共 ${items.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`);
+        csSumToast(`导入预设：成功 ${ok.length} / 共 ${items.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`, fail.length, 'info');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -4040,7 +4138,7 @@ async function pushSelectedThemes(names) {
         }
         hideBusy();
         saveSettingsDebounced(); // 落盘 lastCloudSha 记忆
-        toastr.info(`上传主题：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`);
+        csSumToast(`上传主题：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`, fail.length, 'info');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -4195,7 +4293,7 @@ async function importSelectedThemes(names) {
             } catch (e) { fail.push(name); failReasons.push({ name, reason: (e && e.message) || String(e) }); }
         }
         hideBusy();
-        toastr.info(`导入主题：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`);
+        csSumToast(`导入主题：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`, fail.length, 'info');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -4245,7 +4343,7 @@ async function pushSelectedRegex(names) {
         }
         hideBusy();
         saveSettingsDebounced(); // 落盘 lastCloudSha 记忆
-        toastr.info(`上传全局正则：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`);
+        csSumToast(`上传全局正则：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`, fail.length, 'info');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -4293,7 +4391,7 @@ async function importSelectedRegex(names) {
         saveSettingsDebounced(); // 官方保存路径：页面活设置 + 正确版本号(ST/TT 通用)
         saveSettingsDebounced();
         hideBusy();
-        toastr.info(`导入全局正则：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`);
+        csSumToast(`导入全局正则：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map(x => `${x.name}:${x.reason}`))}）` : ''}`, fail.length, 'info');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -4601,6 +4699,8 @@ async function uploadUserPersonasToCloud(files) {
         } catch (e) { fail.push(file); failReasons.push({ name: file, reason: (e && e.message) || String(e) }); }
     }
     hideBusy(); // 0.12.134 结束进度
+    // ★0.13.38-⑦（§21.1-10）：这条路径原来失败只写面板状态行（离开面板就看不到）⇒ 补一条 toast（与其它模块同款）。
+    if (fail.length) { try { toastr.error('上传人设失败 ' + fail.length + ' 条（' + csShortList(failReasons.map((x) => `${x.name}:${x.reason}`)) + '）'); } catch { } }
     return { ok: ok.length, fail: fail.length, failReasons };
 }
 // 从云端下载选中人设到本地: 图片经官方 /api/avatars/upload(overwrite 保文件名), 注册人设名/描述
@@ -5582,12 +5682,13 @@ function __diffOf(cloudObj, localText, path) {
     __diffCache[path] = { val: r, ts: now };
     return r;
 }
-const DIFF_LABEL = { same: '✓', local: '本地新', cloud: '云端新', diff: '两边不同' };
+const DIFF_LABEL = { same: '✓', local: '本地新', cloud: '云端新', diff: '两边不同', broken: '云端不完整' };   // ★0.13.38：缺清单/主文件
 const DIFF_TITLE = {
     same: '内容指纹一致，勾选同步时会自动跳过',
     local: '本地内容较新（云端未被别处改过），上传会更新云端',
     cloud: '云端内容较新（别处上传过或尚未拉取），导入会更新本地',
     diff: '两边内容不同，且无法判断哪边更新',
+    broken: '云端缺清单/主文件（换设备导入会读不到这一维）⇒ 在本机把这一个重新上传一次即可补齐',   // ★0.13.38
 };
 // 渲染后异步补齐差异徽章(存在性徽章先出, 内容位后补; 并发3防限流)
 // 批量差异比对: 一次目录请求(拿sha=内容哈希) + 本地算 blob sha 对比, 不再逐项下载云端内容
@@ -6999,8 +7100,9 @@ function wirePanelEvents() {
         const prevChecked = new Set([...document.querySelectorAll('input[name="cs_role_sel"]:checked')].map((c) => c.value));
         // 存在性徽章: 拿对侧名单做交集(仅本地/仅云端/双端), 列目录一次不下载内容
         let sideSet = new Set();
+        let sideErr = false;   // ★0.13.38-⑤（§21.2 反向骗人）：云端列目录失败**不许当成"没有"**（原来 catch{} ⇒ 全行"仅本地"）
         if (mode === 'local') {
-            try { sideSet = new Set(await Gitee.listDir('sync')); } catch { }
+            try { sideSet = new Set(await Gitee.listDir('sync')); } catch { sideErr = true; }
         } else {
             sideSet = new Set((getContext().characters || []).filter((x) => x && x.name && !String(x.name).startsWith('Group')).map((x) => x.name));
         }
@@ -7054,9 +7156,12 @@ function wirePanelEvents() {
             grp.forEach((x, i) => { x.idxInGroup = i + 1; x.groupSize = grp.length; ordered.push(x); });
         }
         rows = ordered;
-        list.innerHTML = rows.length
+        // ★0.13.38-⑤：列目录失败 ⇒ 顶部一行可读标记（这屏不算数，别拿"仅本地"当真）
+        const __sideErrLine = sideErr ? ('<p class="cs-hint" style="margin:0 0 8px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px">⚠ 云端清单读取失败（多半是网络/代理）—— 这一屏的「仅本地 / 双端」暂时不可信（不代表云端没有），点上面的「🔄 刷新」重试一次</p>') : '';
+        list.innerHTML = __sideErrLine + (rows.length
             ? rows.map((r) => {
                 const both = sideSet.has(r.name);
+                const __whereTxt = sideErr ? '云端读取失败' : (both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端'));   // ★0.13.38-⑤
                 const whereCls = mode === 'local' ? (both ? 'both' : 'local') : (both ? 'both' : 'cloud');
                 const grpSize = r.groupSize || 1;
                 const pend = r.avatar && __cardPendingOf(r.name, r.avatar);
@@ -7070,9 +7175,9 @@ function wirePanelEvents() {
                 const label = grpSize > 1 ? `${r.name} ·${r.idxInGroup}/${grpSize}` : r.name;
                 const tip = `${r.name}${grpSize > 1 ? `（同名第 ${r.idxInGroup}/共 ${grpSize} 张）` : ''} · 卡面文件 ${r.hint || r.name}.png${r.primary ? ' · 主卡' : ''}`;
                 const hidden = r.hint ? `<span style="display:none">${escapeHtml(r.hint)} ${escapeHtml(r.hint)}.png</span>` : '';
-                return `<label class="cs-role-item" data-name="${escapeHtml(r.name)}"><input type="checkbox" value="${escapeHtml(r.key)}" name="cs_role_sel" ${prevChecked.has(r.key) ? 'checked' : ''}>${img}<b class="cs-cln-where cs-cln-where-${whereCls}">${both ? '双端' : (mode === 'local' ? '仅本地' : '仅云端')}<span class="cs-where-diff" data-where-diff=""></span></b>${chipPend}<span title="${escapeHtml(tip)}">${escapeHtml(label)}</span>${hidden}</label>`;
+                return `<label class="cs-role-item" data-name="${escapeHtml(r.name)}"><input type="checkbox" value="${escapeHtml(r.key)}" name="cs_role_sel" ${prevChecked.has(r.key) ? 'checked' : ''}>${img}<b class="cs-cln-where cs-cln-where-${whereCls}">${__whereTxt}<span class="cs-where-diff" data-where-diff=""></span></b>${chipPend}<span title="${escapeHtml(tip)}">${escapeHtml(label)}</span>${hidden}</label>`;
             }).join('')
-            : `<p class="cs-hint">（无${mode === 'cloud' ? '云端' : '本地'}角色）</p>`;
+            : `<p class="cs-hint">（无${mode === 'cloud' ? '云端' : '本地'}角色）</p>`);
         // 待确认配对：点标记 → 选这张卡对应云端哪一条 → 记绑定（之后上传/导入都按它走）
         if (!list.dataset.pairBound) {
             list.dataset.pairBound = '1';
@@ -7108,16 +7213,28 @@ function wirePanelEvents() {
                 for (const f of files) {
                     const m2 = String(f.path).match(/^sync\/([^/]+)\/(.*)$/);
                     if (!m2) continue;
-                    const e = (byChar[m2[1]] = byChar[m2[1]] || { cardSha: '', chunks: [], chats: [], cards: {} });
+                    const e = (byChar[m2[1]] = byChar[m2[1]] || { cardSha: '', cardMan: false, chunks: [], chats: [], cards: {}, chatStems: new Set(), chatMan: {}, chatManPath: {}, chatParts: {}, chatSeg: {}, chatWhole: {}, hasChatList: false, chatList: null });
                     const rest = m2[2];
                     if (rest === 'character.png') e.cardSha = f.sha;
+                    else if (rest === 'character.png.manifest.json') e.cardMan = true;
                     else if (rest.startsWith('character.png.parts/')) e.chunks.push({ rest, sha: f.sha });
-                    else if (rest.startsWith('chats/') && rest.endsWith('.manifest.json')) e.chats.push({ rest, sha: f.sha });
+                    else if (rest === 'chat-list.json') e.hasChatList = true;
+                    else if (rest.startsWith('chats/')) {
+                        const stem = __csChatStemOf(rest);   // ★0.13.38：两种命名形态都归到同一逻辑名
+                        if (stem && !stem.startsWith('.')) {
+                            e.chatStems.add(stem);
+                            if (rest.endsWith('.manifest.json')) { e.chats.push({ rest, sha: f.sha }); e.chatMan[stem] = true; e.chatManPath[stem] = f.path; }
+                            else if (/\.p\d{3}\.jsonl$/.test(rest)) { e.chatParts[stem] = (e.chatParts[stem] || 0) + 1; e.chatSeg[stem] = (e.chatSeg[stem] || 0) + 1; }
+                            else if (/\.jsonl$/.test(rest)) { e.chatParts[stem] = (e.chatParts[stem] || 0) + 1; e.chatWhole[stem] = true; }
+                        }
+                    }
                     else {
                         const mc = rest.match(/^cards\/([^/]+)\.png$/);
                         const mp = rest.match(/^cards\/([^/]+)\.png\.parts\//);
+                        const mm = rest.match(/^cards\/([^/]+)\.png\.manifest\.json$/);
                         if (mc) { const b = (e.cards[mc[1]] = e.cards[mc[1]] || { chunks: [] }); b.sha = f.sha; b.file = rest; }
                         else if (mp) { const b = (e.cards[mp[1]] = e.cards[mp[1]] || { chunks: [] }); b.chunks.push({ rest, sha: f.sha }); }
+                        else if (mm) { const b = (e.cards[mm[1]] = e.cards[mm[1]] || { chunks: [] }); b.man = true; }
                     }
                 }
                 let cursor2 = 0;
@@ -7137,7 +7254,7 @@ function wirePanelEvents() {
                             if (!lAvatar && cid) lAvatar = __localAvatarForCardId(name, cid);
                             if (!lAvatar && !cid) { const same = __cardsNamed(name); if (same.length === 1) lAvatar = __stemOf(same[0].avatar) + '.png'; }
                             if (!cid && lAvatar) { try { cid = await __cardIdForAvatar(name, lAvatar); } catch { } }
-                            const side = cid ? (e.cards[cid] || null) : { sha: e.cardSha, chunks: e.chunks, file: 'character.png' };
+                            const side = cid ? (e.cards[cid] || null) : { sha: e.cardSha, chunks: e.chunks, man: e.cardMan, file: 'character.png' };   // ★0.13.38：带上 manifest 事实
                             const ch = lAvatar ? __charByAvatar(lAvatar) : null;
                             try {
                                 if (lAvatar && side) {
@@ -7166,11 +7283,19 @@ function wirePanelEvents() {
                                     }
                                 }
                             } catch { }
+                            // ★0.13.38（§21.1-3）：卡这一维"完整"判据 —— 分块卡**必须有 manifest**（读卡器按 manifest 读）；
+                            //   有分块、无 manifest ⇒ 云端读不出来，绝不许报"卡:一致"（判 broken，title 点名）。
+                            if (det.card === 'same' && side && side.chunks && side.chunks.length && !side.man) { det.card = 'broken'; det.cardWhy = '清单缺'; }
                             try {
                                 const wname = ch && ch.data && ch.data.extensions && ch.data.extensions.world;
                                 if (wname) {
-                                    const wf = files.find((f) => f.path === 'sync/' + name + '/world.json');
+                                    // ★0.13.38（§21.1-7）：卡绑了世界书却找不到云端文件 ⇒ 判 broken（title 点名"文件缺"）；
+                                    //   主卡 sync/<名>/world.json / 非主卡 cards/<id>.world.json 两条路径都认。
+                                    const wf = files.find((f) => f.path === 'sync/' + name + '/world.json')
+                                        || (cid ? files.find((f) => f.path === 'cards/' + cid + '.world.json') : null);
+                                    if (wname && !wf) { det.wb = 'broken'; det.wbWhy = '文件缺'; }
                                     if (wf) {
+                                    const wfPath = wf.path;
                                         const wc = await getWorldContent(wname);
                                         if (wc) {
                                             const bytesSame = ((await gitBlobSha(new TextEncoder().encode(String(wc)))) === wf.sha);
@@ -7178,8 +7303,9 @@ function wirePanelEvents() {
                                             else {
                                                 // 0.13.16：字节不同不等于内容不同——ST 导入/保存世界书会重排 JSON（键序/格式），
                                                 //   与云端原始字节恒不同 → 会假报"本地新"。下载云端世界书，比【语义】（键序无关）。
+                                                //   ★0.13.38：读的就是**这一维命中的那条路径**（主卡/非主卡两种），不再写死 sync/<名>/world.json
                                                 try {
-                                                    const __cw = await Gitee.getText('sync/' + name + '/world.json');
+                                                    const __cw = await Gitee.getText(wfPath);
                                                     const __a = jsonStableString(JSON.parse(String(wc)));
                                                     const __b = jsonStableString(JSON.parse(String(__cw.content)));
                                                     det.wb = (__a === __b) ? 'same' : 'local';
@@ -7191,12 +7317,37 @@ function wirePanelEvents() {
                             } catch { }
                             try {
                                 const av = (ch && ch.avatar) || lAvatar || '';
-                                let chatState = '';
-                                for (const cm of e.chats) {
-                                    const mc = await Gitee.getText('sync/' + name + '/' + cm.rest).catch(() => null);
-                                    if (!mc || !mc.content) continue;
-                                    const man = JSON.parse(mc.content);
-                                    const chatName = cm.rest.replace(/^chats\//, '').replace(/\.manifest\.json$/, '');
+                                let chatState = ''; let chatWhy = '';
+                                // ★0.13.38（§21.1-5/6）：聊天这一维先查"云端这套聊天完不完整"：
+                                //   缺 chat-list / 某条缺 manifest / 段数与清单不符 / 没登记进 chat-list —— 一律 broken；
+                                //   自洽时才走原来的（各段 sha 串）对比。缺了就"整条不出现"或报"聊天:一致"，都是骗人。
+                                const chatStems = Array.from(e.chatStems || []);
+                                if (chatStems.length) {
+                                    if (!e.hasChatList) { chatState = 'broken'; chatWhy = '清单缺（chat-list）'; }
+                                    else if (e.chatList === null) {
+                                        try { const __cl = await Gitee.getText('sync/' + name + '/chat-list.json'); e.chatList = (__cl && __cl.content) ? (JSON.parse(__cl.content) || {}) : {}; }
+                                        catch { e.chatList = undefined; }
+                                        if (e.chatList === undefined) { chatState = 'broken'; chatWhy = '清单读不到'; }
+                                    }
+                                    // ★清单格式是 { files: [...] }（upsertCloudChatList 原话）——按 chats 读会假报"未登记"（0.13.38 踩过）
+                                    const __listedArr = (e.chatList && Array.isArray(e.chatList.files)) ? e.chatList.files : ((e.chatList && Array.isArray(e.chatList.chats)) ? e.chatList.chats : null);
+                                    const __listed = new Set((__listedArr || []).map((x) => __csChatStemOf(typeof x === 'string' ? x : (x && (x.file || x.name)) || '')));
+                                    for (const stem of (chatState ? [] : chatStems)) {
+                                        // ★只有**分段聊天**（有 .pNNN.jsonl）才必须有 manifest —— 整文件聊天（<200 楼）本来就不写 manifest，
+                                        //   那是正常形态（旧行为：这一维不参与"一致"判定），不能当"缺清单"误报。
+                                        const __segN = e.chatSeg[stem] || 0;
+                                        let man = null;
+                                        if (__segN > 0) {
+                                            if (!e.chatMan[stem]) { chatState = 'broken'; chatWhy = '清单缺'; break; }
+                                            const mc = await Gitee.getText(e.chatManPath[stem]).catch(() => null);   // ★用列表里的真实路径（命名 <聊天文件名>.manifest.json）
+                                            if (!mc || !mc.content) { chatState = 'broken'; chatWhy = '清单读不到'; break; }
+                                            try { man = JSON.parse(mc.content); } catch { man = null; }
+                                            if (!man || !Array.isArray(man.parts) || man.parts.length !== __segN) { chatState = 'broken'; chatWhy = '清单与段不符'; break; }
+                                        } else if (!e.chatWhole[stem]) { chatState = 'broken'; chatWhy = '文件缺'; break; }
+                                        const __listedOk = !!__listedArr;   // ★0.13.38：清单在但没有 files 数组 = 坏清单，同样不完整
+                                        if (!__listedOk || !__listed.has(stem)) { chatState = 'broken'; chatWhy = '未登记（chat-list）'; break; }
+                                        const chatName = stem;
+                                    if (!man) continue;   // ★整文件聊天（无 manifest）：不做段级对比（与改前逐字同）
                                     let chatText = '';
                                     try { chatText = await getChatContent(chatName, name, av); } catch { continue; }
                                     const lines = String(chatText).split(NL).filter((l) => l.trim());
@@ -7212,13 +7363,17 @@ function wirePanelEvents() {
                                     if (localJoin !== cloudJoin) { chatState = 'local'; break; }
                                     chatState = chatState || 'same';
                                 }
-                                if (chatState) det.chat = chatState;
+                                }   // ★0.13.38：闭 if (chatStems.length)
+                                if (chatState) { det.chat = chatState; if (chatWhy) det.chatWhy = chatWhy; }
                             } catch { }
                             const parts2 = [];
-                            if (det.card) parts2.push('卡:' + (det.card === 'same' ? '一致' : '本地新'));
-                            if (det.wb) parts2.push('世界书:' + (det.wb === 'same' ? '一致' : '本地新'));
-                            if (det.chat) parts2.push('聊天:' + (det.chat === 'same' ? '一致' : '本地新'));
-                            const dir2 = (det.card === 'local' || det.wb === 'local' || det.chat === 'local') ? 'local' : '';
+                            // ★0.13.38：三维各自的"完整"都先过一遍（broken 优先于本地新——缺清单是更该先修的那档）
+                            const __dimTxt = (v, why, label) => v === 'same' ? (label + ':一致') : (v === 'broken' ? (label + ':云端不完整（' + (why || '缺清单') + '）') : (label + ':本地新'));
+                            if (det.card) parts2.push(__dimTxt(det.card, det.cardWhy, '卡'));
+                            if (det.wb) parts2.push(__dimTxt(det.wb, det.wbWhy, '世界书'));
+                            if (det.chat) parts2.push(__dimTxt(det.chat, det.chatWhy, '聊天'));
+                            const __anyBroken = (det.card === 'broken' || det.wb === 'broken' || det.chat === 'broken');
+                            const dir2 = __anyBroken ? 'broken' : ((det.card === 'local' || det.wb === 'local' || det.chat === 'local') ? 'local' : '');
                             const sp2 = row.querySelector('.cs-where-diff');
                             if (sp2) {
                                 sp2.textContent = dir2 ? DIFF_LABEL[dir2] : '';
@@ -7392,8 +7547,17 @@ function wirePanelEvents() {
                 e.preventDefault();                    // 别让整段留在小框里（成功与否都靠下面两栏说话）
                 if (fillFrom(t, true)) cfgInp.value = '';
             });
+            // ★0.13.36-②（§20 观察 1）：手敲分支原来只认"含 ywp1:"的串 —— 用户把一长串垃圾整段插/敲进来时一声不吭
+            //   （paste 分支有护栏会给一句人话）⇒ 口径统一：看起来是"一次性塞进来的一长串"（含换行 / 单次新增 ≥8 字符 /
+            //   已累积 ≥40 字符）且不含 ywp1: ⇒ 给与 paste 分支**同一句**人话；逐字符敲正常短输入不打扰（3~5 个字符那种）。
+            let __cfgPrevLen = 0;
             cfgInp.addEventListener('input', () => {
-                if (String(cfgInp.value || '').indexOf('ywp1:') >= 0 && fillFrom(cfgInp.value, true)) cfgInp.value = '';
+                const v = String(cfgInp.value || '');
+                if (v.indexOf('ywp1:') >= 0) { __cfgPrevLen = v.length; if (fillFrom(v, true)) { cfgInp.value = ''; __cfgPrevLen = 0; } return; }
+                const added = v.length - __cfgPrevLen;
+                __cfgPrevLen = v.length;
+                const looksBulk = added >= 8 || /[\r\n]/.test(v) || v.length >= 40;
+                if (looksBulk && v.trim()) hint('这不像配置串：应该是 ywp1: 开头的一整行（部署脚本最后打印的那行）');
             });
         }
     })();
@@ -7444,6 +7608,8 @@ function wirePanelEvents() {
         const root = String(($('cs_cf_url') || {}).value || '').trim().replace(/\/+$/, '');
         const key = String(($('cs_cf_key') || {}).value || '').trim();
         const diagBase = { server: 'cf · ' + root, tokenLen: key.length, tokenHead: key.slice(0, 4), tokenTail: key.slice(-4) };
+        // ★0.13.36（P2 修复）：提前落内存前的原值（失败回滚用）与"换后端清缓存"判据（必须提前算）
+        let __cfPrevCfg = null; let __cfChanged = null;
         try {
             if (!root) throw new Error('请填后端地址：部署脚本打印的那一行里的 https://…pages.dev（去掉开头随机码的 https://项目名.pages.dev 是固定地址，示例后端 = ' + CS_CF_ADDR_FIXED_EXAMPLE + '）');
             let u0 = null;
@@ -7482,6 +7648,12 @@ function wirePanelEvents() {
             let j = {}; try { j = JSON.parse(txt) || {}; } catch { j = {}; }
             const dbq = r.headers.get('x-ywp-db-queries');
             write(`✅ 已连接：${String(j.service || 'ywp-sync')} v${String(j.version || '?')} · 云端已有 ${Number(j.files) || 0} 个文件 / ${__fmtBytes(Number(j.bytes) || 0)}\n（免费档不按请求数限流，所以没有"本小时还剩"那一行${dbq ? '；这次请求用了 ' + dbq + ' 趟数据库' : ''}）`);
+            // ★0.13.36（TT 冒烟支 P2）：盘点走 listEntries ⇒ 用的是 settings.cfUrl；首连时它还没写 ⇒ URL 退化成
+            //   相对路径、打到酒馆自己的源、SPA 兜底 200+HTML ⇒ 五行恒 0（假读数；改成另一个后端再连还会显示上一个后端的数）。
+            //   ⇒ 先记原值（失败回滚）+ 把框里填的值落进内存，再盘点；④ 照旧固化（槽位/时间戳/清缓存全保留）。
+            __cfPrevCfg = { backend: settings.backend, cfUrl: settings.cfUrl, cfKey: settings.cfKey };
+            __cfChanged = !csIsCF() || __csCfRoot() !== root || String(settings.cfKey || '') !== key;
+            settings.backend = 'cf'; settings.cfUrl = root; settings.cfKey = key;
             // ③ 五目录盘点（与 git 档同一套读取方法，直证各列表链路）
             const parts = ['角色(sync)', '预设(connections/openai)', '主题(themes)', '全局正则(regex)', '人设(personas)'];
             const dirs = ['sync', 'config-sync/connections/openai', 'config-sync/themes', 'config-sync/regex', 'config-sync/user/personas'];
@@ -7493,7 +7665,7 @@ function wirePanelEvents() {
                 } catch (e2) { append(`\n${parts[i]}: ❌ ${(e2 && e2.message) || e2}`); }
             }
             // ④ 成功才固化（与现有"连接成功才写 settings"口径一致）+ 换后端清残留（硬坑③）
-            const changed = !csIsCF() || __csCfRoot() !== root || String(settings.cfKey || '') !== key;
+            const changed = (__cfChanged === null) ? (!csIsCF() || __csCfRoot() !== root || String(settings.cfKey || '') !== key) : __cfChanged;   // ★0.13.36：提前算（提前落内存后这里会恒 false）
             settings.backend = 'cf';
             settings.cfUrl = root;
             settings.cfKey = key;
@@ -7506,6 +7678,8 @@ function wirePanelEvents() {
             __refreshCurRepoLine();
             try { toastr.success('✅ 已连接自建后端：' + (settings.cfName || u0.host)); } catch { }
         } catch (e) {
+            // ★0.13.36（P2 修复的配套）：失败若发生在"提前落内存"之后 ⇒ 回滚到开工前那份配置
+            try { if (__cfPrevCfg) { settings.backend = __cfPrevCfg.backend; settings.cfUrl = __cfPrevCfg.cfUrl; settings.cfKey = __cfPrevCfg.cfKey; } } catch { }
             write('❌ 连接失败：' + ((e && e.message) || e));
             if (e && e.csDiag) {
                 const d = e.csDiag;
@@ -8734,7 +8908,7 @@ async function pushSelectedApiProfiles(names) {
         }
         hideBusy();
         saveSettingsDebounced();
-        toastr.info(`上传Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}${noKeyCount ? ` ｜ ⚠ 其中 ${noKeyCount} 条的密钥没随行（酒馆未开启 allowKeysExposure）` : ''}`);
+        csSumToast(`上传Api配置：成功 ${ok.length} / 共 ${names.length}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}${noKeyCount ? ` ｜ ⚠ 其中 ${noKeyCount} 条的密钥没随行（酒馆未开启 allowKeysExposure）` : ''}`, fail.length, 'info');
         if (noKeyCount) toastr.warning('密钥没随行：' + __apiKeyHelpText().replace(/<[^>]+>/g, ''));
         if (secretMissed) toastr.warning('⚠ 有 ' + secretMissed + ' 条配置虽然已开启「显示密钥」，但没读到密钥明文（可能这条配置没有绑定密钥，或密钥在酒馆里是掩码状态）——导入端会需要手动选一次 key。');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons, noKeyCount };
@@ -8826,7 +9000,7 @@ async function importSelectedApiProfiles(names) {
             }
         } catch (e) { console.warn('[chat-sync] 重新应用当前连接配置失败(忽略)', e); }
         hideBusy();
-        toastr.info(`导入Api配置：成功 ${ok.length} / 共 ${names.length}${updatedInPlace.length ? `（其中 ${updatedInPlace.length} 条是同一条配置·已按云端更新）` : ''}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}`);
+        csSumToast(`导入Api配置：成功 ${ok.length} / 共 ${names.length}${updatedInPlace.length ? `（其中 ${updatedInPlace.length} 条是同一条配置·已按云端更新）` : ''}${skipped.length ? `，已最新跳过 ${skipped.length}` : ''}${skippedManual.length ? `，手动跳过 ${skippedManual.length}（${csShortList(skippedManual)}）` : ''}${fail.length ? `，失败 ${fail.length}` : ''}${failReasons.length ? `（${csShortList(failReasons.map((x) => `${x.name}:${x.reason}`))}）` : ''}`, fail.length, 'info');
         return { ok: ok.length, fail: fail.length, skipped: skipped.length, failReasons };
     } finally { __csReleaseBusy(); }
 }
@@ -8954,6 +9128,8 @@ ext: {
             listLocal() { return __discoverExts(); },
             async push(items) {
                 const ok = [], fail = [];
+                const __cfgState = {};   // ★0.13.38（§21.1-11）：每条拓展的配置写盘结果（true=本次写成功 / false=失败 / 'nokey'=本机没这条设置）
+                const __cfgHad = {};     // 写失败时云端原本有没有旧那份（有 ⇒ 旧配置仍在，config 仍算 true）
 
                 let __i = 0; const __n = items.length; for (const full of items) { __i++; showBusy(__i, __n, '上传拓展 ' + String(full).split('/').pop() + '…', String(full).split('/').pop());
                     const sname = String(full).split('/').pop();
@@ -8961,10 +9137,13 @@ ext: {
                     try {
                         if (skey && typeof extension_settings[skey] === 'object') {
                             const safe = __extSafeConfig(extension_settings[skey]);
-                            await Gitee.putText(`${EXT_CONFIGS_DIR}/${sname}.json`, JSON.stringify(safe), (await Gitee.getText(`${EXT_CONFIGS_DIR}/${sname}.json`))?.sha, `ext config ${sname}`);
-                        }
+                            const __prev = await Gitee.getText(`${EXT_CONFIGS_DIR}/${sname}.json`).catch(() => null);
+                            __cfgHad[sname] = !!(__prev && __prev.sha);
+                            await Gitee.putText(`${EXT_CONFIGS_DIR}/${sname}.json`, JSON.stringify(safe), __prev?.sha, `ext config ${sname}`);
+                            __cfgState[sname] = true;
+                        } else { __cfgState[sname] = 'nokey'; }
                         ok.push(sname + (skey ? '' : '(无设置配置)'));
-                    } catch (e) { fail.push(sname + ':' + (e.message || e)); }
+                    } catch (e) { fail.push(sname + ':' + (e.message || e)); __cfgState[sname] = false; }
 
                 }
                 // manifest 合并恒写(不论上传成否)
@@ -8973,9 +9152,18 @@ ext: {
                 for (const full of items) {
                     const sname = String(full).split('/').pop();
                     const meta = (window.__extMeta && window.__extMeta[full]) || {};
-                    man[sname] = { url: meta.url || '', branch: meta.branch || '', commit: meta.commit || '', config: !!__extSettingsKey(sname), dn: (window.__extDisplayBy && window.__extDisplayBy[sname]) || sname, enabled: __extEnabled(full), type: (window.__extType && window.__extType[full]) || 'local' };
+                    // ★0.13.38（§21.1-11）：config 只登记"云端这份配置可用"——本次写失败且云端原本没有 ⇒ false（不许骗云端视图"已上传"）；
+                    //   写失败但云端本来就有旧那份 ⇒ 仍是 true（那份旧配置确实在），但 fail 里已经点名了这次没传上去。
+                    const __cs2 = __cfgState[sname];
+                    const __cfgFlag = (__cs2 === true) ? true : ((__cs2 === 'nokey') ? false : (__cs2 === false ? (__cfgHad[sname] === true) : !!__extSettingsKey(sname)));
+                    man[sname] = { url: meta.url || '', branch: meta.branch || '', commit: meta.commit || '', config: __cfgFlag, dn: (window.__extDisplayBy && window.__extDisplayBy[sname]) || sname, enabled: __extEnabled(full), type: (window.__extType && window.__extType[full]) || 'local' };
                 }
-                await Gitee.putText(EXT_MANIFEST_PATH, JSON.stringify(man, null, 2), (await Gitee.getText(EXT_MANIFEST_PATH))?.sha, 'ext manifest');
+                // ★0.13.38-⑥（§21.1-12）：清单写失败原来把裸 500 冒给用户 ⇒ 包成四要素人话（哪儿错·谁的问题·怎么办）。
+try {
+    await Gitee.putText(EXT_MANIFEST_PATH, JSON.stringify(man, null, 2), (await Gitee.getText(EXT_MANIFEST_PATH))?.sha, 'ext manifest');
+} catch (e) {
+    throw new Error('拓展清单写不上去（云端 manifest 这一步失败）：' + String((e && e.message) || e) + ' · 多半是云端临时故障 / 限流 / 网络被掐 ⇒ 等几秒再点一次；反复失败就在「连接」里自查（开/关代理、换网络）。配置本身可能已经传上去，只差这份清单。');
+}
 // url 缺失时附加原因(上传诊断: 让源头一眼看到为什么没记录到仓库地址)
                 const urlNotes = {};
                 for (const full of items) {
@@ -9026,19 +9214,26 @@ ext: {
                             }
                         }
                         // 写回配置(如云端有)
-                        const cfg = await Gitee.getText(`${EXT_CONFIGS_DIR}/${sname}.json`);
+                        // ★0.13.38（§21.1-11）：清单说"这份有配置"（或读取本身失败）而云端文件缺失/读不到时，
+                        //   以前是静默跳过 + 仍计 ok ⇒ 用户以为导入成功、其实配置没回来。现在计 fail + 点名。
+                        let cfg = null, cfgErr = '';
+                        try { cfg = await Gitee.getText(`${EXT_CONFIGS_DIR}/${sname}.json`); } catch (e) { cfgErr = String((e && e.message) || e); }
                         if (cfg && cfg.content && sname !== 'st_chat_sync') {
                             const safe = JSON.parse(cfg.content);
                             const skey = __extSettingsKey(sname) || sname;
                             extension_settings[skey] = safe;
                             saveSettingsDebounced();
+                        } else if (sname !== 'st_chat_sync' && (cfgErr || (entry && entry.config === true))) {
+                            fail.push(sname);
+                            failReasons.push({ name: sname, reason: cfgErr ? ('配置文件读取失败：' + cfgErr) : '云端清单说这份有配置，但云端的配置文件缺失（上传那一端当时没写成功）⇒ 回原设备把这一个重传一次' });
+                            continue;
                         }
                         // 以云端记录恢复开关状态(导入不自动启用/禁用; 未知则不干预)
                         if (entry.enabled !== undefined) await __extSetEnabled(full, !!entry.enabled);
                         ok.push(sname);
                     } catch (e) { fail.push(sname); failReasons.push({ name: sname, reason: (e && e.message) || e }); }
                 }
-                if (ok.length) toastr.info(`导入拓展配置：成功 ${ok.length}${fail.length ? `（失败 ${fail.length}: ${csShortList(failReasons.map(x => x.name + ':' + x.reason))}）` : ''}`);
+                if (ok.length) csSumToast(`导入拓展配置：成功 ${ok.length}${fail.length ? `（失败 ${fail.length}: ${csShortList(failReasons.map(x => x.name + ':' + x.reason))}）` : ''}`, fail.length, 'info');
                 else if (fail.length) toastr.error(`导入拓展失败：${fail.length} 条（${csShortList(failReasons.map(x => x.name + ':' + x.reason))}）`);
                 return { ok: ok.length, fail: fail.length, failReasons };
             },
@@ -9081,7 +9276,12 @@ ext: {
                         ok.push(sname);
                     } catch (e) { fail.push(sname + ':' + (e.message || e)); }
                 }
-                await Gitee.putText(EXT_MANIFEST_PATH, JSON.stringify(man, null, 2), (await Gitee.getText(EXT_MANIFEST_PATH))?.sha, 'ext manifest');
+                // ★0.13.38-⑥（§21.1-12）：清单写失败原来把裸 500 冒给用户 ⇒ 包成四要素人话（哪儿错·谁的问题·怎么办）。
+try {
+    await Gitee.putText(EXT_MANIFEST_PATH, JSON.stringify(man, null, 2), (await Gitee.getText(EXT_MANIFEST_PATH))?.sha, 'ext manifest');
+} catch (e) {
+    throw new Error('拓展清单写不上去（云端 manifest 这一步失败）：' + String((e && e.message) || e) + ' · 多半是云端临时故障 / 限流 / 网络被掐 ⇒ 等几秒再点一次；反复失败就在「连接」里自查（开/关代理、换网络）。配置本身可能已经传上去，只差这份清单。');
+}
                 return { ok: ok.length, fail: fail.length, failReasons: fail };
             },
             async diffMap() {
