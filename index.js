@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.41'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.42'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3018,6 +3018,32 @@ function __csApplyPkgGate() {
             btn.style.cursor = 'not-allowed';
             btn.title = '这台酒馆没有官方导入接口（需要 TauriTavern 或更新版酒馆）⇒ 用不了「TT 下载并导入」（把云端整包搬进 TauriTavern 用的那一步）';
             if (hint) hint.textContent = '⚠「TT 下载并导入」这台酒馆用不了（没有官方导入接口）——需要 TauriTavern 或更新版酒馆。';
+        }
+    } catch { }
+}
+// ★0.13.42（作者安卓 TT 真机实报）：安卓版 TT 的**政策** —— 整包导入必须走它的系统文件选择器，网页里直传会被 400 拒
+//   （原文：Android data archive imports must use the native archive picker）。⇒ 三处共用同一句人话：
+//   ①点击前拦截（别让用户白下 115MB）②面板打开时静态提示 ③import 400 兜底。★不硬 disable 按钮（安卓各版本没法穷举）。
+function __csIsAndroidTt() {
+    try { return !!((window.__TAURITAVERN__ || window.__TAURITAVERN_MAIN_READY__) && /android/i.test(String(navigator.userAgent || ''))); } catch { return false; }
+}
+function __csAndroidManualText() {
+    return '安卓版 TT 有系统限制：整包导入必须用它的系统文件选择器挑本机的一个 zip，网页里的一键导入会被拒绝。手动三步：'
+        + '①在电脑酒馆的「用户设置」里点「下载备份」（Download Backup），得到一个 zip（和本插件的"整包"是同一份东西）；'
+        + '②把这个 zip 传到手机；③在 TT 里打开数据迁移/导入页，用文件选择器选它。';
+}
+function __csAndroidManualHtml() {
+    return '安卓版 TT 有系统限制：整包导入必须用它的<b>系统文件选择器</b>挑本机的一个 zip，网页里的一键导入会被拒绝。<br>'
+        + '<b>手动三步</b>：<br>①在<b>电脑酒馆</b>的「用户设置」里点「<b>下载备份</b>」（Download Backup），得到一个 zip（和本插件的"整包"是同一份东西）；<br>'
+        + '②把这个 zip 传到手机；<br>③在 TT 里打开<b>数据迁移 / 导入</b>页，用文件选择器选它。';
+}
+function __csAndroidHint() {
+    try {
+        if (!__csIsAndroidTt()) return;
+        const hint = document.getElementById('cs_pkg_hint');
+        if (hint) {
+            hint.textContent = '⚠ 安卓版 TT 限制：整包导入必须用它的系统文件选择器（网页一键导入会被拒）。点上面「⬇ TT 下载并导入」看手动三步。';
+            hint.title = __csAndroidManualText();
         }
     } catch { }
 }
@@ -7135,6 +7161,10 @@ window.__csManualCheck = async function (btn) {
                              ⬆ ST 打包（官方导出 zip → 传云端）/ ⬇ TT 下载并导入（取回 → 交 TT 官方导入）。
                              ★二稿删掉「⬆ 一键全量云端上传」（作者实测多类没传上去、还干扰选择；各分页的「上传选中/全选」
                              照旧可用，六步底层函数一个没动）。ST 1.19 上「TT 下载并导入」仍探测判死 → disabled + 人话。 -->
+                        <!-- ★0.13.42（作者拍板：**只隐藏、代码全留**）：ST → TT 转移这一小节先从界面撤掉（两颗按钮 + 那行说明 +
+                             提示位一起藏进这个 wrapper）。handler / 整包机器 / 探针闸门 / 安卓兜底全部保活 —— 以后可能恢复：
+                             把下面这行的 display:none 去掉即可（DOM 结构一字节没删）。 -->
+                        <div id="${id}_pkg_section" style="display:none">
                         <div class="cs-sep"></div>
                         <div class="cs-label">ST → TT 转移</div>
                         <div class="cs-row" style="margin-top:4px;flex-wrap:wrap;align-items:center">
@@ -7148,6 +7178,7 @@ window.__csManualCheck = async function (btn) {
                                 <p id="${id}_pkg_hint" class="cs-hint" style="margin:2px 0 0">⬇ 从云端取回整包，交给 TT 官方导入（会合并、同名覆盖）</p>
                             </div>
                         </div>
+                        </div><!-- /cs_pkg_section -->
                         <p id="${id}_backup_status" class="cs-hint" style="margin-top:4px"></p>
                         <p id="${id}_cfg2_status" class="cs-hint" style="margin-top:4px"></p>
                     </div>
@@ -7179,7 +7210,7 @@ window.__csManualCheck = async function (btn) {
     `;
     // 折叠：ST 全局委托 $(document).on('click','.inline-drawer-toggle') 自动处理展开/收起，无需自绑
     wirePanelEvents();
-    try { __csApplyPkgGate(); __csProbeNativeImport(); } catch { }   // 0.13.26：整包恢复的可用性闸门
+    try { __csApplyPkgGate(); __csAndroidHint(); __csProbeNativeImport(); } catch { }   // 0.13.26：整包恢复的可用性闸门（0.13.42：安卓 TT 静态提示）
     // 0.12.108 手风琴初始收敛: 模板默认可能同时 open 多张(如未配置时 连接配置 + 快捷入口都开)——
     //   手风琴语义下首次只留第一张开, 其余收起(用 requestAnimationFrame 等 details 初始 toggle 落定后再收)
     try {
@@ -8105,6 +8136,14 @@ function wirePanelEvents() {
     $('cs_cfg_full_restore')?.addEventListener('click', async () => {
         const st = $('cs_backup_status');
         const setStat = (m) => { if (st) st.textContent = m; };
+        // ★0.13.42：安卓版 TT —— 它的政策是整包导入必走系统文件选择器（网页直传必 400）⇒ 在**任何下载请求之前**拦下，
+        //   别让用户白等 115MB（零请求）。不硬 disable 按钮（安卓各版本没法穷举；拦截 + 人话足够）。
+        if (__csIsAndroidTt()) {
+            setStat('安卓版 TT 走不了网页一键导入（系统限制）⇒ 请按提示手动三步');
+            try { const h = $('cs_pkg_hint'); if (h) { h.textContent = '⚠ 安卓版 TT 限制：整包导入必须用它的系统文件选择器（网页一键导入会被拒）。'; h.title = __csAndroidManualText(); } } catch { }
+            toastr.warning(__csAndroidManualHtml(), null, { timeOut: 20000, extendedTimeOut: 8000 });
+            return;
+        }
         // 0.13.26：探测已判死 ⇒ 直接给人话（按钮通常已 disabled，这里是兜底）
         if (window.__csImportProbe && window.__csImportProbe.state === 'no') { toastr.info('这台酒馆没有官方导入接口（需要 TauriTavern 或更新版酒馆）⇒「TT 下载并导入」用不了'); return; }
         // 0.13.28：文案按 TT 内置导入页的原话对齐 —— 是**合并**（同名文件被覆盖），不是"整个替换"
@@ -8151,6 +8190,12 @@ function wirePanelEvents() {
                 if (resp.status === 404 || resp.status === 403) {
                     try { window.__csImportProbe.state = 'no'; __csApplyPkgGate(); } catch { }
                     throw new Error('这台酒馆没有官方导入接口（需要 TauriTavern 或更新版酒馆）⇒「TT 下载并导入」用不了');
+                }
+                // ★0.13.42：安卓版 TT 的政策性 400（native archive picker）—— 别把裸 JSON 甩给用户，给同一句人话
+                if (resp.status === 400) {
+                    const bt = await resp.text();
+                    if (/native archive picker|Android/i.test(bt)) { throw new Error(__csAndroidManualText()); }
+                    throw new Error('导入任务启动失败 HTTP 400：' + bt.slice(0, 200));
                 }
                 throw new Error('导入任务启动失败 HTTP ' + resp.status + '：' + (await resp.text()).slice(0, 200));
             }
