@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.39'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.40'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -4901,6 +4901,79 @@ function csArchiveFeedMeta(meta) {
 }
 // 「⬆ ST 打包」= 官方导出打整包 → 分块上传 + 写指针（指针最后写：中途失败不会留下"半份"指针）
 //   返回 { skipped:true }（云端指针里已是同一份 ⇒ 不重复传，省几十上百 MB）或 { ts, chunks, bytes, sha, file }
+// ★0.13.40-①：整包归档这条链的"瞬时类失败"判据（CF 的 __csCfWriteRetryable 那几类 + git 三档同义话术）。
+//   409 / 401 / 403 / 404 一律**不算**（条件写冲突与权限问题重试没意义、还会掩盖抢写）。
+// ★0.13.40-fp：zip 的"内容指纹"（**忽略时间戳**）——走一遍中央目录，把每个条目的
+//   (名字 · crc32 · 压缩后大小 · 原始大小 · 标志位) 排序后哈希。
+//   为什么需要：官方导出的 zip 各条目时间戳来自文件 mtime ⇒ 只要本机任何一个文件被重写过（★进度态本身就写在
+//   settings.json 里 ⇒ 保存进度 = 改了它的 mtime），重跑时导出的字节就变、sha 就不等 ⇒ 光比 sha 永远续不上传
+//   （真机实测：第一跑 73/74 块传完，重跑却因 sha 变了开新目录全量重传）。
+//   正确性兜底：每块传不传仍由"本机块的 git blob sha1 vs 远端 HEAD sha"决定 —— 指纹只决定"复用哪个 ts 目录"，
+//   判错最多白发几个 HEAD，绝不会把内容传错。
+function __fullArchiveFp(u8) {
+    try {
+        const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+        let eocd = -1;
+        for (let i = u8.length - 22; i >= Math.max(0, u8.length - 22 - 65535); i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+        if (eocd < 0) return '';
+        const n = dv.getUint16(eocd + 10, true);
+        let off = dv.getUint32(eocd + 16, true);
+        const rows = [];
+        for (let k = 0; k < n && off + 46 <= u8.length; k++) {
+            if (dv.getUint32(off, true) !== 0x02014b50) return '';
+            const crc = dv.getUint32(off + 16, true), cs = dv.getUint32(off + 20, true), us = dv.getUint32(off + 24, true), flags = dv.getUint16(off + 8, true);
+            const nameLen = dv.getUint16(off + 28, true), extraLen = dv.getUint16(off + 30, true), cmtLen = dv.getUint16(off + 32, true);
+            const name = new TextDecoder('utf-8', { fatal: false }).decode(u8.subarray(off + 46, off + 46 + nameLen));
+            // ★0.13.40-fp2：把 settings.json 排除在指纹外 —— 进度态就写在它里面，它一保存连**字节/大小**都变
+            //   （真机实测：只排除 mtime 不够）⇒ 不排除就永远续不上。含它的那 1~2 块仍会按 sha 比对照常重传。
+            if (/(^|\/)settings\.json$/i.test(name)) { off += 46 + nameLen + extraLen + cmtLen; continue; }
+            rows.push(name + '|' + crc + '|' + cs + '|' + us + '|' + flags);
+            off += 46 + nameLen + extraLen + cmtLen;
+        }
+        rows.sort();
+        return rows.join('\n');
+    } catch { return ''; }
+}
+function __fullArchiveRetryable(e) {
+    try { if (typeof __csCfWriteRetryable === 'function' && __csCfWriteRetryable(e)) return true; } catch { }
+    const m = String((e && e.message) || e || '');
+    if (/^连不上云端/.test(m)) return true;                   // GitBackend.req 网络层
+    if (/^请求超时（/.test(m)) return true;                   // GitBackend.req 超时
+    if (/HTTP (429|500|502|503|504)/.test(m)) return true;     // 网关/平台瞬时
+    return false;
+}
+// ★0.13.40-①：单块上传（最多 5 次尝试 = 1 首发 + 4 重试；1s/2s/4s/4s + 抖动）；非瞬时类当场抛。
+async function __fullArchivePutChunk(p, text, sha0, i, chunks, stat) {
+    const tries = 5;
+    let last = null;
+    for (let k = 1; k <= tries; k++) {
+        try { return await Gitee.putText(p, text, sha0, 'full archive chunk ' + i + '/' + chunks); }
+        catch (e) {
+            last = e;
+            if (!__fullArchiveRetryable(e) || k >= tries) throw e;
+            const wait = [1000, 2000, 4000, 4000][Math.min(k - 1, 3)] + Math.floor(Math.random() * 500);
+            try { stat('第 ' + i + '/' + chunks + ' 块重试 ' + k + '/' + (tries - 1) + '（' + String((e && e.message) || e).slice(0, 36) + '）…'); } catch { }
+            await new Promise((r) => setTimeout(r, wait));
+        }
+    }
+    throw last;
+}
+// ★0.13.40-①：成功后清理 sync-config/full/ 下"除刚写这份外"的目录。
+//   依据（全仓 grep）：只有本文件下面那处读整包块，读的是**指针里的 ts** ⇒ 其余目录无人读；
+//   这里是"指针写成功"之后才清（失败路径绝不碰任何旧目录）。
+async function __fullArchiveCleanOld(keepTs) {
+    let dirs = [];
+    try { dirs = (await Gitee.listEntries('sync-config/full')).filter((e) => e && e.type === 'dir' && String(e.name) !== String(keepTs)).map((e) => e.name); } catch { }
+    for (const nm of dirs) {
+        const dp = 'sync-config/full/' + nm;
+        try {
+            if (csIsCF()) { await Gitee.deleteFile(dp, null, 'clean stale full archive ' + nm); continue; }   // CF 服务端按目录递归删（1 个请求）
+            const files = await Gitee.listAllFiles(dp).catch(() => []);
+            for (const f of (files || [])) { try { await Gitee.deleteFile(f.path, null, 'clean stale full archive ' + nm); } catch { } }
+        } catch { }
+    }
+    return dirs.length;
+}
 async function backupFullArchiveToCloud(onStat) {
     if (!csConfigured()) { toastr.error('请先配置云端仓库'); return false; }
     const stat = (m) => { try { onStat && onStat(m); } catch { } };
@@ -4920,25 +4993,52 @@ async function backupFullArchiveToCloud(onStat) {
         stat('整包内容没变（' + (bytes / 1048576).toFixed(1) + ' MB），已跳过上传');
         return { skipped: true, bytes, sha, file: cur.ptr.file || zb.file, ts: cur.ptr.ts };
     }
-    const ts = __csLocalStamp();
+    // ★0.13.40-① 断点续传：与上次**没传完**的那份是同一个 zip ⇒ 复用同一个 ts 目录（已传块靠下面的 HEAD 比对跳过），
+    //   否则起新 ts。进度态是临时记忆（不进 CONFIG_KEEP_KEYS），指针写成功才清。
+    const __rs0 = (settings.__fullArchiveResume && typeof settings.__fullArchiveResume === 'object') ? settings.__fullArchiveResume : null;
+    const __fp = __fullArchiveFp(zb.bytes);   // ★0.13.40-fp：忽略时间戳的内容指纹
+    const __resume = !!(__rs0 && __rs0.ts && (String(__rs0.sha) === String(sha) || (!!__fp && String(__rs0.fp || '') === __fp)));
+    const ts = __resume ? String(__rs0.ts) : __csLocalStamp();
     const dir = 'sync-config/full/' + ts;
     const b64 = __csBytesToB64(zb.bytes);
     const chunks = Math.max(1, Math.ceil(b64.length / CARD_CHUNK_CHARS));
+    settings.__fullArchiveResume = { sha, ts, chunks, fp: __fp };
+    try { saveSettingsDebounced(); } catch { }
     try { showBusy(0, chunks, '正在上传整包归档'); } catch { }
+    let done = 0, skippedN = 0, putN = 0;
+    const mbTxt = () => (bytes / 1048576).toFixed(1);
     try {   // 失败也要把浮层收掉（① 的第⑦步失败时没人替它收）
-    for (let i = 0; i < chunks; i++) {
-        stat('正在上传整包归档：第 ' + (i + 1) + '/' + chunks + ' 块（共 ' + (bytes / 1048576).toFixed(1) + ' MB）');
-        try { showBusy(i + 1, chunks, '正在上传整包归档'); } catch { }
-        const p = dir + '/part-' + String(i).padStart(4, '0');
-        // CF 档"只拿 sha"走 HEAD（新建目录 ⇒ null）；git 三平台照旧 getText（不存在 = 404 = null）
-        const sha0 = (await csCfShaOnly(p, () => Gitee.getText(p)))?.sha;
-        await Gitee.putText(p, b64.slice(i * CARD_CHUNK_CHARS, (i + 1) * CARD_CHUNK_CHARS), sha0, 'full archive chunk ' + (i + 1) + '/' + chunks);
+        if (__resume) stat('续传：接着上次那份传（共 ' + chunks + ' 块 / ' + mbTxt() + ' MB），已传过的块会自动跳过…');
+        const __idxs = Array.from({ length: chunks }, (_, i) => i);
+        const __res = await csMapLimit(__idxs, csWriteConc(), async (i) => {
+            const p = dir + '/part-' + String(i).padStart(4, '0');
+            const chunkText = b64.slice(i * CARD_CHUNK_CHARS, (i + 1) * CARD_CHUNK_CHARS);
+            // CF 档"只拿 sha"走 HEAD（新建目录 ⇒ null）；git 三平台照旧 getText（不存在 = 404 = null）
+            let sha0 = undefined;
+            try { sha0 = (await csCfShaOnly(p, () => Gitee.getText(p)))?.sha || undefined; } catch { sha0 = undefined; }
+            // ★断点续传：远端这块已经在、内容一样（本机块的 git blob sha1 == 远端 sha）⇒ 只发 1 个 HEAD、不 PUT
+            if (sha0) {
+                try { const localSha = await gitBlobSha(new TextEncoder().encode(chunkText)); if (localSha === sha0) { done++; skippedN++; try { showBusy(done, chunks, '正在上传整包归档'); } catch { } return 'skip'; } } catch { }
+            }
+            await __fullArchivePutChunk(p, chunkText, sha0, i + 1, chunks, stat);
+            done++; putN++;
+            try { showBusy(done, chunks, '正在上传整包归档'); } catch { }
+            stat('正在上传整包归档：已处理 ' + done + '/' + chunks + ' 块（共 ' + mbTxt() + ' MB）');
+            return 'put';
+        });
+        const __err = (__res || []).find((r) => r && r.e);
+        if (__err) throw __err.e;
+    } catch (e) {
+        try { hideBusy(); } catch { }
+        throw new Error(String((e && e.message) || e) + ' · 进度已保留（这份的 ' + done + '/' + chunks + ' 块已经在云端），再点一次会从刚才的位置继续');
     }
-    } catch (e) { try { hideBusy(); } catch { } throw e; }
     const man = JSON.stringify({ ts, chunks, bytes, sha, format: 'zip', file: zb.file, savedAt: new Date().toISOString() }, null, 2);
     await Gitee.putText(FULL_ARCHIVE_LATEST, man, cur.sha, 'full archive pointer');
+    // ★0.13.40-①：指针已写成 ⇒ 清掉旧目录（只留刚写这份）+ 清掉进度态
+    try { await __fullArchiveCleanOld(ts); } catch { }
+    try { if (settings.__fullArchiveResume && String(settings.__fullArchiveResume.ts) === String(ts)) { delete settings.__fullArchiveResume; saveSettingsDebounced(); } } catch { }
     try { hideBusy(); } catch { }
-    return { skipped: false, ts, chunks, bytes, sha, file: zb.file };
+    return { skipped: false, ts, chunks, bytes, sha, file: zb.file, skippedChunks: skippedN, putChunks: putN };
 }
 
 // 目录条目缓存(5min): 列表渲染与差异比对共用, 避免对同一目录反复 listEntries
