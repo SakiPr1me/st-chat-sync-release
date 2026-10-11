@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.38'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.39'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3210,6 +3210,51 @@ function __cardFormFields(card) {
     try { out.extensions = JSON.stringify(ext || {}); } catch { out.extensions = ''; }
     return out;
 }
+// ★0.13.39-①（TT 写卡形状；读数报告 TT-editprobe-读数.md V1b/V5b）：TT 的 /api/characters/edit 收 multipart 后按
+//   ST 同款 charaFormatData 重建整张卡 —— **数组字段发成"字符串"**时：alternate_greetings 被包成 [字符串]
+//   （4 条融合成 1 条 JSON 代码）、tags 被按逗号劈碎。实测**唯一保真**的发法 = 数组字段用 `名字[]` 逐项 append
+//   （V5b：ag 4/4 + tags 2/2）。本函数供 `__csApplyHeal` / `persistChatPointerStt` 两处 TT 分支共用
+//   （原来是两处各写一遍 append 循环 ⇒ 改一处能同时收两个口子）。
+function __csTtAppendField(fd, k, v) {
+    if (Array.isArray(v)) {
+        for (const x of v) { try { fd.append(k + '[]', String(x)); } catch { fd.append(k + '[]', ''); } }
+        return;
+    }
+    fd.append(k, (v === undefined || v === null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v)));
+}
+// ★0.13.39-②：把"被旧版本 TT 写卡融合/劈碎"的数组字段**精确**拆回（只在形状可证时才动，绝不猜）：
+//   值必须是**全字符串**数组、首元素以 `[` 开头且末元素以 `]` 结尾（可疑形态判据）、join 回来能 JSON.parse
+//   出**全非空字符串**数组（先试逗号 join = tags 劈碎的逆运算，再试直接拼接 = ag 融合的逆运算）。
+//   只认 alternate_greetings / tags（TT 分支唯一会弄坏的数组字段）。minLen 默认 2（单条形态见 __csUnsplitRepair 的对端口径）。
+function __csUnsplitArrayField(v, minLen) {
+    const min = Math.max(1, Number(minLen) || 2);
+    if (!Array.isArray(v) || !v.length || v.length > 64) return null;
+    if (!v.every((x) => typeof x === 'string')) return null;
+    const first = String(v[0]).trim(), last = String(v[v.length - 1]).trim();
+    if (first.charAt(0) !== '[' || last.charAt(last.length - 1) !== ']') return null;
+    for (const t of [v.join(','), v.join('')]) {
+        let arr = null;
+        try { arr = JSON.parse(String(t).trim()); } catch { continue; }
+        if (!Array.isArray(arr) || arr.length < min || arr.length > 200) continue;
+        if (!arr.every((x) => typeof x === 'string' && x.length > 0)) continue;
+        return arr;
+    }
+    return null;
+}
+// 与对端（云端那份）对照后给出"该写回的值"；undefined = 不动（解析不同 / 云端也读不出来 / 不够可疑）。
+//   护栏：解析成功 + 全字符串非空 + **≥2 条**；只解析出 1 条时必须**与对端一致**才认
+//   （防"一条正常的备用开场白恰好长得像 [\"x\"]"被误拆）。
+function __csUnsplitRepair(localRaw, cloudRaw) {
+    if (!Array.isArray(localRaw) || !localRaw.length) return undefined;
+    const parsed = __csUnsplitArrayField(localRaw, 1);
+    if (!parsed) return undefined;
+    if (parsed.length >= 2) return parsed;
+    // 只解析出 1 条：**只有"对端是完好的 1 条数组、且恰好等于解析结果"才认**（0.13.17 的 tags 口径）；
+    //   两边同形（本地/云端都是这条"看起来像数组"的串）⇒ 一律不动（防把"一条正常的备用开场白恰好长得像 [\"x\"]"误拆）。
+    if (Array.isArray(cloudRaw) && cloudRaw.length === 1 && typeof cloudRaw[0] === 'string'
+        && cloudRaw[0] === parsed[0] && !__csUnsplitArrayField(cloudRaw, 1)) return parsed;
+    return undefined;
+}
 // ── 0.13.17：「本机被清空的栏目」用云端那份补回来 ──────────────────────────────
 // 背景：≤0.13.14 导入角色时，写 .chat 指针的 /api/characters/edit 只发 10 个字段，ST 的
 //   charaFormatData() 据此重建整张卡 → 备用开场白 / 系统提示 / 末尾附加 / 绑定世界书 / 深度提示 /
@@ -3236,13 +3281,16 @@ function __csHealDelta(localJ, cloudJ) {
     const cext = (cloudJ.data && cloudJ.data.extensions) || cloudJ.extensions || {};
     const cw = String(cext.world || '').trim();
     if (!String(lext.world || '').trim() && cw) delta.__world = cw;
-    // 0.13.17 tags 修复：旧载荷把数组发成字符串（JSON.stringify）→ ST 按逗号切 → 本地只剩一条
-    //   "搬运工式"的假标签（形如 '["t1"]'）。只在"本地这条假标签解析出来恰好等于云端标签表"时才修
-    //   —— 精确判定，不做任何猜测性改动，更不会覆盖用户自己改过的标签。
-    const ltags = __csPickField(localJ, 'tags');
-    const ctags = __csPickField(cloudJ, 'tags');
-    if (Array.isArray(ltags) && ltags.length === 1 && typeof ltags[0] === 'string' && Array.isArray(ctags) && ctags.length) {
-        try { if (jsonStableString(JSON.parse(ltags[0])) === jsonStableString(ctags)) delta.tags = ctags; } catch { /* 不是数组串就算了 */ }
+    // 0.13.17 tags 修复 → ★0.13.39-② 推广成统一口径（alternate_greetings / tags 两键）：
+    //   本地是"被旧版 TT 写卡融合/劈碎"的字符串数组、且形状可证 ⇒ 拆回（见 __csUnsplitRepair 的护栏）；
+    //   云端是完好的数组 ⇒ 按"本地坏 + 云端好 ⇒ 用云端"；两边都融合且解析相同 ⇒ 写拆开的；解析不同 ⇒ 不动。
+    for (const k2 of ['alternate_greetings', 'tags']) {
+        const lv = __csPickField(localJ, k2), cv = __csPickField(cloudJ, k2);
+        const rep2 = __csUnsplitRepair(lv, cv);
+        if (rep2 === undefined) continue;
+        // 云端是"好数组"（非融合形态且非空）⇒ 用云端那份（本地融合版读不出来，不能拿它当来源）
+        const cloudGood = Array.isArray(cv) && cv.length > 0 && !__csUnsplitArrayField(cv, 2);
+        delta[k2] = cloudGood ? cv : rep2;
     }
     const cdp = cext.depth_prompt || {};
     if (!String((lext.depth_prompt && lext.depth_prompt.prompt) || '').trim() && String(cdp.prompt || '').trim()) {
@@ -3299,10 +3347,7 @@ async function __csApplyHeal(charName, avatar, delta) {
         fd.append('chat', body.chat);
         fd.append('json_data', body.json_data);
         fd.append('create_date', body.create_date);
-        for (const k of Object.keys(F)) {
-            const v = F[k];
-            fd.append(k, (v === undefined || v === null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v)));
-        }
+        for (const k of Object.keys(F)) __csTtAppendField(fd, k, F[k]);   // ★0.13.39-①：数组走 `k[]` 逐项 append（TT 保真唯一发法）
         r = await fetch('/api/characters/edit', { method: 'POST', headers: getRequestHeaders({ omitContentType: true }), body: fd });
     } else {
         r = await fetch('/api/characters/edit', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(body) });
@@ -3400,10 +3445,7 @@ async function persistChatPointerStt(charName, cardAvatar, chatStem) {
             fd.append('create_date', card && card.create_date || new Date().toISOString());
             // 0.13.15：字段补全（原来只发 10 个 → 重建卡时会清空备用开场白/系统提示/绑定世界书等）
             const F2 = __cardFormFields(card);
-            for (const k of Object.keys(F2)) {
-                const v = F2[k];
-                fd.append(k, (v === undefined || v === null) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v)));
-            }
+            for (const k of Object.keys(F2)) __csTtAppendField(fd, k, F2[k]);   // ★0.13.39-①：数组走 `k[]` 逐项 append（TT 保真唯一发法）
             resp = await fetch('/api/characters/edit', { method: 'POST', headers: getRequestHeaders({ omitContentType: true }), body: fd });
         } else {
             // ST：/edit 收 JSON body（endpoints/characters.js:1099 读 body.chat/body.json_data）
@@ -5264,6 +5306,27 @@ async function importCharFromCloud(charName, opts = {}) {
                 const newStem = j && j.file_name ? String(j.file_name).replace(/\.png$/, '') : '';
                 if (newStem && entry.id) __cardBindSet(newStem + '.png', entry.id); // 绑定：下次同步认得出是同一张
                 if (!cardAvatar) cardAvatar = newStem;
+                // ★0.13.39-②(a)：刚导入的这张卡如果带上"被旧版本融合/劈碎"的形态（TT 写卡老 BUG 留下的），
+                //   立刻读回本机卡、用**修好的写卡路径**写回拆开的数组，并给一句人话（用户"删了重导"就能拿回开场白）。
+                if (newStem) {
+                    try {
+                        const __av3 = newStem + '.png';
+                        const __cg3 = await fetch('/api/characters/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: __av3 }) });
+                        const __card3 = __cg3.ok ? await __cg3.json() : null;
+                        const __delta3 = {};
+                        if (__card3) {
+                            const __pick3 = (k3) => ((__card3.data && __card3.data[k3] !== undefined) ? __card3.data[k3] : __card3[k3]);
+                            for (const k3 of ['alternate_greetings', 'tags']) {
+                                const __rep3 = __csUnsplitRepair(__pick3(k3), undefined);
+                                if (__rep3 !== undefined) __delta3[k3] = __rep3;
+                            }
+                        }
+                        if (Object.keys(__delta3).length) {
+                            const __fixed3 = await __csApplyHeal(charName, __av3, __delta3);
+                            if (__fixed3 && __fixed3.length) toastr.success('已把被旧版本融合/劈碎的栏目拆回：' + __fixed3.join('、'), '存量卡修复', { timeOut: 12000 });
+                        }
+                    } catch (e3) { console.warn('[chat-sync] 导入后拆回存量坏卡失败(忽略)', e3); }
+                }
             } else { failedCards.push(label); }
         } catch (e) { failedCards.push(label); console.warn('[chat-sync] 角色卡导入失败', label, e); }
     }
