@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.40'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.41'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2989,6 +2989,11 @@ window.__csAvatarOnErr = __csAvatarOnErr;
 //   判死时 = 按钮 disabled + 一行人话提示；点击路径还有第二层兜底（真 404/403 时给人话并把这颗按钮禁掉）。
 window.__csImportProbe = window.__csImportProbe || { state: 'unknown' };
 function __csProbeNativeImport() {
+    // ★0.13.41（作者真机实报）：**TT 上不问这一句** —— TT 自带官方导入接口，但它的实现会把"查一个不存在的作业"
+    //   这次 404 弹成一条「后端错误 / Failed to get data archive job / Entity not found: …__cs_probe__」吓人提示
+    //   （原文里的 `__cs_probe__` 就是本函数的探针 id，因果坐实）。TT 必定有该接口（这正是它自带的功能）⇒ 直接判 yes、
+    //   一个请求都不发。★ST 路径一字不改（老 ST 1.19 靠 html404 判定把按钮禁用，照旧）。
+    if (window.__TAURITAVERN__ || window.__TAURITAVERN_MAIN_READY__) { window.__csImportProbe.state = 'yes'; return Promise.resolve('yes'); }
     if (window.__csImportProbe.state !== 'unknown') return Promise.resolve(window.__csImportProbe.state);
     if (window.__csImportProbe.p) return window.__csImportProbe.p;
     window.__csImportProbe.p = fetch('/api/extensions/data-migration/job?id=__cs_probe__', { cache: 'no-store' })
