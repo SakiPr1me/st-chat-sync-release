@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.44'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.45'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2190,6 +2190,7 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
         const decision = preDecisions ? (preDecisions.get(plan.localName) ?? 'skip') : await resolveUploadConflict(localMsgs, cloudMsgs, plan.localName, batchGuard);
         if (decision === 'skip' || String(decision).startsWith('skip_cloud') || decision === 'cancel') {
             if ((decision === 'skip' || String(decision).startsWith('skip_cloud')) && !plan.mapped) setLocalName(charName, p, plan.localName);
+            if (decision === 'skip') try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[p] = Date.now(); } catch { }   // ★0.13.45-badge2：这次核对=一致 ⇒ 记下"这一刻它是同步的"
             skipped.push(plan.localName);
             return null;
         }
@@ -2250,6 +2251,7 @@ async function exportChats(charName, chatItems, preDecisions = null, avatar = ''
                 setLocalName(charName, backupPath, String(backupPath).split('/').pop());
             } catch (e) { console.warn('[chat-sync] 另行保存云端旧版失败', e); }
         }
+        try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[p] = Date.now(); } catch { }   // ★0.13.45-badge：记住"这个聊天是哪一刻传上去的"——徽章零云请求判"本地是否又有新楼层"用
         settings.lastCloudSha[p] = (await putCloudChat(p, text, `${decision === 'save_elsewhere' ? '另行保存后覆盖' : 'sync chat'} ${plan.localName}`)) || settings.lastCloudSha[p];
         if (!plan.mapped) setLocalName(charName, p, plan.localName); // 新聊天：绑定映射
         uploaded.push(plan.localName);
@@ -5323,6 +5325,7 @@ async function preResolveUploadConflicts(charName, chatItems, preDecisions, pres
         const cloudMsgs = parseJsonlMessages(cloud.content || '');
         const decision = await resolveUploadConflict(localMsgs, cloudMsgs, plan.localName, batch);
         preDecisions.set(plan.localName, decision);
+        if (decision === 'skip') { const p = plan.path; try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[p] = Date.now(); } catch { } }   // ★0.13.45-badge2：这次核对=一致 ⇒ 记下"这一刻它是同步的"
     }
 }
 
@@ -7412,7 +7415,7 @@ function wirePanelEvents() {
                 for (const f of files) {
                     const m2 = String(f.path).match(/^sync\/([^/]+)\/(.*)$/);
                     if (!m2) continue;
-                    const e = (byChar[m2[1]] = byChar[m2[1]] || { cardSha: '', cardMan: false, chunks: [], chats: [], cards: {}, chatStems: new Set(), chatMan: {}, chatManPath: {}, chatParts: {}, chatSeg: {}, chatWhole: {}, hasChatList: false, chatList: null });
+                    const e = (byChar[m2[1]] = byChar[m2[1]] || { cardSha: '', cardMan: false, chunks: [], chats: [], cards: {}, chatStems: new Set(), chatMan: {}, chatManPath: {}, chatParts: {}, chatSeg: {}, chatWhole: {}, chatPath: {}, hasChatList: false, chatList: null });
                     const rest = m2[2];
                     if (rest === 'character.png') e.cardSha = f.sha;
                     else if (rest === 'character.png.manifest.json') e.cardMan = true;
@@ -7424,7 +7427,7 @@ function wirePanelEvents() {
                             e.chatStems.add(stem);
                             if (rest.endsWith('.manifest.json')) { e.chats.push({ rest, sha: f.sha }); e.chatMan[stem] = true; e.chatManPath[stem] = f.path; }
                             else if (/\.p\d{3}\.jsonl$/.test(rest)) { e.chatParts[stem] = (e.chatParts[stem] || 0) + 1; e.chatSeg[stem] = (e.chatSeg[stem] || 0) + 1; }
-                            else if (/\.jsonl$/.test(rest)) { e.chatParts[stem] = (e.chatParts[stem] || 0) + 1; e.chatWhole[stem] = true; }
+                            else if (/\.jsonl$/.test(rest)) { e.chatParts[stem] = (e.chatParts[stem] || 0) + 1; e.chatWhole[stem] = true; e.chatPath[stem] = f.path; }   // ★0.13.45-badge：整文件聊天记下真实云路径（徽章方向记忆的键）
                         }
                     }
                     else {
@@ -7436,6 +7439,37 @@ function wirePanelEvents() {
                         else if (mm) { const b = (e.cards[mm[1]] = e.cards[mm[1]] || { chunks: [] }); b.man = true; }
                     }
                 }
+                // ★0.13.45-badge：「普通聊天多聊几楼」也该出"本地新"——整文件/短聊天没有段级清单可逐段比，
+                //   用"方向记忆（settings.lastLocalMTime[云路径] = 上次把它传上去的时刻）+ 本地聊天列表里那条的最后一条消息时间"做
+                //   **零云请求**判定：最后一条消息明显晚于上次同步 ⇒ 本地新。没记忆/查不到 ⇒ 一律不猜（维持现状）。
+                const __localChatsCache = {};   // name|av -> Map(本地文件名 -> 行)；两个 worker 共用，每渲染每角色最多一次本地列表请求
+                const __localChatRow = async (name2, av2, stem2) => {
+                    const key = name2 + '|' + av2;
+                    if (!__localChatsCache[key]) {
+                        __localChatsCache[key] = (async () => {
+                            const map = new Map();
+                            try {
+                                const r = await fetch('/api/characters/chats', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: av2 }) });
+                                if (r.ok) { const arr = await r.json(); if (Array.isArray(arr)) for (const x of arr) if (x && x.file_name) map.set(String(x.file_name), x); }
+                            } catch { }
+                            return map;
+                        })();
+                    }
+                    const map = await __localChatsCache[key];
+                    for (const [fn, rowX] of map) { try { if (__csChatStemOf(fn) === stem2) return rowX; } catch { } }
+                    return null;
+                };
+                const __chatLocalNewByMemory = async (name2, av2, stem2, cpath) => {
+                    try {
+                        const mem = settings.lastLocalMTime && cpath ? settings.lastLocalMTime[cpath] : undefined;
+                        if (!mem) return false;                          // 无记忆 ⇒ 不猜
+                        const rowX = await __localChatRow(name2, av2, stem2);
+                        if (!rowX || !rowX.last_mes) return false;
+                        const lm = Date.parse(rowX.last_mes);
+                        if (!isFinite(lm)) return false;
+                        return lm > Number(mem) + 60000;                 // 最后一条消息比"上次传上去那一刻"晚 >60 秒 ⇒ 本地确实又有新楼层
+                    } catch { return false; }
+                };
                 let cursor2 = 0;
                 const worker2 = async () => {
                     while (cursor2 < rowsAll.length) {
@@ -7546,7 +7580,10 @@ function wirePanelEvents() {
                                         const __listedOk = !!__listedArr;   // ★0.13.38：清单在但没有 files 数组 = 坏清单，同样不完整
                                         if (!__listedOk || !__listed.has(stem)) { chatState = 'broken'; chatWhy = '未登记（chat-list）'; break; }
                                         const chatName = stem;
-                                    if (!man) continue;   // ★整文件聊天（无 manifest）：不做段级对比（与改前逐字同）
+                                    if (!man) {   // ★0.13.45-badge：整文件聊天（<200 楼，没段级清单）——零云请求方向判定（没记忆时与改前逐字同）
+                                        if (chatState !== 'broken' && await __chatLocalNewByMemory(name, av, stem, e.chatPath && e.chatPath[stem])) { chatState = 'local'; break; }
+                                        continue;
+                                    }
                                     let chatText = '';
                                     try { chatText = await getChatContent(chatName, name, av); } catch { continue; }
                                     const lines = String(chatText).split(NL).filter((l) => l.trim());
@@ -7555,7 +7592,10 @@ function wirePanelEvents() {
                                         if (idx === 0) { try { const o = JSON.parse(l); if (o && typeof o === 'object' && !('mes' in o)) return; } catch { } }
                                         msgLines.push(l);
                                     });
-                                    if (msgLines.length < SEG_MIN_MSGS) continue;
+                                    if (msgLines.length < SEG_MIN_MSGS) {   // ★0.13.45-badge：短聊天（没分段）同样补"本地新"判定（与上面整文件那条同源；无记忆=不猜）
+                                        if (chatState !== 'broken' && await __chatLocalNewByMemory(name, av, stem, e.chatPath && e.chatPath[stem])) { chatState = 'local'; break; }
+                                        continue;
+                                    }
                                     const segs = splitChatSegmentsBySize(msgLines, SEG_TARGET_BYTES);
                                     const localJoin = (await Promise.all(segs.map((sg) => sha1Text(sg.join(NL))))).join('|');
                                     const cloudJoin = (man.parts || []).map((pp) => pp.sha).join('|');
