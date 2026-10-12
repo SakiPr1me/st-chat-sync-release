@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.46'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.47'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2135,6 +2135,15 @@ async function getChatContent(fileName, charName, avatarHint) {
     return (await getChatContentInfo(fileName, charName, avatarHint)).text;
 }
 
+// ★0.13.47：把"这一刻本地与云端一致"记进同步点锚点（lastLocalMTime）—— 单条上传/判一致/导入侧统一走这里
+//   （作者真机实报：单条「上传当前聊天」成功只写了 lastCloudSha、没写锚点 ⇒ 徽章主判据
+//   "最后一条消息 > 锚点"恒真 ⇒ 传完还一直显「本地新」）。
+//   ★纪律：只有**确实一致**的路径才许调它 —— skip_cloud（云端更新）、cancel、
+//   diverged 下用户选"以本地为准/跳过云端"这些**都不许碰**（碰了会把真实的「本地新/云端新」掩盖掉）。
+function __csMarkChatSynced(p) {
+    try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[p] = Date.now(); } catch { }
+}
+
 // ★0.13.46 存量聊天「本地新」缺锚点回退（作者真机实报）：0.13.45 之前经**批量上传**传上去的聊天只记了 lastCloudSha、
 //   没记 lastLocalMTime 锚点 ⇒ 徽章的"方向记忆"判定（最后一条消息 vs 上次同步时刻）无从下手 ⇒ 本地明明又聊了新内容也不显「本地新」。
 //   回退口径（零猜）：只对"锚点缺、但 lastCloudSha 在"的聊天，懒算本地指纹（与上传同口径）与 lastCloudSha 比：
@@ -2249,7 +2258,7 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
         const decision = preDecisions ? (preDecisions.get(plan.localName) ?? 'skip') : await resolveUploadConflict(localMsgs, cloudMsgs, plan.localName, batchGuard);
         if (decision === 'skip' || String(decision).startsWith('skip_cloud') || decision === 'cancel') {
             if ((decision === 'skip' || String(decision).startsWith('skip_cloud')) && !plan.mapped) setLocalName(charName, p, plan.localName);
-            if (decision === 'skip') try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[p] = Date.now(); } catch { }   // ★0.13.45-badge2：这次核对=一致 ⇒ 记下"这一刻它是同步的"
+            if (decision === 'skip') __csMarkChatSynced(p);   // 这次核对=一致（identical）⇒ 记同步点（★0.13.47 统一走 __csMarkChatSynced）
             skipped.push(plan.localName);
             return null;
         }
@@ -2316,7 +2325,7 @@ async function exportChats(charName, chatItems, preDecisions = null, avatar = ''
                 setLocalName(charName, backupPath, String(backupPath).split('/').pop());
             } catch (e) { console.warn('[chat-sync] 另行保存云端旧版失败', e); }
         }
-        try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[p] = Date.now(); } catch { }   // ★0.13.45-badge：记住"这个聊天是哪一刻传上去的"——徽章零云请求判"本地是否又有新楼层"用
+        __csMarkChatSynced(p);   // ★0.13.45-badge→0.13.47：记住"这个聊天是哪一刻传上去的"（上传成功=同步点）——徽章零云请求判"本地是否又有新楼层"用
         settings.lastCloudSha[p] = (await putCloudChat(p, text, `${decision === 'save_elsewhere' ? '另行保存后覆盖' : 'sync chat'} ${plan.localName}`)) || settings.lastCloudSha[p];
         if (!plan.mapped) setLocalName(charName, p, plan.localName); // 新聊天：绑定映射
         uploaded.push(plan.localName);
@@ -2717,6 +2726,7 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
         });
         if (res.ok) {
             settings.lastCloudSha[cloudPath] = cloud.sha;
+            __csMarkChatSynced(cloudPath);   // ★0.13.47：补楼成功后 本地==云端 ⇒ 同步点（否则刚导入完会显"本地新"）
             // 🔁 DOM 刷新 + 正则美化即时生效（不整体 reload）：若补的正是「当前正打开的聊天」且非群，
             //   云端新楼并入内存 chat 数组后——
             //   ① 酒馆助手 refreshOneMessage 逐楼重渲染(其渲染管线【含 Regex 美化】, 参考余温工具箱同款通道)
@@ -2858,6 +2868,7 @@ async function pullCharacterChats(charName) {
         if (result.length) {
             importedCount++;
             settings.lastCloudSha[p] = cloud.sha; // 记下这次拉取的云端 sha，下次相同则跳过
+            __csMarkChatSynced(p);   // ★0.13.47：新导入的本地文件=云端内容 ⇒ 同步点
             lastImportedFileName = result[result.length - 1]; // 取导入后实际文件名
             setLocalName(charName, p, lastImportedFileName); // 绑定 云路径↔本地导入名（收敛关键）
         }
@@ -2919,7 +2930,8 @@ async function pushCurrentChat() {
         window.__csConflictBusy = true;
         try { decision = await resolveUploadConflict(localMsgs, cloudMsgs, localName, null); }
         finally { window.__csConflictBusy = false; }
-        if (decision === 'skip') { toastr.info(`当前聊天「${localName}」已是最新，无需上传`); return; }
+        if (decision === 'skip') { __csMarkChatSynced(p); saveSettingsDebounced(); toastr.info(`当前聊天「${localName}」已是最新，无需上传`); return; }   // ★0.13.47：判一致=同步点（原来没记锚点 ⇒ 之后徽章恒显"本地新"）
+        // ★0.13.47 纪律：skip_cloud（云端更新）**不记锚点** —— 记了会把"云端新"也一起掩盖成"一致";cancel 同理
         if (String(decision).startsWith('skip_cloud')) { const dn = Number(String(decision).split(':')[1] || 0); toastr.info(`检测到云端比本地多 ${dn} 层，本次上传已取消——需要云端新楼请点「导入当前聊天」拉回`); return; }
         if (decision === 'cancel') { toastr.info('已取消上传'); return; }
     }
@@ -2936,6 +2948,7 @@ async function pushCurrentChat() {
             newSha = await putCloudChat(p, text, `${decision === 'append' ? 'append' : 'sync chat'} ${localName}`);
         }
         settings.lastCloudSha[p] = newSha || settings.lastCloudSha[p]; // 分段时=manifest sha
+        __csMarkChatSynced(p);   // ★0.13.47：单条上传成功=同步点（作者真机实报的"传完还显本地新"根因：这里原来只写 sha 不写锚点）
         setLocalName(charName, p, localName);
         await upsertCloudChatList(charName, localName, curAvatar); // 单条/自动上传也补维护云端清单+卡级归属
         saveSettingsDebounced();
@@ -2995,6 +3008,7 @@ async function pullCurrentChat() {
     if (result.length) {
         setLocalName(charName, p, result[0]);
         settings.lastCloudSha[p] = cloud.sha;
+        __csMarkChatSynced(p);   // ★0.13.47：新导入的本地文件=云端内容 ⇒ 同步点
         saveSettingsDebounced();
         hideBusy(); setStatus('');
         // 0.12.64d: 导入后直接加载进当前楼层(用户: 显示成功但楼层没出现, 要刷新才见)——复用 importCharFromCloud 的楼层加载
@@ -5400,7 +5414,7 @@ async function preResolveUploadConflicts(charName, chatItems, preDecisions, pres
         const cloudMsgs = parseJsonlMessages(cloud.content || '');
         const decision = await resolveUploadConflict(localMsgs, cloudMsgs, plan.localName, batch);
         preDecisions.set(plan.localName, decision);
-        if (decision === 'skip') { const p = plan.path; try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[p] = Date.now(); } catch { } }   // ★0.13.45-badge2：这次核对=一致 ⇒ 记下"这一刻它是同步的"
+        if (decision === 'skip') { __csMarkChatSynced(plan.path); }   // 这次核对=一致（identical）⇒ 记同步点（★0.13.47 统一走 __csMarkChatSynced）
     }
 }
 
@@ -5646,7 +5660,7 @@ async function importCharFromCloud(charName, opts = {}) {
                 if (!cloud) { readFail++; continue; }
                 // ── 待办A：先查本地是否已有同聊天，走「与双端实时同一套」冲突判定 + 聪明版合并（不重复新建文件）──
                 const resolved = await resolveCloudChatImport(charName, importAvatar, cloudPath, cloud, localNames);
-                if (resolved.action === 'skip' || resolved.action === 'skip_local') { alreadyCount++; settings.lastCloudSha[cloudPath] = cloud.sha || cSha; continue; }
+                if (resolved.action === 'skip' || resolved.action === 'skip_local') { alreadyCount++; settings.lastCloudSha[cloudPath] = cloud.sha || cSha; if (resolved.reason === 'identical') __csMarkChatSynced(cloudPath); continue; }   // ★0.13.47：只有 identical 才算同步点
                 if (resolved.action === 'fastforward') { importedCount++; updatedCount++; settings.lastCloudSha[cloudPath] = cloud.sha || cSha; continue; }
                 if (resolved.action === 'import_cloud_as_new') { importedCount++; settings.lastCloudSha[cloudPath] = cloud.sha || cSha; continue; } // 已在弹窗分支里另存为新聊天，无需再导入
                 // resolved.action === 'new'：本地没有该聊天 → 直接写盘到目标角色的聊天目录（/api/chats/save 按 avatar_url 定位）
@@ -5836,7 +5850,7 @@ async function importChatsTtNative(charName, cardAvatar) {
             if (!cloud) continue;
             // 待办A：冲突判定 + 聪明版合并（identical/local_superset → 跳过；cloud_superset → 云端新楼层写回本地已有文件；diverged → 弹窗）
             const resolved = await resolveCloudChatImport(charName, cardAvatar, p, cloud, localNames);
-            if (resolved.action === 'skip' || resolved.action === 'skip_local') { alreadyCount++; settings.lastCloudSha[p] = cloud.sha || cSha; continue; }
+            if (resolved.action === 'skip' || resolved.action === 'skip_local') { alreadyCount++; settings.lastCloudSha[p] = cloud.sha || cSha; if (resolved.reason === 'identical') __csMarkChatSynced(p); continue; }   // ★0.13.47：只有 identical 才算同步点
             if (resolved.action === 'fastforward') { count++; updatedCount++; settings.lastCloudSha[p] = cloud.sha || cSha; continue; }
             if (resolved.action === 'import_cloud_as_new') { count++; settings.lastCloudSha[p] = cloud.sha || cSha; continue; } // 已在弹窗分支里另存新聊天
             // resolved.action === 'new'：本地没有该聊天 → 直接写盘到目标角色的聊天目录（TT/ST 后端 /api/chats/save 按 avatar_url 定位，不依赖当前角色/表单）
@@ -5861,6 +5875,7 @@ async function importChatsTtNative(charName, cardAvatar) {
                 count++;
                 importedFileName = safe + '.jsonl';
                 setLocalName(charName, p, safe + '.jsonl');
+                __csMarkChatSynced(p);   // ★0.13.47：新写下的本地文件=云端内容 ⇒ 同步点
             } else {
                 console.warn('[chat-sync] TT 聊天落盘失败', fileName, saveRes.status);
             }
@@ -6419,6 +6434,7 @@ async function resolveCloudChatImport(charName, cardAvatar, cloudPath, cloud, lo
                 }),
             });
             if (r.ok) {
+                __csMarkChatSynced(cloudPath);   // ★0.13.47：补楼写回后 本地==云端 ⇒ 同步点（调用方另记 lastCloudSha）
                 toastr.success(`✅ 聊天「${knownLocal}」云端有新楼层，已自动补进本地（+${decision.added} 层）`);
                 return { action: 'fastforward', added: decision.added, count: 1 };
             }
@@ -7584,24 +7600,33 @@ function wirePanelEvents() {
                 const __chatLocalNewByMemory = async (name2, av2, stem2, cpath, allowSha) => {
                     try {
                         const mem = settings.lastLocalMTime && cpath ? settings.lastLocalMTime[cpath] : undefined;
+                        const sha = (allowSha && cpath && settings.lastCloudSha) ? settings.lastCloudSha[cpath] : undefined;
+                        const rowX = (mem || sha) ? await __localChatRow(name2, av2, stem2) : null;   // 两种记忆都没有 ⇒ 连本地列表都不拉
+                        const stamp = rowX ? ((rowX.last_mes || '') + '|' + (rowX.file_size || '') + '|' + (rowX.chat_items === undefined ? '' : rowX.chat_items)) : '';
                         if (mem) {
-                            const rowX = await __localChatRow(name2, av2, stem2);
                             if (!rowX || !rowX.last_mes) return false;
                             const lm = Date.parse(rowX.last_mes);
                             if (!isFinite(lm)) return false;
-                            return lm > Number(mem) + 60000;             // 最后一条消息比"上次传上去那一刻"晚 >60 秒 ⇒ 本地确实又有新楼层
+                            if (!(lm > Number(mem) + 60000)) return false;   // 主判据：最后一条消息比"上次传上去那一刻"晚 >60 秒
+                            // ★0.13.47 指纹复核（治好"陈旧锚点 / 上传后没刷锚点"造成的假「本地新」—— 作者真机就是这形态：
+                            //   锚点停在旧时刻 + lastCloudSha 已是云端当前值 + 内容其实一致 ⇒ 主判据恒真、传完还显「本地新」）。
+                            //   与上传同口径的本地指纹（双头部 {a,b}）任一 == lastCloudSha ⇒ 判"一致"并**顺手刷新锚点**（自愈，之后走 mtime 快路）；
+                            //   不同才真显示「本地新」。没有 sha / 读不出 / 分段（allowSha=false，记忆里是清单 sha）⇒ 维持主判据（宁可不治愈也不假一致）。
+                            if (sha && rowX.file_name) {
+                                const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2, stamp);
+                                if (fp && (fp.a === sha || fp.b === sha)) { __csMarkChatSynced(cpath); try { saveSettingsDebounced(); } catch { } return false; }
+                            }
+                            return true;
                         }
                         // ★0.13.46 回退：锚点缺 + 有 lastCloudSha（allowSha 只在整文件聊天档传 true）
                         if (!allowSha || !cpath) return false;            // 无任何记忆 / 分段聊天 ⇒ 继续不猜（与改前逐字同）
-                        const sha = settings.lastCloudSha && settings.lastCloudSha[cpath];
                         if (!sha) return false;                           // 连 sha 都没有 ⇒ 不猜
-                        const rowX = await __localChatRow(name2, av2, stem2);
                         if (!rowX || !rowX.file_name) return false;
-                        const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2,
-                            (rowX.last_mes || '') + '|' + (rowX.file_size || '') + '|' + (rowX.chat_items === undefined ? '' : rowX.chat_items));
+                        const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2, stamp);
                         if (!fp) return false;                            // 本地读不出/空文件 ⇒ 不猜
                         if (fp.a === sha || fp.b === sha) {               // 两种头部口径任一相同 ⇒ 一致（顺手补锚点；不写云、不改文件）
-                            try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[cpath] = Date.now(); saveSettingsDebounced(); } catch { }
+                            __csMarkChatSynced(cpath);
+                            try { saveSettingsDebounced(); } catch { }
                             return false;
                         }
                         return true;                                      // 两种口径都不同 ⇒ 本地确实比"我们上次传上去的那份"新
