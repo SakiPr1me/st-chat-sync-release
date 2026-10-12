@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.45'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.46'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2084,7 +2084,12 @@ function __localAvatarForCardId(name, cardId) {
 // 注意：不要只挑少数字段重序列化——ST/TT 的 jsonl 首行 header 带 chat_metadata/user_name/character_name，
 // 消息行带 name/is_user/send_date/mes/swipes/swipe_id/extra/chat_metadata 等。这里把后端返回的消息对象
 // 按原字段 json 化，尽量保真（不再丢 chat_metadata / swipe_info / disable_date / bookmark 等）。
-async function getChatContent(fileName, charName, avatarHint) {
+// ★0.13.46：多返回两个"分档"事实（text 语义与以前逐字相同）——
+//   · apiLines：服务端 /api/chats/get 实际读到的**可解析行数**（0=空文件/读不到；1=只有表头；>1=文件里还有别的行）。
+//     为什么不能只看重建出来的 text：空文件与"只有表头"经服务端读回后都会被重建出**一行**（0 字节时 ST 返回 []，
+//     重建会合成一行默认表头）⇒ 只看 text 分不出这两档（作者实报的"真空聊天"清单误报就是这么来的）。
+//   · headerLike：读到的第一行长得像不像表头（没有 mes 字段）。只有"恰好一行、且那行是表头"才算真·空聊天。
+async function getChatContentInfo(fileName, charName, avatarHint) {
     const avatar = getAvatarFor(charName || '', avatarHint);
     const name = charName || (ctx().characters?.[ctx().characterId]?.name) || (ctx().name2) || ''; // 末尾退回角色名 name2（修正: name1 是用户名）
     const r = await fetch('/api/chats/get', {
@@ -2102,8 +2107,9 @@ async function getChatContent(fileName, charName, avatarHint) {
         throw new Error(`读聊天 ${fileName} 失败 HTTP ${r.status}${body ? ' ' + String(body).replace(/\s+/g, ' ').slice(0, 160) : ''}`);
     }
     const data = await r.json();
-    if (!Array.isArray(data)) return '';
-    // ST /api/chats/get 返回数组：首个是 header（含 chat_metadata/user_name/character_name），其余是消息。
+    if (!Array.isArray(data)) return { text: '', apiLines: 0, headerLike: false, headerRaw: {} };
+    // ST /api/chats/get 返回数组：首个是 header（含 chat_metadata/user_name/character_name），其余是消息。空文件/读不到 = []。
+    const headerLike = !!(data[0] && typeof data[0] === 'object' && !('mes' in data[0]));
     const headerObj = data[0] && typeof data[0] === 'object' ? data[0] : {};
     const messages = data.slice(1).filter((m) => m && typeof m === 'object' && Object.keys(m).length > 0
         && (m.mes !== undefined));
@@ -2123,7 +2129,42 @@ async function getChatContent(fileName, charName, avatarHint) {
         force_avatar: m.force_avatar, original_avatar: m.original_avatar,
         chat_metadata: m.chat_metadata,
     }));
-    return JSON.stringify(header) + '\n' + lines.join('\n');
+    return { text: JSON.stringify(header) + '\n' + lines.join('\n'), apiLines: data.length, headerLike, headerRaw: headerObj };
+}
+async function getChatContent(fileName, charName, avatarHint) {
+    return (await getChatContentInfo(fileName, charName, avatarHint)).text;
+}
+
+// ★0.13.46 存量聊天「本地新」缺锚点回退（作者真机实报）：0.13.45 之前经**批量上传**传上去的聊天只记了 lastCloudSha、
+//   没记 lastLocalMTime 锚点 ⇒ 徽章的"方向记忆"判定（最后一条消息 vs 上次同步时刻）无从下手 ⇒ 本地明明又聊了新内容也不显「本地新」。
+//   回退口径（零猜）：只对"锚点缺、但 lastCloudSha 在"的聊天，懒算本地指纹（与上传同口径）与 lastCloudSha 比：
+//     · 任一指纹与记忆相同 ⇒ 一致（顺手补锚点，下次走 mtime 快路）
+//     · 都不同 ⇒ 本地确实比"我们上次传上去的那份"新 ⇒ 报「本地新」
+//   完全无记忆（锚点与 sha 都没有）⇒ 继续不猜。性能：只在缺锚点时算；结果按 (云路径|last_mes|file_size|chat_items) 缓存
+//   （聊天一变键就变 ⇒ 自动失效）；只多一次**本地**读，零云请求。
+//   ⚠ 两种头部口径都要算（夹具核出的约定）：上传文本的 header 是**分流**的 ——
+//     · 'new' 上传（云端还没有这条）= getChatContent 输出的头（user_name/character_name 固定写成 'unused'）；
+//     · 'overwrite'/'另行保存' 上传 = serializeChatJsonl(parseHeader(云端原文))，**保留云端那份头**（早期版本传的
+//       云端头里 character_name/user_name 是真实名字）⇒ 只比一种口径会把"刚上传完"误判成"本地新"。
+//     ⇒ fp.a = 按 'new' 口径、fp.b = 按"保留本地头"口径（= 本地头 + 本地消息，与 serializeChatJsonl 同序列化）各算一个。
+const __csChatFpCache = new Map();
+async function __csLocalChatFp(cpath, localFileName, charName, avatar, stamp) {
+    const key = String(cpath || '') + '|' + String(stamp || '');
+    const hit = __csChatFpCache.get(key);
+    if (hit) return hit;
+    const job = (async () => {
+        try {
+            const info = await getChatContentInfo(localFileName, charName, avatar);
+            if (!info || !info.text) return null;   // 空文件/读不到 ⇒ 不猜（徽章侧按"没有证据"处理）
+            const enc = new TextEncoder();
+            const a = await gitBlobSha(enc.encode(info.text));
+            const b = await gitBlobSha(enc.encode(serializeChatJsonl(info.headerRaw || {}, parseJsonlMessages(info.text))));
+            return { a, b };
+        } catch { return null; }
+    })().then((v) => { if (v === null) __csChatFpCache.delete(key); return v; });   // 读失败不缓存（下次刷新重试）
+    __csChatFpCache.set(key, job);
+    if (__csChatFpCache.size > 400) { const k0 = __csChatFpCache.keys().next().value; __csChatFpCache.delete(k0); }   // 兜底上限，防长跑会话无界增长
+    return job;
 }
 
 // 上传一个角色的全部聊天（收敛：按 syncMap 回写同一云路径，不新建重复文件）
@@ -2167,8 +2208,10 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
     //   读成空 → 把云端聊天覆盖成空白；用户实报"上传的聊天记录文件是空白的"就是这个）
     // 0.13.8：读取失败【单条不炸整批】——原来一抛异常 phase A 的 Promise.all 整批就挂，用户只看到一条蓝提示、查不出是哪几条
     let chatText = '';
+    let chatInfo = { apiLines: -1, headerLike: false };   // ★0.13.46：服务端实际读到的行数（0=空文件/读不到；1=只有表头；>1=文件里还有别的行）
     try {
-        chatText = await getChatContent(item.file_name, charName, avatar);
+        chatInfo = await getChatContentInfo(item.file_name, charName, avatar);
+        chatText = chatInfo.text;
     } catch (e) {
         __chatReadIssue(plan.localName, (e && e.message) || String(e));
         return null;
@@ -2179,11 +2222,27 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
         const localMsgs = parseJsonlMessages(chatText);
         const cloudMsgs = parseJsonlMessages(cloud.content || '');
         // 空读保护（0.13.10 加强）：本地这条读出来 0 楼 → **一律不上传**。
-        //   原来只在"云端已有内容"时拦 → 云端还没有这条时，会把"只有表头"的空壳写进云端（用户实报的一堆空白聊天文件）；
-        //   而这种 0 楼几乎都是同一个根因：服务端按头像找不到该聊天（同名卡取错头像目录）→ 宁可不传并报出来。
+        //   原来只在"云端已有内容"时拦 → 云端还没有这条时，会把"只有表头"的空壳写进云端（用户实报的一堆空白聊天文件）。
+        // ★0.13.46（作者真机实报）：0 楼要分档 —— "只有表头/没有消息"的**真·空聊天**很常见（点开角色就可能留一条），
+        //   不该进"读取异常清单"（原来那句"服务端可能按头像找不到这条聊天"是误导+吓人）；只有"本地体量大却 0 条"、
+        //   "云端有内容本地 0 条"、读失败/读取为空 才是真异常 ⇒ 照旧进清单。保护行为（0 楼一律不上传）一字不动。
+        //   分档判据用**服务端实际读到的行数**（apiLines/headerLike），不是重建文本的字面 —— 空文件与"只有表头"
+        //   重建后都是 1 行（见 getChatContentInfo 注释）；带 BOM/CRLF 的原文经服务端解析后也归同一路
+        //   （BOM 表头解析失败 ⇒ 服务端当空文件 ⇒ 落"读取为空"档，照样报）。
         if (!localMsgs.length) {
-            console.warn('[chat-sync] 本地读到 0 楼，已跳过上传:', plan.localName, cloudMsgs.length ? '（云端有内容，未覆盖）' : '');
-            __chatReadIssue(plan.localName, cloudMsgs.length ? '本地读到 0 楼（云端有内容，已跳过、未覆盖）' : '本地读到 0 楼（未上传；服务端可能按头像找不到这条聊天）');
+            const __cloudHas = cloudMsgs.length > 0;   // 与旧 cloudMsgs.length 判据逐字等价（length>0 ⇔ 真值）
+            if (!__cloudHas && chatInfo.apiLines === 1 && chatInfo.headerLike) {   // 恰好一行、且那行是表头 ⇒ 真·空聊天：静默跳过
+                __csEmptyChatSkipped++;   // 只进汇总一句"另跳过 N 条空聊天"，不进异常清单
+                console.warn('[chat-sync] 空聊天（本机就没有消息），已跳过上传:', plan.localName);
+                return null;
+            }
+            console.warn('[chat-sync] 本地读到 0 楼，已跳过上传:', plan.localName,
+                __cloudHas ? '（云端有内容，未覆盖）' : (chatInfo.apiLines > 1 ? '（本地文件有内容但解析出 0 条消息）' : '（读取为空）'));
+            __chatReadIssue(plan.localName, __cloudHas
+                ? '本地读到 0 楼（云端有内容，已跳过、未覆盖）'
+                : (chatInfo.apiLines > 1
+                    ? '本机这份读出来没有消息（文件里还有内容但都不是有效楼层，格式可能坏了）—— 已跳过、云端未改动'
+                    : '读取为空（服务端没返回内容）—— 已跳过、云端未改动'));
             return null;
         }
         // 优先用锁外预扫的决策; 未预扫则用 batchGuard(批内不弹窗, 一律照 'overwrite' 覆盖) —— 并行阶段绝不现场弹多个窗
@@ -2201,10 +2260,12 @@ async function readJobForPlan(plan, chatItems, charName, preDecisions, batchGuar
 }
 // 0.13.8：本轮上传中"聊天读成空/读失败"的清单（供汇总提示与一键复制诊断）
 let __csReadIssues = [];
+let __csEmptyChatSkipped = 0;   // ★0.13.46：本轮"真·空聊天"（只有表头/没有消息）静默跳过条数——只进汇总一句话，不进异常清单
 function __chatReadIssue(chat, reason) {
     try { __csReadIssues.push({ chat, reason }); } catch { }
 }
 function __chatReadIssuesTake() { const a = __csReadIssues.slice(); __csReadIssues = []; return a; }
+function __csEmptyChatTake() { const n = __csEmptyChatSkipped; __csEmptyChatSkipped = 0; return n; }   // ★0.13.46
 function __chatReadIssuesText(issues) {
     const out = ['=== 一键云同步 · 聊天读取异常清单 ==='];
     out.push('插件版本: ' + PLUGIN_VERSION);
@@ -2216,6 +2277,10 @@ function __chatReadIssuesText(issues) {
 async function exportChats(charName, chatItems, preDecisions = null, avatar = '') {
     const uploaded = [];
     const skipped = [];
+    // ★0.13.46：本轮清单/计数在这里归零（上一轮若在写仓阶段抛错、没走到 pushCurrentCharacter 的 take，
+    //   旧残留会混进下一轮的汇报里 —— 计数重置时机钉死在"每次上传开跑的那一行"）。
+    __csReadIssues = [];
+    __csEmptyChatSkipped = 0;
     // 并发写盘时绝不现场弹窗（避免多窗叠加）：无 preDecisions 的差异一律按「覆盖」处理。
     // 若需要用户选择，应由 lock 外 preResolveUploadConflicts 的「全部覆盖/全部合并」统一决定存进 preDecisions。
     const batchGuard = { applyAll: true, decision: 'overwrite' };
@@ -2339,7 +2404,8 @@ async function pushCurrentCharacter(charName, opts = {}) {
         const chatItems = chatItems0 || await getCharChatFileNames(name, avatar);
         const { uploaded, skipped } = await exportChats(name, chatItems, preDecisions, avatar);
         const readIssues = __chatReadIssuesTake();
-        const msg = `已同步角色「${label}」：卡 + ${worldName ? '世界书 + ' : ''}${uploaded.length} 个聊天已同步${skipped.length ? `，${skipped.length} 个已是最新` : ''}${readIssues.length ? `，⚠ ${readIssues.length} 条聊天本地没读到内容（已跳过、云端未改动）` : ''} ✅`;
+        const emptySkipped = __csEmptyChatTake();   // ★0.13.46：真·空聊天（本机没有消息）——温和一句话，不吓人
+        const msg = `已同步角色「${label}」：卡 + ${worldName ? '世界书 + ' : ''}${uploaded.length} 个聊天已同步${skipped.length ? `，${skipped.length} 个已是最新` : ''}${emptySkipped ? `，另跳过 ${emptySkipped} 条空聊天（本机就没有消息）` : ''}${readIssues.length ? `，⚠ ${readIssues.length} 条聊天本地没读到内容（已跳过、云端未改动）` : ''} ✅`;
         if (readIssues.length) { toastr.warning(msg, '部分聊天未上传', { timeOut: 12000 }); } else { toastr.success(msg); }
         if (readIssues.length) {
             // 单条异常不打扰阅读：挂机上传时也能事后查到是哪几条（整段可复制）
@@ -4050,10 +4116,11 @@ async function resolveCfgImportConflict(categoryLabel, name, batchMode) {
             ],
         },
     );
-    if (choice === CFG_IMPORT_ALL_OVERWRITE) { batchMode.applyAll = true; batchMode.decision = 'overwrite'; return 'overwrite'; }
-    if (choice === CFG_IMPORT_ALL_COPY) { batchMode.applyAll = true; batchMode.decision = 'copy'; return 'copy'; }
+    if (choice === CFG_IMPORT_ALL_OVERWRITE) { if (batchMode) { batchMode.applyAll = true; batchMode.decision = 'overwrite'; } return 'overwrite'; }
+    if (choice === CFG_IMPORT_ALL_COPY) { if (batchMode) { batchMode.applyAll = true; batchMode.decision = 'copy'; } return 'copy'; }
     if (choice === CFG_IMPORT_OVERWRITE) return 'overwrite';
     if (choice === CFG_IMPORT_COPY) return 'copy';
+    if (choice === 1) return 'copy';   // ★0.13.46：兜底 —— TT 叠默认按钮时"是"= 本框安全默认项（另存副本，两份都留）；顺带把 batchMode 判空（原来 null 会当场 TypeError）
     return 'cancel';
 }
 // 唯一命名(ST 惯例 (N))：base 被占 → 「base (云端)」→「base (云端) (2)」…；exists(name)=是否已占用
@@ -5263,29 +5330,37 @@ function resolveUploadConflict(localMsgs, cloudMsgs, fileName, batchMode = null)
                 : `本地和云端产生分叉（公共 ${diff.common} 层之后，本地多 ${diff.localTail.length} 层，云端多 ${diff.cloudTail.length} 层）`)
             : `本地比云端多 ${diff.localTail.length} 层新内容`;
         const baseMsg = `聊天「${escapeHtml(fileName)}」：${desc}。<br>你想怎么处理它？`;
+        // ★0.13.46：第 0 楼（开场白）那版不同不算分叉 —— 只在"真是分叉"时补一句说明（计数已不含第 0 楼）
+        const __greetNote = diff.greetDiff ? '<br><small>（开场白选的那一版不同，不算分叉；上传会带上你现在的这一版）</small>' : '';
+        // ★0.13.46（作者真机实报：单条上传点「✅ 全部覆盖」⇒ 上传被当成**取消**）：两个「全部X」按钮的返回值（3101/3102）
+        //   只有**批量分支**在消费 ⇒ 单条路径点它们会一路掉到末尾 return 'cancel'，还什么都不提示。
+        //   改法：① 单条路径**不再显示**这两个按钮（单条场景里"全部"没有任何指代对象，留着它=文案承诺了不存在的行为）；
+        //         ② 返回值矩阵补齐归宿（双保险：老版本/脚本直调带进来的 3101/3102 也不许落进 cancel 兜底）。
+        const __customButtons = [];
+        if (batchMode) {
+            __customButtons.push({ text: '✅ 全部覆盖', result: ALL_OVER, classes: ['popup-button-ok'] });
+            __customButtons.push({ text: '✅ 全部另行保存', result: ALL_SAVE, classes: ['popup-button-ok'] });
+        }
+        __customButtons.push({ text: '覆盖', result: CONFLICT_OVERWRITE, classes: ['popup-button-cancel'] });
+        __customButtons.push({ text: '另行保存', result: CONFLICT_SAVE_ELSEWHERE, classes: ['popup-button-cancel'] });
+        __customButtons.push({ text: '跳过', result: CONFLICT_CANCEL, classes: ['popup-button-cancel'] });
         const choice = await Popup.show.confirm(
             '⚠️ 上传中发现冲突（本地和云端不一样）',
-            `${baseMsg}<br><small>「另行保存」＝两边都保留。</small>`,
+            `${baseMsg}${__greetNote}<br><small>「另行保存」＝两边都保留。</small>`,
             {
                 defaultResult: CONFLICT_SAVE_ELSEWHERE,
                 okButton: false,
                 cancelButton: false,
-                customButtons: [
-                    { text: '✅ 全部覆盖', result: ALL_OVER, classes: ['popup-button-ok'] },
-                    { text: '✅ 全部另行保存', result: ALL_SAVE, classes: ['popup-button-ok'] },
-                    { text: '覆盖', result: CONFLICT_OVERWRITE, classes: ['popup-button-cancel'] },
-                    { text: '另行保存', result: CONFLICT_SAVE_ELSEWHERE, classes: ['popup-button-cancel'] },
-                    { text: '跳过', result: CONFLICT_CANCEL, classes: ['popup-button-cancel'] },
-                ],
+                customButtons: __customButtons,
             },
         );
-        if (batchMode) {
-            if (choice === ALL_OVER) { batchMode.applyAll = true; batchMode.decision = 'overwrite'; return batchMode.decision; }
-            if (choice === ALL_SAVE) { batchMode.applyAll = true; batchMode.decision = 'save_elsewhere'; return batchMode.decision; }
-            // 仅这个：保留 batchMode（未 applyAll），继续逐条弹
-        }
+        // 矩阵（每个按钮 → 归宿）：批量路径的「全部X」= 记 applyAll 供后续沿用；非批量路径与对应单项等价（单条里"全部"就是"这一条"）。
+        // ★TT 会叠默认"是(1)/否(0)"按钮（0.12.136 实测该平台无视 okButton/cancelButton:false）⇒ "是"按本框安全默认（另行保存，两边都留）处理。
+        if (choice === ALL_OVER) { if (batchMode) { batchMode.applyAll = true; batchMode.decision = 'overwrite'; } return 'overwrite'; }
+        if (choice === ALL_SAVE) { if (batchMode) { batchMode.applyAll = true; batchMode.decision = 'save_elsewhere'; } return 'save_elsewhere'; }
         if (choice === CONFLICT_OVERWRITE) return 'overwrite';
         if (choice === CONFLICT_SAVE_ELSEWHERE) return 'save_elsewhere';
+        if (choice === 1) return 'save_elsewhere';   // 兜底：弹窗默认项当"确定"（TT 默认按钮叠加；与 defaultResult 同义）
         return 'cancel';
     })();
 }
@@ -6013,6 +6088,41 @@ function sameMessageSequence(a, b) {
 //     'local_superset'   —— 本地是云端超集(云端只有公共前缀, 本地尾部全是新增) → 上传本地(不弹框)
 //     'diverged'         —— 两边在某一处指纹不同 → 分叉, 弹框让用户选
 function classifyChatDiff(localMsgs, cloudMsgs) {
+    const LM = Array.isArray(localMsgs) ? localMsgs : [];
+    const CM = Array.isArray(cloudMsgs) ? cloudMsgs : [];
+    const base = __classifyChatDiffCore(LM, CM);
+    const L0 = LM[0], C0 = CM[0];
+    if (L0 === undefined || C0 === undefined) return base;                 // 任一侧 0 条 ⇒ 逐字走原算法（0 楼保护/现行为不动）
+    if (messageSignature(L0) === messageSignature(C0)) return base;        // 第 0 楼相同 ⇒ 与改前**逐字相同**
+    // ★0.13.46 第 0 楼宽容（见上方注释）：只把第 0 条摘出来，对 msgs[1..] 跑原算法，再按下表折算。
+    const core = __classifyChatDiffCore(LM.slice(1), CM.slice(1));
+    const rel = (core.relation === 'cloud_superset')
+        ? 'cloud_superset'                                                 // 保守：不许被宽容反转成"上传"
+        : (core.relation === 'diverged' ? 'diverged' : 'local_superset');  // identical / local_superset ⇒ local_superset（云端拿到新版开场白）
+    const common = core.common + 1;                                        // 计数挪到第 0 楼之后：开场白不额外加"多 N 层"
+    return {
+        relation: rel,
+        common,
+        localTail: LM.slice(common),
+        cloudTail: CM.slice(common),
+        localCount: LM.length,
+        cloudCount: CM.length,
+        middleGap: core.middleGap,
+        localContig: core.localContig,
+        greetDiff: true,                                                   // 宽容生效（仅用于对话框补一句说明；不影响任何判定）
+    };
+}
+// ★0.13.46 第 0 楼宽容（作者真机口径："开场白是可以选的，以后每次都报分叉会很烦——是否应该忽略第0楼？"）：
+//   开场白是文件里**第一条消息**，两端各选一版是常事；逐条签名比对会把"只换了开场白"当成大分叉
+//   （公共 0 层 + 两边各多一层），每次都弹框。
+//   口径 = **宽容，不是忽略**（真忽略会让"只换了开场白"判成"已最新" ⇒ 云端永远拿不到新版开场白 = 真丢内容）：
+//     base(msgs[1..]) = identical      ⇒ local_superset ⇒ 自动覆盖上传、不弹窗（云端拿到你现在这一版）
+//     base = local_superset            ⇒ local_superset（照旧）
+//     base = cloud_superset            ⇒ cloud_superset（保守：照旧"取消上传 + 提示导入"）
+//     base = diverged                  ⇒ diverged（照旧弹窗；只是"多 N 层"的计数不含第 0 楼）
+//   统一按"第一条消息"处理、**不去猜它是不是开场白**（用户可以在设置里关掉开场白、也可能首楼就是普通消息 ——
+//   猜错了反而添乱）；两边任一侧 0 条 ⇒ 也直接走原算法。
+function __classifyChatDiffCore(localMsgs, cloudMsgs) {
     const sig = (m) => messageSignature(m);
     const L = localMsgs.map(sig);
     const C = cloudMsgs.map(sig);
@@ -6137,6 +6247,8 @@ async function syncOpenChat(charName) {
                 '这个聊天在云端和本地各走了不同分支（公共 ' + diff.common + ' 层后：本地另有 ' + diff.localTail.length + ' 层，云端另有 ' + diff.cloudTail.length + ' 层）。',
                 {
                     defaultResult: CHOOSE_CLOUD,
+                    okButton: false,      // ★0.13.46：原来没关默认按钮 ⇒ ST 上会同时出现"是(1)/否(0)"，点任一都两个 if 全不命中、
+                    cancelButton: false,  //   一路掉进下面的"以本地为准（用本地覆盖云端）"——点"确定"却把云端盖了（文案与行为不符）。
                     customButtons: [
                         { text: '以云端为准（本地另存为分支，两者都保留）', result: CHOOSE_CLOUD, classes: ['popup-button-ok'] },
                         { text: '以本地为准（用本地覆盖云端）', result: CHOOSE_LOCAL, classes: ['popup-button-cancel'] },
@@ -6144,7 +6256,9 @@ async function syncOpenChat(charName) {
                 },
             );
             // 执行所选动作
-            if (choice === CHOOSE_CLOUD) {
+            // ★0.13.46：只有**明确选了**「以本地为准」才走覆盖；其它任何返回值（含 TT 叠出来的 1/0、关掉弹窗）
+            //   一律走安全分支「以云端为准」（云端另存为本地分支 ⇒ 两边都保留），绝不因为点了个"确定"就把云端盖掉。
+            if (choice !== CHOOSE_LOCAL) {
                 // 把云端这份另存为本地新聊天条目（保留本地分支），云端保持不动
                 await importCloudChatAsNew(charName, p, cloud, chatFile);
                 return { action: 'pull_cloud_as_new', diverged: true, common: diff.common };
@@ -6321,18 +6435,22 @@ async function resolveCloudChatImport(charName, cardAvatar, cloudPath, cloud, lo
             `聊天「${knownLocal}」在云端和本地各走了不同分支（公共 ${diff.common} 层后：本地另有 ${diff.localTail.length} 层，云端另有 ${diff.cloudTail.length} 层）。要保留哪边？`,
             {
                 defaultResult: CHOOSE_CLOUD,
+                okButton: false,      // ★0.13.46：原来没关默认按钮 ⇒ ST 上同时出现"是(1)/否(0)"，点任一都掉进下面
+                cancelButton: false,  //   的"以本地为准（保留本地、跳过云端这份）"——点"确定"却把云端这份扔了（文案与行为不符）。
                 customButtons: [
                     { text: '以云端为准（云端这份另存为本地新记录，两边都保留）', result: CHOOSE_CLOUD, classes: ['popup-button-ok'] },
                     { text: '以本地为准（保留本地，跳过云端这份）', result: CHOOSE_LOCAL, classes: ['popup-button-cancel'] },
                 ],
             },
         );
-        if (choice === CHOOSE_CLOUD) {
-            // 复用既有 importCloudChatAsNew：把云端这份另存为本地新聊天（保留本地分支）
-            await importCloudChatAsNew(charName, cloudPath, cloud, knownLocal);
-            return { action: 'import_cloud_as_new', count: 1 };
+        // ★0.13.46：只有**明确选了**「以本地为准」才跳过云端这份；其它任何返回值（含 TT 叠出来的 1/0、关掉弹窗）
+        //   一律走安全分支「以云端为准」（云端这份另存为本地新记录 ⇒ 两边都保留）。
+        if (choice === CHOOSE_LOCAL) {
+            return { action: 'skip_local', count: 1 };
         }
-        return { action: 'skip_local', count: 1 };
+        // 复用既有 importCloudChatAsNew：把云端这份另存为本地新聊天（保留本地分支）
+        await importCloudChatAsNew(charName, cloudPath, cloud, knownLocal);
+        return { action: 'import_cloud_as_new', count: 1 };
     }
     return { action: 'skip', count: 1 };
 }
@@ -7442,6 +7560,10 @@ function wirePanelEvents() {
                 // ★0.13.45-badge：「普通聊天多聊几楼」也该出"本地新"——整文件/短聊天没有段级清单可逐段比，
                 //   用"方向记忆（settings.lastLocalMTime[云路径] = 上次把它传上去的时刻）+ 本地聊天列表里那条的最后一条消息时间"做
                 //   **零云请求**判定：最后一条消息明显晚于上次同步 ⇒ 本地新。没记忆/查不到 ⇒ 一律不猜（维持现状）。
+                // ★0.13.46：锚点（lastLocalMTime）缺失时再补一层**零猜回退**（allowSha）——存量聊天（0.13.45 之前批量上传的）
+                //   只有 lastCloudSha、没有锚点 ⇒ 原来永远不显「本地新」。回退 = 懒算本地指纹（与上传同口径）比 lastCloudSha：
+                //   不同 ⇒ 本地新；相同 ⇒ 一致（顺手补锚点）。只有"整文件聊天（云端没有分段清单）"这一档才允许走（分段时
+                //   lastCloudSha 记的是清单 sha，拿内容指纹去比会假报"本地新"）。完全无任何记忆 ⇒ 继续不猜。
                 const __localChatsCache = {};   // name|av -> Map(本地文件名 -> 行)；两个 worker 共用，每渲染每角色最多一次本地列表请求
                 const __localChatRow = async (name2, av2, stem2) => {
                     const key = name2 + '|' + av2;
@@ -7459,15 +7581,30 @@ function wirePanelEvents() {
                     for (const [fn, rowX] of map) { try { if (__csChatStemOf(fn) === stem2) return rowX; } catch { } }
                     return null;
                 };
-                const __chatLocalNewByMemory = async (name2, av2, stem2, cpath) => {
+                const __chatLocalNewByMemory = async (name2, av2, stem2, cpath, allowSha) => {
                     try {
                         const mem = settings.lastLocalMTime && cpath ? settings.lastLocalMTime[cpath] : undefined;
-                        if (!mem) return false;                          // 无记忆 ⇒ 不猜
+                        if (mem) {
+                            const rowX = await __localChatRow(name2, av2, stem2);
+                            if (!rowX || !rowX.last_mes) return false;
+                            const lm = Date.parse(rowX.last_mes);
+                            if (!isFinite(lm)) return false;
+                            return lm > Number(mem) + 60000;             // 最后一条消息比"上次传上去那一刻"晚 >60 秒 ⇒ 本地确实又有新楼层
+                        }
+                        // ★0.13.46 回退：锚点缺 + 有 lastCloudSha（allowSha 只在整文件聊天档传 true）
+                        if (!allowSha || !cpath) return false;            // 无任何记忆 / 分段聊天 ⇒ 继续不猜（与改前逐字同）
+                        const sha = settings.lastCloudSha && settings.lastCloudSha[cpath];
+                        if (!sha) return false;                           // 连 sha 都没有 ⇒ 不猜
                         const rowX = await __localChatRow(name2, av2, stem2);
-                        if (!rowX || !rowX.last_mes) return false;
-                        const lm = Date.parse(rowX.last_mes);
-                        if (!isFinite(lm)) return false;
-                        return lm > Number(mem) + 60000;                 // 最后一条消息比"上次传上去那一刻"晚 >60 秒 ⇒ 本地确实又有新楼层
+                        if (!rowX || !rowX.file_name) return false;
+                        const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2,
+                            (rowX.last_mes || '') + '|' + (rowX.file_size || '') + '|' + (rowX.chat_items === undefined ? '' : rowX.chat_items));
+                        if (!fp) return false;                            // 本地读不出/空文件 ⇒ 不猜
+                        if (fp.a === sha || fp.b === sha) {               // 两种头部口径任一相同 ⇒ 一致（顺手补锚点；不写云、不改文件）
+                            try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[cpath] = Date.now(); saveSettingsDebounced(); } catch { }
+                            return false;
+                        }
+                        return true;                                      // 两种口径都不同 ⇒ 本地确实比"我们上次传上去的那份"新
                     } catch { return false; }
                 };
                 let cursor2 = 0;
@@ -7581,7 +7718,8 @@ function wirePanelEvents() {
                                         if (!__listedOk || !__listed.has(stem)) { chatState = 'broken'; chatWhy = '未登记（chat-list）'; break; }
                                         const chatName = stem;
                                     if (!man) {   // ★0.13.45-badge：整文件聊天（<200 楼，没段级清单）——零云请求方向判定（没记忆时与改前逐字同）
-                                        if (chatState !== 'broken' && await __chatLocalNewByMemory(name, av, stem, e.chatPath && e.chatPath[stem])) { chatState = 'local'; break; }
+                                        // ★0.13.46：这一档允许"锚点缺 + 有 lastCloudSha"的指纹回退（真·整文件 ⇒ 记忆里的 sha 就是内容 sha）
+                                        if (chatState !== 'broken' && await __chatLocalNewByMemory(name, av, stem, e.chatPath && e.chatPath[stem], true)) { chatState = 'local'; break; }
                                         continue;
                                     }
                                     let chatText = '';
@@ -7593,7 +7731,9 @@ function wirePanelEvents() {
                                         msgLines.push(l);
                                     });
                                     if (msgLines.length < SEG_MIN_MSGS) {   // ★0.13.45-badge：短聊天（没分段）同样补"本地新"判定（与上面整文件那条同源；无记忆=不猜）
-                                        if (chatState !== 'broken' && await __chatLocalNewByMemory(name, av, stem, e.chatPath && e.chatPath[stem])) { chatState = 'local'; break; }
+                                        // ★0.13.46：这里不传 allowSha —— 云端这一档是分段聊天（man 非空），lastCloudSha 记的是**清单 sha**，
+                                        //   拿内容指纹去比会假报"本地新" ⇒ 只走原 mtime 路（cpath 在这档本来也拿不到，双保险）。
+                                        if (chatState !== 'broken' && await __chatLocalNewByMemory(name, av, stem, e.chatPath && e.chatPath[stem], false)) { chatState = 'local'; break; }
                                         continue;
                                     }
                                     const segs = splitChatSegmentsBySize(msgLines, SEG_TARGET_BYTES);
@@ -12074,6 +12214,8 @@ window.__stChatSyncDebug = {
     getCharChatFileNames,
     currentChatFileName,
     getChatContent,
+    getChatContentInfo,   // ★0.13.46：带上"服务端实际读到的行数/表头形态"的读数（探针/调试用）
+    __csLocalChatFp,      // ★0.13.46：本地聊天指纹（两种头部口径 {a,b}；徽章"缺锚点回退"用的就是它 —— 探针可直驱核对约定）
     listCloudWorldbooks,
     // 0.13.0 卡级身份（QA/调试直驱，供同名卡 e2e 断言）
     __cardsLoad,
