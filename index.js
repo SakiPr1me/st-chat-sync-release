@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.48'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.49'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -11611,6 +11611,13 @@ const CHAT_SYNC_CSS = `
 .popup .popup-controls { flex-wrap: wrap; row-gap: 8px; column-gap: 10px; }
 .popup .popup-controls .menu_button { white-space: normal; text-align: center; min-width: 0; }
 .popup { max-width: 94vw; max-height: 92vh; overflow-y: auto; }
+/* ★0.13.49 前面楼层切换分支：只做"显隐"——箭头/计数的尺寸/颜色/位置/形状全部沿用原生（同一批原生 class、同一批原生规则）。
+   ① 原生只给最后一楼显示（style.css:1351 的 body:not(.swipeAllMessages) 那条 + .mes:not(.swipes_visible) 那条）⇒ 这里只把"我们标记的非最后一楼"从隐藏里放出来；
+   ② body:not(.hideAllSwipeButtons) 前缀 = 生成中/酒馆主动藏箭头时本规则自动失效（跟随原生、fail-closed）；
+   ③ opacity 需要 !important 是因为原生隐藏规则就用了 !important（opacity:0 !important）；.swipes-counter 的 hover 亮起按原生数值(0.7)补回。 */
+body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) :is(.swipe_left, .swipe_right, .swipes-counter) { opacity:.3 !important; visibility:visible; pointer-events:auto; interactivity:auto; }
+body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-counter.swipe-picker-enabled:hover,
+body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-counter.swipe-picker-enabled:focus-visible { opacity:.7 !important; }
 `;
 function injectSettingsCss() {
     if (document.getElementById('chat-sync-settings-style')) return;
@@ -11773,6 +11780,105 @@ async function autoConnectIfConfigured() {
         });
     }
 })();
+// ═══ ★0.13.49 前面楼层也能切换分支（作者点名：第 0 楼开场白等"非最后一楼"也装酒馆原生的滑动箭头）═══
+// 作者口径「要酒馆原生的」⇒ 结构与外观零自绘：
+//   · 箭头/计数就是 ST 每条 .mes 自带的 .swipe_left / .swipe_right / .swipes-counter（原生消息模板里本来就有，
+//     只是原生 CSS 只给最后一楼显示：public/style.css:1351 与 script.js refreshSwipeButtons 只给最后一楼加 swipes_visible）。
+//   · 本功能只做两件"开关"级的事：
+//     (a) 给"够资格的非最后一楼"补上原生类 swipes_visible + 本插件标记类 cs-branch-swipe，再由一条**只改显隐**的
+//         插件 CSS（opacity / visibility / pointer-events —— 不碰尺寸/颜色/位置）解除原生给非最后一楼加的隐藏；
+//     (b) 把这些楼的箭头点击接到 ST 原生 swipe() 上：ctx().swipe.to(event, dir, { source:'swipe_picker',
+//         forceMesId, forceSwipeId }) —— 'swipe_picker' 是 ST 自己"跳到指定分支"的原生来源（scripts/swipe-picker.js:409）。
+//         原生负责：更新该楼 swipe_id/mes（经 swipe_info 回填）、只重渲染该楼（addOneMessage type:'swipe'，scroll 只在最后一楼时开）。
+//         ★存盘也是原生自带的（swipe() 内 saveChatDebounced()）—— 不再叠插件自己的落盘路径，避免双写。
+// ★左右循环（作者口径）：forceSwipeId 必须自己先归一到 [0, n-1] 再传 —— 传越界值会掉进原生 overswipe 分支（可能触发"重新生成"/弹窗）。
+//   （最后一楼右箭头的"越界=续写"语义，绝不能借道到前面楼层。）
+// ★fail-closed：不是非最后一楼 / swipes 缺失或只有一条 / 用户楼 / 小系统楼 / 显式不可滑 / 酒馆未导出 swipe API /
+//   正在生成 / 正滑到一半 —— 一律不装或不响应；异常全部吞掉（零 console 报错），控件保持隐藏。
+// ★稳态：MutationObserver(#chat 子树 + class 变化) + 5s 兜底轮询 + CHAT_CHANGED —— ST 重渲染或 refreshSwipeButtons 清类后自动补回。
+const CS_BRANCH_SWIPE_CLASS = 'cs-branch-swipe';
+let __csBranchSwipeDisabled = false;   // 探针/调试用：true = 本功能整个不生效（撤掉注入；假证用）
+
+// 够资格判据（限制面与原生 isMessageSwipeable 同源：用户楼 / 小系统楼 / 显式不可滑 都不滑；再叠作者口径"最后一楼不装"）
+function __csBranchSwipeOk(chatArr, id) {
+    try {
+        if (__csBranchSwipeDisabled) return false;
+        if (!Array.isArray(chatArr) || !Number.isFinite(id) || id < 0) return false;
+        if (id === chatArr.length - 1) return false;                    // 最后一楼：酒馆原生已有箭头，不重复装
+        const m = chatArr[id];
+        if (!m || typeof m !== 'object') return false;
+        if (!Array.isArray(m.swipes) || m.swipes.length <= 1) return false;   // swipes 缺失 / 单分支 ⇒ 不装
+        if (m.is_user) return false;
+        if (m.extra && m.extra.isSmallSys) return false;
+        if (m.extra && m.extra.swipeable === false) return false;       // 欢迎页等显式不可滑（原生同判据）
+        return true;
+    } catch { return false; }
+}
+
+// 幂等标记（只增删 class；已正确的元素一个字节都不动 —— 防与 ST 互踩、防观察器自激）
+function __csBranchSwipeSweep() {
+    try {
+        const c = ctx();
+        const chatArr = c && Array.isArray(c.chat) ? c.chat : null;
+        if (!chatArr) return 0;
+        let n = 0;
+        for (const el of document.querySelectorAll('#chat .mes[mesid]')) {
+            const id = Number(el.getAttribute('mesid'));
+            const want = __csBranchSwipeOk(chatArr, id);
+            const has = el.classList.contains(CS_BRANCH_SWIPE_CLASS);
+            if (want) {
+                if (!has) el.classList.add(CS_BRANCH_SWIPE_CLASS);
+                if (!el.classList.contains('swipes_visible')) el.classList.add('swipes_visible');   // 原生类：该楼"允许显示箭头"
+                n++;
+            } else if (has) {
+                el.classList.remove(CS_BRANCH_SWIPE_CLASS);
+                // 只撤销"我们自己加的那个 swipes_visible"：该楼已成为最后一楼时，该类所有权归 ST，别碰（碰了会把原生箭头也藏掉）
+                if (!el.classList.contains('last_mes')) el.classList.remove('swipes_visible');
+            }
+        }
+        return n;
+    } catch (e) { console.warn('[chat-sync] 楼层箭头标记失败(忽略)', e); return 0; }
+}
+
+// 点击 → 原生 swipe()（左右循环；forceSwipeId 自己归一到 [0, n-1]）
+async function __csBranchSwipeClick(e, dir) {
+    try {
+        if (e && typeof e.preventDefault === 'function') { e.preventDefault(); e.stopPropagation(); }
+        const c = ctx();
+        const chatArr = c && Array.isArray(c.chat) ? c.chat : null;
+        const el = (e && e.currentTarget && e.currentTarget.closest) ? e.currentTarget.closest('.mes') : null;
+        const id = el ? Number(el.getAttribute('mesid')) : NaN;
+        if (!chatArr || !__csBranchSwipeOk(chatArr, id)) return;    // 点下去那一刻复核（可能拿到了过期标记：刚被 ST 变成最后一楼等）
+        const sw = c.swipe;
+        if (!sw || typeof sw.to !== 'function') return;             // 老酒馆没导出该 API ⇒ fail-closed（控件照样显示，点了不响应）
+        if (typeof sw.isAllowed === 'function' && !sw.isAllowed()) return;   // 与原生 picker 同款前置：生成中 / 正滑到一半 / 酒馆藏了箭头 ⇒ 不动
+        const m = chatArr[id];
+        const total = m.swipes.length;
+        const cur = Math.min(Math.max(Number(m.swipe_id ?? 0) || 0, 0), total - 1);
+        const next = (dir === 'right') ? (cur + 1) % total : (cur - 1 + total) % total;   // 左右循环
+        await sw.to(e, dir, { source: 'swipe_picker', forceMesId: id, forceSwipeId: next });
+    } catch (err) { console.warn('[chat-sync] 楼层切分支失败(忽略)', err); }
+}
+
+// 自愈（同 __csWatchPanel 手法：MutationObserver + 兜底轮询）
+(function __csWatchBranchSwipes() {
+    let timer = null;
+    const run = () => { try { __csBranchSwipeSweep(); } catch { } };
+    const later = () => { clearTimeout(timer); timer = setTimeout(run, 120); };
+    if (typeof jQuery !== 'undefined') {
+        jQuery(() => {
+            try {
+                $(document).on('click', '#chat .mes.' + CS_BRANCH_SWIPE_CLASS + ' .swipe_left', (e) => __csBranchSwipeClick(e, 'left'));
+                $(document).on('click', '#chat .mes.' + CS_BRANCH_SWIPE_CLASS + ' .swipe_right', (e) => __csBranchSwipeClick(e, 'right'));
+            } catch (e) { console.warn('[chat-sync] 楼层箭头点击绑定失败(忽略)', e); }
+            run();   // 首次
+            try { injectSettingsCss(); } catch { }   // 保底：面板没挂上时也要有那条"只改显隐"的 CSS（幂等）
+            try { new MutationObserver(later).observe(document.getElementById('chat') || document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'mesid'] }); } catch { }
+            setInterval(run, 5000);   // 兜底轮询（与面板自愈同款；覆盖 MutationObserver 覆盖不到的重建方式）
+        });
+    }
+})();
+eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(() => { try { __csBranchSwipeSweep(); } catch { } }, 300));
 // ═══ 快捷入口(0.12.7, 逻辑仿 st-kimi-reasoning-injector 悬浮条) ═══
 // 悬浮球: body 级 fixed, 每个页面都在; 点头部展开/收起; 拖拽(3px阈值+边界钳制+位置记忆); 窗口缩放钳回视口
 // 条目: 功能区(直接执行, 彩色, 最前, 分隔线) + 面板区(打开对应页面, 橙); 勾选控制见 settings.floatPages
@@ -12311,6 +12417,10 @@ jQuery(() => {
 
 // ===================== 调试出口（真机 CDP 验证用） =====================
 window.__stChatSyncDebug = {
+    // ★0.13.49 前面楼层切换分支（探针/调试直驱）：撤掉注入（假证）/ 主动扫一遍
+    setBranchSwipe(v) { __csBranchSwipeDisabled = !v; __csBranchSwipeSweep(); return !__csBranchSwipeDisabled; },
+    branchSwipeSweep() { return __csBranchSwipeSweep(); },
+    branchSwipeOk(id) { return __csBranchSwipeOk(ctx().chat, Number(id)); },
     Gitee,
     importCharFromCloud,
     pullCurrentCharacter,
