@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.52'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.53'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -66,6 +66,7 @@ const DEFAULT_SETTINGS = {
     connSlots: [],           // 连接槽位[{platform,repo,token,lastConnectAt}]: 保存配置自动去重入库, 下拉一秒切换, 可删
     autoUpdate: true,         // 自动更新插件至最新(默认勾选; 每次启动检查, 有新版自动升级+刷新)
     floatEnabled: true,       // 0.12.6 快捷入口: 悬浮球总开关(每页可见, 点头部展开/收起, 可拖拽)
+    branchHud: true,          // 0.13.53 常驻分支悬浮条（‹数字›，起始在聊天区左下角）：快捷入口里可关；undefined/true = 开（与新装默认一致）
     floatUploadChat: true,    // 悬浮球内「上传当前聊天」(功能型, 绿色)
     floatImportChat: true,    // 悬浮球内「导入至当前聊天」(功能型, 蓝色)
     menuUploadChat: true,     // 左下角拓展菜单入口「上传当前聊天」
@@ -11624,21 +11625,21 @@ body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-count
 /* ★0.13.51 左箭头字形居中：右箭头（.swipe_right）是 display:flex 居中的；左箭头是 display:block，雪佛龙会贴着自己 25px 框的左缘
    ⇒ 造成"框缝相等但肉眼左缝更宽"的不对称（像素级实测 30px vs 21px）。这里补上同款居中，两侧墨迹才对称。 */
 #chat .mes.cs-branch-swipe:not(.last_mes) .swipe_left { display: flex; align-items: center; justify-content: center; }
-/* ★0.13.52 常驻分支悬浮条（作者口径："常驻在画面右下角 然后点击的时候 就在当前位置换分支"）——
-   钉在聊天区右下、输入栏上方；目标 = 视口里可见面积最大的"可切楼"（复用 __csBranchSwipeOk 判据）；
+/* ★0.13.52/0.13.53 常驻分支悬浮条（作者：0.13.52"常驻在画面右下角 点击就在当前位置换分支"；0.13.53"太大 弄小一点再小一点 + 放左下角 + 快捷入口里开关"）——
+   钉在聊天区左下、输入栏上方；目标 = 视口里可见面积最大的"可切楼"（复用 __csBranchSwipeOk 判据）；
    没有可切目标 ⇒ .cs-hud-off（淡 32% 且不可点）；生成中 body.hideAllSwipeButtons ⇒ 整条隐藏（跟随原生）。
-   颜色全走主题变量（浅/深主题都适配）；chevron 25px 视觉 + 5px 内垫 ⇒ 热区 35px（触摸达标）。 */
-#cs_branch_hud { position:fixed; right:14px; top:calc(100vh - 98px); z-index:9400; display:flex; align-items:center; gap:1px;
-  padding:2px 5px; border-radius:999px; border:1px solid var(--SmartThemeBorderColor,#555);
+   颜色全走主题变量（浅/深主题都适配）；0.13.53 尺寸再降一档：chevron 13px 视觉 + 10px 内垫 ⇒ 热区 33px（触摸达标），计数器 9px。 */
+#cs_branch_hud { position:fixed; left:14px; top:calc(100vh - 92px); z-index:9400; display:flex; align-items:center; gap:0;
+  padding:1px 3px; border-radius:999px; border:1px solid var(--SmartThemeBorderColor,#555);
   background: color-mix(in srgb, var(--SmartThemeBlurTintColor,#1c1c20) 84%, transparent);
   color: var(--SmartThemeBodyColor,#eee); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
   box-shadow:0 4px 14px rgba(0,0,0,.35); opacity:.9; transition:opacity .15s ease; user-select:none; -webkit-user-select:none; }
 #cs_branch_hud.cs-hud-off { opacity:.32; pointer-events:none; }
 body.hideAllSwipeButtons #cs_branch_hud { display:none; }
-#cs_branch_hud .cs-hud-btn { width:25px; height:25px; font-size:20px; line-height:1; display:flex; align-items:center; justify-content:center;
-  cursor:pointer; border-radius:50%; padding:5px; margin:-5px; box-sizing:content-box; opacity:.78; }
+#cs_branch_hud .cs-hud-btn { width:13px; height:13px; font-size:10px; line-height:1; display:flex; align-items:center; justify-content:center;
+  cursor:pointer; border-radius:50%; padding:10px; margin:-10px; box-sizing:content-box; opacity:.78; }
 #cs_branch_hud .cs-hud-btn:hover, #cs_branch_hud .cs-hud-btn:focus-visible { opacity:1; background: color-mix(in srgb, var(--SmartThemeQuoteColor,#f0a35e) 20%, transparent); }
-#cs_branch_hud .cs-hud-cnt { min-width:40px; text-align:center; font-size:12px; opacity:.92; font-family:var(--mainFontFamily, inherit); padding:0 2px; white-space:nowrap; }
+#cs_branch_hud .cs-hud-cnt { min-width:20px; text-align:center; font-size:9px; opacity:.92; font-family:var(--mainFontFamily, inherit); padding:0 1px; white-space:nowrap; }
 `;
 function injectSettingsCss() {
     if (document.getElementById('chat-sync-settings-style')) return;
@@ -11984,8 +11985,10 @@ function __csBranchHudUpdate() {
         __csBranchHudEnsure();
         const hud = __csBranchHudEl();
         if (!hud) return;
+        if (settings.branchHud === false) { if (hud.style.display !== 'none') hud.style.display = 'none'; return; }   // 快捷入口里关掉 ⇒ 整条藏（0.13.53）
+        if (hud.style.display === 'none') hud.style.display = '';
         const chat = document.getElementById('chat');
-        if (chat) { const cr = chat.getBoundingClientRect(); hud.style.right = Math.max(10, Math.round(window.innerWidth - cr.right) + 12) + 'px'; }
+        if (chat) { const cr = chat.getBoundingClientRect(); hud.style.left = Math.max(10, Math.round(cr.left) + 12) + 'px'; hud.style.removeProperty('right'); }
         const form = document.getElementById('send_form');
         const fh = form ? form.getBoundingClientRect().height : 0;
         // ★窄屏（ST 手机布局）下 position:fixed 的竖轴 bottom 会被一个"高度 0 的包含块"接管（实测顶边被算成视口顶）
@@ -12014,6 +12017,16 @@ async function __csBranchHudSwitch(e, dir) {
         if (id == null) return;
         await __csBranchSwitchFloor(Number(id), dir, e);   // 与楼内箭头同一套内核（含"锚住楼底边"）
     } catch (err) { console.warn('[chat-sync] 悬浮条切分支失败(忽略)', err); }
+}
+// 0.13.53 快捷入口开关：翻转 branchHud（undefined/true = 开）→ 存盘 → 立即生效 → 重画快捷入口让图标状态跟着变
+function __csToggleBranchHud() {
+    try {
+        settings.branchHud = settings.branchHud === false;
+        saveSettingsDebounced();
+        try { if (typeof toastr !== 'undefined') toastr.info('楼层切换悬浮条：' + (settings.branchHud === false ? '已关闭' : '已开启')); } catch { }
+        __csBranchHudUpdate();
+        try { if (typeof window.__csUpdateFloat === 'function') window.__csUpdateFloat(); } catch { }
+    } catch (err) { console.warn('[chat-sync] 悬浮条开关失败(忽略)', err); }
 }
 (function __csBranchHudWatch() {
     const later = () => { clearTimeout(__csBranchHudTimer); __csBranchHudTimer = setTimeout(__csBranchHudUpdate, 80); };
@@ -12317,7 +12330,8 @@ function __csUpdateFloat() {
     const ACTION_DEFS = [
         { key: 'upload', ico: 'fa-cloud-arrow-up', label: '上传当前聊天', color: '#6fce6f', run: () => __csRunInstant('upload') },
         { key: 'import', ico: 'fa-cloud-arrow-down', label: '导入至当前聊天', color: '#6fbcf6', run: () => __csRunInstant('import') },
-    ].filter(a => ((a.key === 'upload' && showU) || (a.key === 'import' && showI)));
+        { key: 'hud', ico: 'fa-route', label: '楼层切换悬浮条（开/关）', color: (settings.branchHud === false ? 'rgba(150,150,150,.8)' : 'var(--SmartThemeQuoteColor)'), run: () => __csToggleBranchHud() },
+    ].filter(a => a.key === 'hud' || (a.key === 'upload' && showU) || (a.key === 'import' && showI));
     const PAGE_DEFS = CS_FLOAT_PAGES.filter((d) => csFloatPageEnabled(d.key));
     const rowCount = ACTION_DEFS.length + PAGE_DEFS.length + (ACTION_DEFS.length ? 1 : 0);
     const $items = $(`<div class="csf-body" style="overflow:hidden;height:0;background:transparent"></div>`).appendTo($box);
