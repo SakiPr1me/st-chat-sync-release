@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.51'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.52'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -11624,6 +11624,21 @@ body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-count
 /* ★0.13.51 左箭头字形居中：右箭头（.swipe_right）是 display:flex 居中的；左箭头是 display:block，雪佛龙会贴着自己 25px 框的左缘
    ⇒ 造成"框缝相等但肉眼左缝更宽"的不对称（像素级实测 30px vs 21px）。这里补上同款居中，两侧墨迹才对称。 */
 #chat .mes.cs-branch-swipe:not(.last_mes) .swipe_left { display: flex; align-items: center; justify-content: center; }
+/* ★0.13.52 常驻分支悬浮条（作者口径："常驻在画面右下角 然后点击的时候 就在当前位置换分支"）——
+   钉在聊天区右下、输入栏上方；目标 = 视口里可见面积最大的"可切楼"（复用 __csBranchSwipeOk 判据）；
+   没有可切目标 ⇒ .cs-hud-off（淡 32% 且不可点）；生成中 body.hideAllSwipeButtons ⇒ 整条隐藏（跟随原生）。
+   颜色全走主题变量（浅/深主题都适配）；chevron 25px 视觉 + 5px 内垫 ⇒ 热区 35px（触摸达标）。 */
+#cs_branch_hud { position:fixed; right:14px; top:calc(100vh - 98px); z-index:9400; display:flex; align-items:center; gap:1px;
+  padding:2px 5px; border-radius:999px; border:1px solid var(--SmartThemeBorderColor,#555);
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor,#1c1c20) 84%, transparent);
+  color: var(--SmartThemeBodyColor,#eee); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  box-shadow:0 4px 14px rgba(0,0,0,.35); opacity:.9; transition:opacity .15s ease; user-select:none; -webkit-user-select:none; }
+#cs_branch_hud.cs-hud-off { opacity:.32; pointer-events:none; }
+body.hideAllSwipeButtons #cs_branch_hud { display:none; }
+#cs_branch_hud .cs-hud-btn { width:25px; height:25px; font-size:20px; line-height:1; display:flex; align-items:center; justify-content:center;
+  cursor:pointer; border-radius:50%; padding:5px; margin:-5px; box-sizing:content-box; opacity:.78; }
+#cs_branch_hud .cs-hud-btn:hover, #cs_branch_hud .cs-hud-btn:focus-visible { opacity:1; background: color-mix(in srgb, var(--SmartThemeQuoteColor,#f0a35e) 20%, transparent); }
+#cs_branch_hud .cs-hud-cnt { min-width:40px; text-align:center; font-size:12px; opacity:.92; font-family:var(--mainFontFamily, inherit); padding:0 2px; white-space:nowrap; }
 `;
 function injectSettingsCss() {
     if (document.getElementById('chat-sync-settings-style')) return;
@@ -11883,39 +11898,139 @@ function __csBranchSwipeSweep() {
 }
 
 // 点击 → 原生 swipe()（左右循环；forceSwipeId 自己归一到 [0, n-1]）
+// 共用切版内核（楼内箭头与常驻悬浮条同一套：复核 → 原生 swipe() → 锚住楼底边）
+async function __csBranchSwitchFloor(id, dir, e) {
+    const c = ctx();
+    const chatArr = c && Array.isArray(c.chat) ? c.chat : null;
+    if (!chatArr || !__csBranchSwipeOk(chatArr, id)) return;    // 点下去那一刻复核（可能拿到了过期标记/目标：刚被 ST 变成最后一楼等）
+    const sw = c.swipe;
+    if (!sw || typeof sw.to !== 'function') return;             // 老酒馆没导出该 API ⇒ fail-closed（控件照样显示，点了不响应）
+    if (typeof sw.isAllowed === 'function' && !sw.isAllowed()) return;   // 与原生 picker 同款前置：生成中 / 正滑到一半 / 酒馆藏了箭头 ⇒ 不动
+    const m = chatArr[id];
+    const total = m.swipes.length;
+    const cur = Math.min(Math.max(Number(m.swipe_id ?? 0) || 0, 0), total - 1);
+    const next = (dir === 'right') ? (cur + 1) % total : (cur - 1 + total) % total;   // 左右循环
+    const chatEl = document.getElementById('chat');
+    const mesEl = document.querySelector('#chat .mes[mesid="' + id + '"]');
+    const beforeRect = mesEl ? mesEl.getBoundingClientRect() : null;   // 锚：消息底边（= 楼内箭头点击点，也是"换完还看得见这一楼"的那条线）
+    await sw.to(e, dir, { source: 'swipe_picker', forceMesId: id, forceSwipeId: next });
+    // ★锚住"换版不跳"：不同版本长度可能差几千像素；换版后浏览器会钳位滚动条 ⇒ 下方内容整片位移（作者实报"视点乱跳"）。
+    // 量"消息底边"换版前后的位移，用滚动补偿把它钉回原位（换完仍看得见这一楼的新版本；只动 scrollTop）。
+    try {
+        const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        await settle();
+        let el2 = document.querySelector('#chat .mes[mesid="' + id + '"]') || mesEl;
+        if (!el2 || !beforeRect) { __csBranchHudUpdate(); return; }
+        let after = el2.getBoundingClientRect();
+        if (after.height === beforeRect.height) { await new Promise((r) => setTimeout(r, 260)); await settle(); el2 = document.querySelector('#chat .mes[mesid="' + id + '"]') || mesEl; after = el2.getBoundingClientRect(); }
+        const dy = after.bottom - beforeRect.bottom;
+        if (chatEl && Number.isFinite(dy) && Math.abs(dy) > 1) chatEl.scrollTop += dy;
+    } catch (e2) { }
+    __csBranchHudUpdate();
+}
 async function __csBranchSwipeClick(e, dir) {
     try {
         if (e && typeof e.preventDefault === 'function') { e.preventDefault(); e.stopPropagation(); }
-        const c = ctx();
-        const chatArr = c && Array.isArray(c.chat) ? c.chat : null;
         const el = (e && e.currentTarget && e.currentTarget.closest) ? e.currentTarget.closest('.mes') : null;
         const id = el ? Number(el.getAttribute('mesid')) : NaN;
-        if (!chatArr || !__csBranchSwipeOk(chatArr, id)) return;    // 点下去那一刻复核（可能拿到了过期标记：刚被 ST 变成最后一楼等）
-        const sw = c.swipe;
-        if (!sw || typeof sw.to !== 'function') return;             // 老酒馆没导出该 API ⇒ fail-closed（控件照样显示，点了不响应）
-        if (typeof sw.isAllowed === 'function' && !sw.isAllowed()) return;   // 与原生 picker 同款前置：生成中 / 正滑到一半 / 酒馆藏了箭头 ⇒ 不动
-        const m = chatArr[id];
-        const total = m.swipes.length;
-        const cur = Math.min(Math.max(Number(m.swipe_id ?? 0) || 0, 0), total - 1);
-        const next = (dir === 'right') ? (cur + 1) % total : (cur - 1 + total) % total;   // 左右循环
-        const chatEl = document.getElementById('chat');
-        const mesEl = el;
-        const beforeRect = mesEl.getBoundingClientRect();   // 锚：消息底边（箭头所在那条线）
-        await sw.to(e, dir, { source: 'swipe_picker', forceMesId: id, forceSwipeId: next });
-        // ★0.13.50 锚住点击处：不同版本长度可能差几千像素；换版后浏览器会钳位滚动条 ⇒ 下方内容整片位移（作者实报"视点乱跳"）。
-        // 量"消息底边"换版前后的位移，用滚动补偿把它钉回原位（箭头与下方内容留在原处；只动 scrollTop）。
-        try {
-            const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-            await settle();
-            let el2 = document.querySelector('#chat .mes[mesid="' + id + '"]') || mesEl;
-            let after = el2.getBoundingClientRect();
-            if (after.height === beforeRect.height) { await new Promise((r) => setTimeout(r, 260)); await settle(); el2 = document.querySelector('#chat .mes[mesid="' + id + '"]') || mesEl; after = el2.getBoundingClientRect(); }
-            const dy = after.bottom - beforeRect.bottom;
-            if (chatEl && Number.isFinite(dy) && Math.abs(dy) > 1) chatEl.scrollTop += dy;
-        } catch (e2) { }
+        await __csBranchSwitchFloor(id, dir, e);
     } catch (err) { console.warn('[chat-sync] 楼层切分支失败(忽略)', err); }
 }
 
+
+// ═══ ★0.13.52 常驻分支悬浮条（作者口径："常驻在画面右下角 然后点击的时候 就在当前位置换分支"）═══
+// 位置：钉在聊天区右下、输入栏上方（chat_width 非满宽也贴聊天那一列；手机档自适应）。
+// 目标（"当前位置"）= 视口里可见面积最大的"可切楼"（非最后、多版本、非用户/小系统/显式不可滑；复用 __csBranchSwipeOk）。
+// 点击：与楼内箭头共用 __csBranchSwitchFloor（同一套原生 swipe() + 同一个"锚住楼底边"补偿——换完仍看得见这一楼）。
+//       没有可切目标 ⇒ .cs-hud-off（淡 + 不可点）。
+// 跟随原生：body.hideAllSwipeButtons（生成中）⇒ 整条隐藏（fail-closed）。
+const CS_HUD_ID = 'cs_branch_hud';
+const __csBranchHudState = { targetId: null };
+let __csBranchHudTimer = null;
+function __csBranchHudEl() { return document.getElementById(CS_HUD_ID); }
+function __csBranchHudEnsure() {
+    try {
+        if (__csBranchHudEl() || !document.body) return;
+        const hud = document.createElement('div');
+        hud.id = CS_HUD_ID;
+        hud.className = 'cs-hud-off';
+        hud.innerHTML = '<div class="cs-hud-btn cs-hud-l fa-solid fa-chevron-left" role="button" tabindex="0" title="上一版（正在看的那一楼）"></div>'
+            + '<div class="cs-hud-cnt">—</div>'
+            + '<div class="cs-hud-btn cs-hud-r fa-solid fa-chevron-right" role="button" tabindex="0" title="下一版（正在看的那一楼）"></div>';
+        hud.querySelector('.cs-hud-l').addEventListener('click', (e) => __csBranchHudSwitch(e, 'left'));
+        hud.querySelector('.cs-hud-r').addEventListener('click', (e) => __csBranchHudSwitch(e, 'right'));
+        document.body.appendChild(hud);
+    } catch { }
+}
+function __csBranchHudTarget() {
+    try {
+        const c = ctx();
+        const chatArr = c && Array.isArray(c.chat) ? c.chat : null;
+        if (!chatArr) return null;
+        const vh = window.innerHeight || 0;
+        let best = null, bestVis = 0;
+        for (const el of document.querySelectorAll('#chat .mes[mesid]')) {
+            const id = Number(el.getAttribute('mesid'));
+            if (!__csBranchSwipeOk(chatArr, id)) continue;
+            const r = el.getBoundingClientRect();
+            const vis = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+            if (vis > bestVis) { bestVis = vis; best = { id, n: chatArr[id].swipes.length, cur: Number(chatArr[id].swipe_id || 0) }; }
+        }
+        return bestVis >= 40 ? best : null;   // 可见不足 40px 不算"正在看这一楼"
+    } catch { return null; }
+}
+function __csBranchHudUpdate() {
+    try {
+        __csBranchHudEnsure();
+        const hud = __csBranchHudEl();
+        if (!hud) return;
+        const chat = document.getElementById('chat');
+        if (chat) { const cr = chat.getBoundingClientRect(); hud.style.right = Math.max(10, Math.round(window.innerWidth - cr.right) + 12) + 'px'; }
+        const form = document.getElementById('send_form');
+        const fh = form ? form.getBoundingClientRect().height : 0;
+        // ★窄屏（ST 手机布局）下 position:fixed 的竖轴 bottom 会被一个"高度 0 的包含块"接管（实测顶边被算成视口顶）
+        //   ⇒ 改用 top 锚定：top = 视口高 - 底部偏移 - 条高（横轴 right 实测窄屏正常，不动）。
+        const off = Math.min(Math.round((fh > 8 ? fh : 56) + 12), 140);   // 上限 140：send_form 量出怪值也不至于把条挤出去
+        const hudH = Math.round(hud.getBoundingClientRect().height) || 31;
+        hud.style.top = Math.max(8, Math.round((window.innerHeight || 0) - off - hudH)) + 'px';
+        hud.style.removeProperty('bottom');
+        const t = __csBranchHudTarget();
+        __csBranchHudState.targetId = t ? t.id : null;
+        const cnt = hud.querySelector('.cs-hud-cnt');
+        if (t) {
+            hud.classList.remove('cs-hud-off');
+            const txt = (Math.min(Math.max(t.cur, 0), t.n - 1) + 1) + '/' + t.n;
+            if (cnt && cnt.textContent !== txt) cnt.textContent = txt;
+        } else {
+            hud.classList.add('cs-hud-off');
+            if (cnt && cnt.textContent !== '—') cnt.textContent = '—';
+        }
+    } catch { }
+}
+async function __csBranchHudSwitch(e, dir) {
+    try {
+        if (e && typeof e.preventDefault === 'function') { e.preventDefault(); e.stopPropagation(); }
+        const id = __csBranchHudState.targetId;
+        if (id == null) return;
+        await __csBranchSwitchFloor(Number(id), dir, e);   // 与楼内箭头同一套内核（含"锚住楼底边"）
+    } catch (err) { console.warn('[chat-sync] 悬浮条切分支失败(忽略)', err); }
+}
+(function __csBranchHudWatch() {
+    const later = () => { clearTimeout(__csBranchHudTimer); __csBranchHudTimer = setTimeout(__csBranchHudUpdate, 80); };
+    if (typeof jQuery !== 'undefined') {
+        jQuery(() => {
+            __csBranchHudEnsure();
+            __csBranchHudUpdate();
+            try {
+                const chat = document.getElementById('chat');
+                if (chat) chat.addEventListener('scroll', later, { passive: true });
+                window.addEventListener('resize', later, { passive: true });
+            } catch { }
+            setInterval(__csBranchHudUpdate, 1500);   // 兜底轮询（与面板自愈同款）
+        });
+    }
+    eventSource.on(event_types.CHAT_CHANGED, () => setTimeout(__csBranchHudUpdate, 400));
+})();
 // 自愈（同 __csWatchPanel 手法：MutationObserver + 兜底轮询）
 (function __csWatchBranchSwipes() {
     let timer = null;
@@ -12477,6 +12592,8 @@ window.__stChatSyncDebug = {
     setBranchSwipe(v) { __csBranchSwipeDisabled = !v; __csBranchSwipeSweep(); return !__csBranchSwipeDisabled; },
     branchSwipeSweep() { return __csBranchSwipeSweep(); },
     branchSwipeOk(id) { return __csBranchSwipeOk(ctx().chat, Number(id)); },
+    hudUpdate() { return __csBranchHudUpdate(); },
+    hudTargetId() { return __csBranchHudState.targetId; },
     Gitee,
     importCharFromCloud,
     pullCurrentCharacter,
