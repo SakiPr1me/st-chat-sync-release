@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.49'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.50'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -11618,6 +11618,9 @@ const CHAT_SYNC_CSS = `
 body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) :is(.swipe_left, .swipe_right, .swipes-counter) { opacity:.3 !important; visibility:visible; pointer-events:auto; interactivity:auto; }
 body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-counter.swipe-picker-enabled:hover,
 body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-counter.swipe-picker-enabled:focus-visible { opacity:.7 !important; }
+/* ★0.13.50 中间楼底部预留：三件套聚到右下角后，正文最后一行可能贴到它们（原生靠"最后一楼的底部预留"避开，中间楼没有）
+   ⇒ 按主题给最后一楼的同款量(50px)留白；只加空白，不改颜色/尺寸。选择器用 #chat 前缀压过主题的 documentstyle 规则。 */
+#chat .mes.cs-branch-swipe:not(.last_mes) .mes_block { padding-bottom: 50px; }
 `;
 function injectSettingsCss() {
     if (document.getElementById('chat-sync-settings-style')) return;
@@ -11816,6 +11819,36 @@ function __csBranchSwipeOk(chatArr, id) {
 }
 
 // 幂等标记（只增删 class；已正确的元素一个字节都不动 —— 防与 ST 互踩、防观察器自激）
+// ★0.13.50 左箭头聚到计数器旁（作者口径："右下角 数字 然后数字左右就是箭头"）——
+// 原生/主题把 .swipe_left 钉在消息最左端（离计数器几百像素）⇒ 作者实报"改到特别左边了"。
+// 只对"我们标记的中间楼"挪位：量计数器实时位置，把左箭头贴到它左侧并与它同高（不写死像素，主题随便换）；
+// 量不到有效坐标 ⇒ 什么都不动（fail-open 回原样）；楼失去资格 ⇒ 清掉内联、回到原生。
+function __csBranchSwipePlace(el) {
+    try {
+        const cnt = el.querySelector('.swipes-counter');
+        const la = el.querySelector('.swipe_left');
+        if (!cnt || !la) return;
+        const mr = el.getBoundingClientRect();
+        const cr = cnt.getBoundingClientRect();
+        if (!(mr.width > 0 && cr.width > 0)) return;                 // 量不到有效坐标 ⇒ 不动（未布局/坏数据）
+        const laH = la.getBoundingClientRect().height || 25;
+        const right = Math.round(mr.right - cr.left) + 4;            // 紧贴计数器左缘（4px 缝）
+        const bottom = Math.round((mr.bottom - cr.top) - cr.height / 2 - laH / 2);   // 与计数器同一行（垂直居中）
+        if (la.style.getPropertyValue('left') !== 'auto') la.style.setProperty('left', 'auto');
+        if (la.style.getPropertyValue('right') !== right + 'px') la.style.setProperty('right', right + 'px');
+        if (la.style.getPropertyValue('bottom') !== bottom + 'px') la.style.setProperty('bottom', bottom + 'px');
+    } catch { }
+}
+function __csBranchSwipeUnplace(el) {
+    try {
+        const la = el.querySelector('.swipe_left');
+        if (!la) return;
+        if (la.style.getPropertyValue('right')) la.style.removeProperty('right');
+        if (la.style.getPropertyValue('left')) la.style.removeProperty('left');
+        if (la.style.getPropertyValue('bottom')) la.style.removeProperty('bottom');
+    } catch { }
+}
+
 function __csBranchSwipeSweep() {
     try {
         const c = ctx();
@@ -11829,9 +11862,11 @@ function __csBranchSwipeSweep() {
             if (want) {
                 if (!has) el.classList.add(CS_BRANCH_SWIPE_CLASS);
                 if (!el.classList.contains('swipes_visible')) el.classList.add('swipes_visible');   // 原生类：该楼"允许显示箭头"
+                __csBranchSwipePlace(el);
                 n++;
             } else if (has) {
                 el.classList.remove(CS_BRANCH_SWIPE_CLASS);
+                __csBranchSwipeUnplace(el);
                 // 只撤销"我们自己加的那个 swipes_visible"：该楼已成为最后一楼时，该类所有权归 ST，别碰（碰了会把原生箭头也藏掉）
                 if (!el.classList.contains('last_mes')) el.classList.remove('swipes_visible');
             }
@@ -11856,7 +11891,21 @@ async function __csBranchSwipeClick(e, dir) {
         const total = m.swipes.length;
         const cur = Math.min(Math.max(Number(m.swipe_id ?? 0) || 0, 0), total - 1);
         const next = (dir === 'right') ? (cur + 1) % total : (cur - 1 + total) % total;   // 左右循环
+        const chatEl = document.getElementById('chat');
+        const mesEl = el;
+        const beforeRect = mesEl.getBoundingClientRect();   // 锚：消息底边（箭头所在那条线）
         await sw.to(e, dir, { source: 'swipe_picker', forceMesId: id, forceSwipeId: next });
+        // ★0.13.50 锚住点击处：不同版本长度可能差几千像素；换版后浏览器会钳位滚动条 ⇒ 下方内容整片位移（作者实报"视点乱跳"）。
+        // 量"消息底边"换版前后的位移，用滚动补偿把它钉回原位（箭头与下方内容留在原处；只动 scrollTop）。
+        try {
+            const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            await settle();
+            let el2 = document.querySelector('#chat .mes[mesid="' + id + '"]') || mesEl;
+            let after = el2.getBoundingClientRect();
+            if (after.height === beforeRect.height) { await new Promise((r) => setTimeout(r, 260)); await settle(); el2 = document.querySelector('#chat .mes[mesid="' + id + '"]') || mesEl; after = el2.getBoundingClientRect(); }
+            const dy = after.bottom - beforeRect.bottom;
+            if (chatEl && Number.isFinite(dy) && Math.abs(dy) > 1) chatEl.scrollTop += dy;
+        } catch (e2) { }
     } catch (err) { console.warn('[chat-sync] 楼层切分支失败(忽略)', err); }
 }
 
