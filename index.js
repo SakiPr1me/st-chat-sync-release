@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.47'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.48'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2697,6 +2697,11 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
         const localMsgs = await readLocalChatMsgs(avatar, knownLocal);
         const cloudMsgs = parseJsonlMessages(cloud.content || '');
         const rel = classifyChatDiff(localMsgs, cloudMsgs);
+        // ★0.13.48-v2：diverged 一律如实告诉调用方（**不静默 skip**）：
+        //   · greetConflict（两边都已有楼层 + 开场白不是同一版）⇒ 单条「导入当前聊天」会弹导入侧对话框；
+        //   · 其余真分叉 ⇒ 调用方只提示、不写，也不再报"已是最新"（原来是把它混进"已最新"里）。
+        //   （本函数只负责"云端⊇本地"的补楼；其余关系一律不动本地。）
+        if (rel && rel.relation === 'diverged') return { diverged: true, diff: rel, greetConflict: !!rel.greetConflict };
         // 只有「云端比本地多」(本地是云端子集) 才安全补回；identical/local_superset/diverged 都不动本地
         if (!rel || rel.relation !== 'cloud_superset') return null;
         const sigs = new Set(localMsgs.map(messageSignature));
@@ -2710,6 +2715,8 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
             if (!newOnes.length) return null;
             merged = localMsgs.concat(newOnes);
         }
+        // ★0.13.48：有云端楼层并入 ⇒ 第 0 楼跟随云端那份（全量重建支的 merged 就是云端数组，助手自动 no-op）
+        const greetReplaced = __csAdoptCloudGreeting(merged, localMsgs, cloudMsgs);
         const headerObj = parseHeader(cloud.content);
         const saveAv = String(avatar || '').includes('.png') ? String(avatar) : String(avatar || '') + '.png';
         // 并发兜底：写盘前一瞬若用户已开始生成(roll)，放弃本次补楼写回——避免云端新楼覆盖正在写入的生成内容
@@ -2740,6 +2747,10 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                     //   旧代码传 newOnes(仅缺失楼)导致本地原有楼被清空(复现: 删1楼后内存 2→1 楼)
                     const isFullRebuild = (merged === cloudMsgs);
                     const merged_info = mergeOpenChatTail(c.chat, isFullRebuild ? cloudMsgs : newOnes, isFullRebuild);
+                    // ★0.13.48：追加路径 + 本次把第 0 楼换成了云端那份 ⇒ 内存同一楼跟着换
+                    //   （不换的话：界面/内存与刚写好的文件不一致，且下一次 saveChat 会把磁盘上换好的开场白又盖回旧的）
+                    let greetMemSwapped = false;
+                    if (!isFullRebuild && greetReplaced) greetMemSwapped = __csAdoptCloudGreeting(c.chat, localMsgs, cloudMsgs);
                     if (merged_info && merged_info.appended > 0) {
                         if (isFullRebuild) {
                             // 0.12.70 全量重建(中间删楼): 内存已按云端重建——addOneMessage 只适合"追加新楼", 整体重建必须重绘整个楼层
@@ -2769,6 +2780,22 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                         }
                         // 0.12.77 补入楼即时正则美化(全量重建=全部消息 / 追加=newOnes)——addOneMessage/displayPastChats 建 DOM 后补 messageFormatting
                         try { await __csBeautifyFloors(isFullRebuild ? (c.chat || []).filter((m) => m && typeof m === 'object' && m.mes !== undefined) : newOnes); } catch (e2) { }
+                        // ★0.13.48：第 0 楼被换过 ⇒ 重绘第 0 楼（尽力而为：酒馆助手全管线 → messageFormatting 覆写；都不行也不报错——文件与内存已经是新的）
+                        if (greetMemSwapped) {
+                            try {
+                                const TH0 = window.TavernHelper;
+                                if (TH0 && typeof TH0.refreshOneMessage === 'function') { await TH0.refreshOneMessage(0); }
+                                else {
+                                    const el0 = document.querySelector('.mes[mesid="0"]');
+                                    const tEl0 = el0 && el0.querySelector('.mes_text');
+                                    const fmt0 = (typeof __stCompat !== 'undefined' && __stCompat && typeof __stCompat.messageFormatting === 'function') ? __stCompat.messageFormatting : null;
+                                    if (tEl0 && fmt0 && c.chat[0]) {
+                                        tEl0.innerHTML = fmt0(String(c.chat[0].mes || ''), c.chat[0].name || '', !!c.chat[0].is_system, !!c.chat[0].is_user, 0);
+                                        try { eventSource.emit(event_types.MESSAGE_EDITED, 0); } catch { }
+                                    }
+                                }
+                            } catch (e2) { console.warn('[chat-sync] 第 0 楼重绘失败(忽略)', e2); }
+                        }
                         try { scrollChatToBottom({ waitForFrame: true }); } catch (e3) { }
                         console.log(`[chat-sync] 补入 ${merged_info.appended} 楼(刷新:${isFullRebuild ? '全量重绘' : 'addOneMessage'}${isFullRebuild ? ',全量重建' : ''})`);
                     }
@@ -2813,6 +2840,8 @@ async function pullCharacterChats(charName) {
     if (fileNameList.length === 0) { toastr.info(`云端没有 ${charName} 的聊天`); return; }
 
     let importedCount = 0, skipped = 0;
+    const greetConflicts = [];   // ★0.13.48-v2：开场白不是同一版（两边都已有楼层）的条目 —— 不静默：点名 + 留待用户逐条定夺
+    const otherDiverged = [];    // ★0.13.48-v2：其余真分叉（各有各的楼层）—— 不静默但不弹框：点名一句"没自动动"
     let lastImportedFileName = null; // 最新成功导入的文件名（用于直接加载进当前楼层）
     let i = 0;
     const localNames = new Set((ctx().characters?.[ctx().characterId] ? await getCharChatFileNames(charName) : []).map((x) => x.file_name));
@@ -2841,6 +2870,15 @@ async function pullCharacterChats(charName) {
         if (knownLocal && localNames.has(knownLocal)) {
             // 读本地 vs 云端，云端 ⊇ 本地(cloud_superset) → 把云端新楼层补进本地；otherwise 跳过
             const merged = await pullMergeCloudSuperset(avatar, knownLocal, cloud, p);
+            if (merged && merged.diverged) {
+                // ★0.13.48-v2：diverged 不静默 —— 开场白冲突档单独点名（请用户逐条选）；其余真分叉也点名一句。
+                //   都不记"已比对"备忘录 ⇒（开场白冲突档）下次拉取还会提示，不会被 sha 相同悄悄跳过。
+                if (merged.greetConflict) { greetConflicts.push(knownLocal); skipped++; continue; }
+                otherDiverged.push(knownLocal);
+                settings.lastCloudSha[p] = cloud.sha || cloudSha; // 真分叉照旧记 sha（免下载；云端没变就不重复报）
+                skipped++;
+                continue;
+            }
             settings.lastCloudSha[p] = cloud.sha || cloudSha; // 本次已完整比对过 → 记 sha，下次免下载
             if (merged) {
                 importedCount++;
@@ -2874,7 +2912,13 @@ async function pullCharacterChats(charName) {
         }
     }
     saveSettingsDebounced();
-    toastr.success(`✅ 已拉取 ${charName} 的聊天：新增/更新 ${importedCount} 个${skipped ? `，已最新跳过 ${skipped} 个` : ''}`);
+    const __pullHead = `✅ 已拉取 ${charName} 的聊天：新增/更新 ${importedCount} 个${skipped ? `，已最新跳过 ${skipped} 个` : ''}`;
+    if (greetConflicts.length) {
+        // ★0.13.48-v2：不静默 —— 带警示色点名（措辞只说明"没自动动"，让用户逐条选）
+        toastr.warning(`${__pullHead}，⚠ ${greetConflicts.length} 条开场白不是同一版（两边都已经聊过、没自动动）：${csShortList(greetConflicts)}——请点「导入当前聊天」逐条选一份`);
+    } else {
+        toastr.success(__pullHead);
+    }
 
     // 把最新成功导入的聊天直接加载进当前聊天窗口楼层（替换当前显示）
     // 注意：仅普通酒馆(ST)走 reloadCurrentChat——TT 上 chat 文件是旧 shim 可能没真正落盘到 Rust 认的目录，
@@ -2989,6 +3033,18 @@ async function pullCurrentChat() {
         const merged = await pullMergeCloudSuperset(avatar, localName, cloud, p);
         hideBusy(); setStatus('');
         if (merged && merged.blocked) { toastr.warning('检测到可能正在生成，已暂停自动补楼（等生成结束再导入一次即可）'); return; }
+        if (merged && merged.diverged) {
+            // ★0.13.48-v2：不静默 ——
+            //   · 开场白不是同一版（两边都已有楼层）⇒ 弹导入侧对话框（以云端为准 = 云端这份另存为本地新记录，两边都保留；以本地为准 = 保留本地不动）
+            //   · 其余真分叉 ⇒ 只如实提示一句，不写、也不再报"已是最新"（原来这里把它当"已最新"，是假话）
+            if (merged.greetConflict) {
+                const r = await __csImportDivergedDialog(charName, p, cloud, localName, merged.diff, '⚠️ 导入当前聊天时发现聊天分叉');
+                if (r === 'skip_local') toastr.info('已保留本地这份（云端未动）');
+            } else {
+                toastr.info('本地和云端这份内容不一样（各有各的楼层），这次没有自动动任何一边');
+            }
+            return;
+        }
         if (merged) { const nowN = __csFloorCount(ctx().chat); const localN = merged.localCount ?? 0; const addedN = Math.max(0, nowN - localN); toastr.success(`✅ 已从云端补回当前聊天 ${addedN} 楼（补回前本地 ${localN} 楼 → 当前 ${nowN} 楼）`); return; }
         toastr.info('当前聊天已是最新');
         return;
@@ -5338,14 +5394,20 @@ function resolveUploadConflict(localMsgs, cloudMsgs, fileName, batchMode = null)
         const ALL_OVER = 3101, ALL_SAVE = 3102;   // 应用于本次全部
         const isDiverged = diff.relation === 'diverged';
         const sameLen = diff.localTail.length === diff.cloudTail.length;
-        const desc = isDiverged
-            ? (sameLen
-                ? `本地和云端的最后 ${diff.localTail.length} 层内容不一样（很可能是同一层被修改成了不同内容）`
-                : `本地和云端产生分叉（公共 ${diff.common} 层之后，本地多 ${diff.localTail.length} 层，云端多 ${diff.cloudTail.length} 层）`)
-            : `本地比云端多 ${diff.localTail.length} 层新内容`;
+        // ★0.13.48-v2：两边都已有楼层 + 开场白不是同一版 ⇒ 这句单独说清（原来的"最后 N 层"计数在尾巴为空时会读成"最后 0 层"）
+        const desc = diff.greetConflict
+            ? '本地和云端的开场白不是同一版（两台设备各选过一版），而且两边都已经聊过'
+            : (isDiverged
+                ? (sameLen
+                    ? `本地和云端的最后 ${diff.localTail.length} 层内容不一样（很可能是同一层被修改成了不同内容）`
+                    : `本地和云端产生分叉（公共 ${diff.common} 层之后，本地多 ${diff.localTail.length} 层，云端多 ${diff.cloudTail.length} 层）`)
+                : `本地比云端多 ${diff.localTail.length} 层新内容`);
         const baseMsg = `聊天「${escapeHtml(fileName)}」：${desc}。<br>你想怎么处理它？`;
         // ★0.13.46：第 0 楼（开场白）那版不同不算分叉 —— 只在"真是分叉"时补一句说明（计数已不含第 0 楼）
-        const __greetNote = diff.greetDiff ? '<br><small>（开场白选的那一版不同，不算分叉；上传会带上你现在的这一版）</small>' : '';
+        // ★0.13.48-v2：greetConflict 档换成"不自动处理，请你选"的硬口径说明（覆盖/另行保存/跳过三选一）
+        const __greetNote = diff.greetConflict
+            ? '<br><small>（开场白不是同一版：两台设备各选过一版，而且两边都已经聊过——为免把较早那版的聊天洗掉，这里不自动处理，请你选：覆盖＝用你现在的这版；另行保存＝两边都保留；跳过＝什么都不动。）</small>'
+            : (diff.greetDiff ? '<br><small>（开场白选的那一版不同，不算分叉；上传会带上你现在的这一版）</small>' : '');
         // ★0.13.46（作者真机实报：单条上传点「✅ 全部覆盖」⇒ 上传被当成**取消**）：两个「全部X」按钮的返回值（3101/3102）
         //   只有**批量分支**在消费 ⇒ 单条路径点它们会一路掉到末尾 return 'cancel'，还什么都不提示。
         //   改法：① 单条路径**不再显示**这两个按钮（单条场景里"全部"没有任何指代对象，留着它=文案承诺了不存在的行为）；
@@ -6109,12 +6171,33 @@ function classifyChatDiff(localMsgs, cloudMsgs) {
     const L0 = LM[0], C0 = CM[0];
     if (L0 === undefined || C0 === undefined) return base;                 // 任一侧 0 条 ⇒ 逐字走原算法（0 楼保护/现行为不动）
     if (messageSignature(L0) === messageSignature(C0)) return base;        // 第 0 楼相同 ⇒ 与改前**逐字相同**
-    // ★0.13.46 第 0 楼宽容（见上方注释）：只把第 0 条摘出来，对 msgs[1..] 跑原算法，再按下表折算。
+    // ★0.13.46 第 0 楼宽容（见下方注释）：只把第 0 条摘出来，对 msgs[1..] 跑原算法，再按下表折算。
     const core = __classifyChatDiffCore(LM.slice(1), CM.slice(1));
+    const common = core.common + 1;                                        // 计数挪到第 0 楼之后：开场白不额外加"多 N 层"
+    // ★0.13.48-v2 收紧（作者 2026-10-13 补的关键事实）：**两边都已有楼层（≥1）且第 0 楼不同 ⇒ 一律 diverged（不静默）**。
+    //   依据：酒馆里一旦聊到下一楼，前面楼层（含第 0 楼开场白）在界面上就**没法再切分支** ⇒ "两边都聊过 + 开场白不是同一版"
+    //   不可能是用户的正常操作（正常重选只发生在"还只有开场白"时）。若按包含关系静默处理，最危险的形态是：
+    //   某台设备被合流出 [gX + m1..m6] 后一上传，local_superset 会**自动覆盖**把云端那份更好的开场白洗成 gX（再倒灌回另一台设备）。
+    //   ⇒ 这种形态一律归 diverged，交给现成对话框（上传侧「覆盖/另存/跳过」、导入侧「以云端为准/以本地为准」）。
+    const localFloors = __csFloorCount(LM), cloudFloors = __csFloorCount(CM);
+    if (localFloors >= 1 && cloudFloors >= 1) {
+        return {
+            relation: 'diverged',
+            common,
+            localTail: LM.slice(common),
+            cloudTail: CM.slice(common),
+            localCount: LM.length,
+            cloudCount: CM.length,
+            middleGap: core.middleGap,
+            localContig: core.localContig,
+            greetDiff: true,                                               // 0 楼不同这个事实（对话框说明用）
+            greetConflict: true,                                           // ★v2：硬冲突（两边都聊过）——任何方向都不许静默
+        };
+    }
+    // v1 宽容表（仅"一方还没有楼层（纯开场白态）"档 —— 良性：按方向走，上传=用本地那版 / 导入带楼层进来=用云端那版）
     const rel = (core.relation === 'cloud_superset')
         ? 'cloud_superset'                                                 // 保守：不许被宽容反转成"上传"
         : (core.relation === 'diverged' ? 'diverged' : 'local_superset');  // identical / local_superset ⇒ local_superset（云端拿到新版开场白）
-    const common = core.common + 1;                                        // 计数挪到第 0 楼之后：开场白不额外加"多 N 层"
     return {
         relation: rel,
         common,
@@ -6135,6 +6218,8 @@ function classifyChatDiff(localMsgs, cloudMsgs) {
 //     base = local_superset            ⇒ local_superset（照旧）
 //     base = cloud_superset            ⇒ cloud_superset（保守：照旧"取消上传 + 提示导入"）
 //     base = diverged                  ⇒ diverged（照旧弹窗；只是"多 N 层"的计数不含第 0 楼）
+//   ★0.13.48-v2（作者当天补的关键事实）：上表**只在"一方还没聊过（纯开场白态）"时适用**——
+//     "两边都已有楼层 + 第 0 楼不同" 一律改判 diverged（见上面那段注释；不静默是硬要求）。
 //   统一按"第一条消息"处理、**不去猜它是不是开场白**（用户可以在设置里关掉开场白、也可能首楼就是普通消息 ——
 //   猜错了反而添乱）；两边任一侧 0 条 ⇒ 也直接走原算法。
 function __classifyChatDiffCore(localMsgs, cloudMsgs) {
@@ -6198,6 +6283,32 @@ function serializeChatJsonl(headerObj, messages) {
     return JSON.stringify(header) + '\n' + lines.join('\n');
 }
 
+// ★0.13.48 导入合流「开场白跟着故事走」（作者真机实报：手机上导入后开场白与后续楼层对不上）：
+//   现场 = 电脑上把开场白切到第 8 号后聊了 6 楼并上传；手机这条聊天文件只有第 0 楼（还没切分支）= 旧开场白 gX，
+//   云端 = [g8, m1..m6]。导入合流（cloud_superset 快进）原来只把云端多出来的楼接在 local 后面
+//   ⇒ 产物 [gX, m1..m6]：第 0 楼是手机那版开场白，后面却是按 g8 聊出来的楼 ⇒ 前后文对不上。
+//   口径：**导入方向「跟着故事走」——凡有云端楼层被并进来，第 0 楼就用云端那份**
+//   （云端 message[0] 自带完整 swipes/swipe_id，serializeChatJsonl 与 /api/chats/save 都原样保留 ⇒ 用户以后还能滑回其它开场白）。
+//   边界（不越界）：
+//     · 第 0 楼**相同**（签名一致）⇒ 什么都不做（全路径与改前逐字相同）；
+//     · **仅第 0 楼不同、没有新楼要进**（一方纯开场白态）⇒ 维持 skip，绝不悄悄改本地开场白（0.13.46 既有口径）；
+//     · **两边都已有楼层 + 第 0 楼不同** ⇒ 上游 classifyChatDiff 已按 v2 判 diverged（弹框、不静默）⇒ 走不到这里；
+//     · local_superset / diverged ⇒ 行为不动（本助手只在"有云端楼层进"的 fastforward 合流里被调用）；
+//     · 第 0 楼只在**确实被替换**时返回 true（调用方据此同步内存/DOM 的第 0 楼，避免下次 saveChat 把换好的开场白又盖回去）。
+//   merged 原地改（调用方传的必须是"本地已有 + 云端新楼"的合成数组，且第 0 条来自本地那份）。
+function __csAdoptCloudGreeting(merged, localMsgs, cloudMsgs) {
+    try {
+        if (!Array.isArray(merged) || !Array.isArray(localMsgs) || !Array.isArray(cloudMsgs)) return false;
+        const L0 = localMsgs[0], C0 = cloudMsgs[0];
+        if (L0 === undefined || C0 === undefined) return false;                 // 任一侧没有第 0 楼 ⇒ 不碰
+        if (!merged.length) return false;
+        if (messageSignature(merged[0]) !== messageSignature(L0)) return false; // 合成数组的头不是本地第 0 楼（非常规形态）⇒ 不碰
+        if (messageSignature(L0) === messageSignature(C0)) return false;        // 第 0 楼本来就一样 ⇒ 逐字不动
+        merged[0] = C0;                                                         // 换成云端那份（带完整 swipes/swipe_id）
+        return true;
+    } catch (e) { console.warn('[chat-sync] 开场白跟随云端失败(按原样继续)', e); return false; }
+}
+
 // 当前打开聊天做冲突检测 + 楼层级快速同步（按「公共前缀/余段」判定包含或分叉）。
 // 仅对「当前打开且已绑 syncMap 的聊天」做（saveChat 只写当前打开那个文件；新楼层也只在此产生）。
 // 返回 { action, addedCloudCount, diverged } 或 null。
@@ -6227,6 +6338,8 @@ async function syncOpenChat(charName) {
             const curSigs = new Set((c.chat || []).map(messageSignature));
             const newOnes = added.filter((m) => !curSigs.has(messageSignature(m)));
             if (newOnes.length) {
+                // ★0.13.48：云端楼层并入 ⇒ 第 0 楼跟随云端那份（本支随后会把整份上传，不换的话会把云端那份开场白洗成本地版）
+                __csAdoptCloudGreeting(c.chat, localMsgs, cloudMsgs);
                 c.chat.splice(c.chat.length, 0, ...newOnes);
                 diag.lastRun = { ...(diag.lastRun || {}), fastForward: { added: newOnes.length } };
                 if (typeof c.saveChat === 'function') await c.saveChat(); // 写回本地同一文件
@@ -6383,11 +6496,46 @@ function decideImportMerge(localMsgs, cloudMsgs) {
         // 否则缺失的中间楼会被 concat 到末尾、造成楼层顺序错乱
         if (diff.middleGap || !diff.localContig) {
             const cloudArr = cloudMsgs || [];
+            // ★0.13.48：全量重建本就是云端正份（含云端第 0 楼）⇒ 开场白自动跟随，无需另改（确认过）
             return { action: 'fastforward', diff, merged: cloudArr.slice(), added: Math.max(0, cloudArr.length - (localMsgs || []).length) };
         }
-        return { action: 'fastforward', diff, merged: (localMsgs || []).concat(newOnes), added: newOnes.length };
+        const merged = (localMsgs || []).concat(newOnes);
+        // ★0.13.48：有云端楼层并入 ⇒ 第 0 楼跟随云端那份（否则开场白与后面楼层对不上；见 __csAdoptCloudGreeting 注释）
+        __csAdoptCloudGreeting(merged, localMsgs || [], cloudMsgs || []);
+        return { action: 'fastforward', diff, merged, added: newOnes.length };
     }
     return { action: 'diverged', diff };
+}
+
+// ★0.13.48-v2：导入方向的"分叉"对话框（手动整包导入 resolveCloudChatImport 与 拉取当前聊天 pullCurrentChat 共用）。
+//   greetConflict（两边都已有楼层 + 开场白不是同一版）= 作者 2026-10-13 补的硬要求：**不静默** —— 弹框让用户选，
+//   任何一侧都不许被自动覆盖/自动丢。返回值：'skip_local'（以本地为准，什么都不动）| 'import_cloud_as_new'（云端另存为本地新记录）。
+//   CUSTOM1 = 以云端为准(本地另存分支，两边都保留); CUSTOM2 = 以本地为准(不覆盖本地)。
+async function __csImportDivergedDialog(charName, cloudPath, cloud, knownLocal, diff, title) {
+    const CHOOSE_CLOUD = 2001, CHOOSE_LOCAL = 2002;
+    const d = diff || {};
+    const bodyLine = d.greetConflict
+        ? `聊天「${knownLocal}」的开场白不是同一版（两台设备各选过一版），而且两边都已经聊过。<br>为免弄错，这一步不自动处理，请你选一份：`
+        : `聊天「${knownLocal}」在云端和本地各走了不同分支（公共 ${d.common} 层后：本地另有 ${(d.localTail || []).length} 层，云端另有 ${(d.cloudTail || []).length} 层）。要保留哪边？`;
+    const choice = await Popup.show.confirm(
+        title || '⚠️ 手动导入时发现聊天分叉',
+        bodyLine,
+        {
+            defaultResult: CHOOSE_CLOUD,
+            okButton: false,      // ★0.13.46：原来没关默认按钮 ⇒ ST 上同时出现"是(1)/否(0)"，点任一都掉进下面
+            cancelButton: false,  //   的"以本地为准（保留本地、跳过云端这份）"——点"确定"却把云端这份扔了（文案与行为不符）。
+            customButtons: [
+                { text: '以云端为准（云端这份另存为本地新记录，两边都保留）', result: CHOOSE_CLOUD, classes: ['popup-button-ok'] },
+                { text: '以本地为准（保留本地，跳过云端这份）', result: CHOOSE_LOCAL, classes: ['popup-button-cancel'] },
+            ],
+        },
+    );
+    // ★0.13.46：只有**明确选了**「以本地为准」才跳过云端这份；其它任何返回值（含 TT 叠出来的 1/0、关掉弹窗）
+    //   一律走安全分支「以云端为准」（云端这份另存为本地新记录 ⇒ 两边都保留）。
+    if (choice === CHOOSE_LOCAL) return 'skip_local';
+    // 复用既有 importCloudChatAsNew：把云端这份另存为本地新聊天（保留本地分支）
+    await importCloudChatAsNew(charName, cloudPath, cloud, knownLocal);
+    return 'import_cloud_as_new';
 }
 
 // 完整处理一条「本地已有该聊天」的云端聊天：判定 + 采样（cloud_superset 写回 / diverged 弹框并执行），返回动作。
@@ -6443,29 +6591,9 @@ async function resolveCloudChatImport(charName, cardAvatar, cloudPath, cloud, lo
         return { action: 'skip', reason: 'fastforward_write_failed', count: 1 };
     }
     if (decision.action === 'diverged') {
-        const diff = decision.diff;
-        // CUSTOM1 = 以云端为准(本地另存分支); CUSTOM2 = 以本地为准(不覆盖本地)
-        const CHOOSE_CLOUD = 2001, CHOOSE_LOCAL = 2002;
-        const choice = await Popup.show.confirm(
-            '⚠️ 手动导入时发现聊天分叉',
-            `聊天「${knownLocal}」在云端和本地各走了不同分支（公共 ${diff.common} 层后：本地另有 ${diff.localTail.length} 层，云端另有 ${diff.cloudTail.length} 层）。要保留哪边？`,
-            {
-                defaultResult: CHOOSE_CLOUD,
-                okButton: false,      // ★0.13.46：原来没关默认按钮 ⇒ ST 上同时出现"是(1)/否(0)"，点任一都掉进下面
-                cancelButton: false,  //   的"以本地为准（保留本地、跳过云端这份）"——点"确定"却把云端这份扔了（文案与行为不符）。
-                customButtons: [
-                    { text: '以云端为准（云端这份另存为本地新记录，两边都保留）', result: CHOOSE_CLOUD, classes: ['popup-button-ok'] },
-                    { text: '以本地为准（保留本地，跳过云端这份）', result: CHOOSE_LOCAL, classes: ['popup-button-cancel'] },
-                ],
-            },
-        );
-        // ★0.13.46：只有**明确选了**「以本地为准」才跳过云端这份；其它任何返回值（含 TT 叠出来的 1/0、关掉弹窗）
-        //   一律走安全分支「以云端为准」（云端这份另存为本地新记录 ⇒ 两边都保留）。
-        if (choice === CHOOSE_LOCAL) {
-            return { action: 'skip_local', count: 1 };
-        }
-        // 复用既有 importCloudChatAsNew：把云端这份另存为本地新聊天（保留本地分支）
-        await importCloudChatAsNew(charName, cloudPath, cloud, knownLocal);
+        // ★0.13.48-v2：对话框抽成 __csImportDivergedDialog（与「导入当前聊天」共用；greetConflict 有专门文案）
+        const r = await __csImportDivergedDialog(charName, cloudPath, cloud, knownLocal, decision.diff, '⚠️ 手动导入时发现聊天分叉');
+        if (r === 'skip_local') return { action: 'skip_local', count: 1 };
         return { action: 'import_cloud_as_new', count: 1 };
     }
     return { action: 'skip', count: 1 };
