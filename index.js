@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.53'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.54'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7234,6 +7234,7 @@ window.__csManualCheck = async function (btn) {
                     <summary><i class="fa-solid fa-wand-magic-sparkles cs-ico" aria-hidden="true"></i>快捷入口</summary>
                     <div class="cs-body">
                         <label style="display:flex!important;align-items:center;gap:6px;font-size:.92em;margin-bottom:4px;cursor:pointer"><input type="checkbox" id="cs_float_enabled" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.floatEnabled === false ? '' : 'checked'}><span>开启悬浮球🌐</span></label>
+                        <label style="display:flex!important;align-items:center;gap:6px;font-size:.92em;margin-bottom:4px;cursor:pointer"><input type="checkbox" id="cs_branch_hud_enabled" style="margin:0;accent-color:var(--SmartThemeQuoteColor,#f0a35e)" ${settings.branchHud === false ? '' : 'checked'}><span>常驻分支悬浮条（聊天区左下角 ‹数字›）</span></label>
                         <div class="cs-sep"></div>
                         <div style="font-size:.85em;font-weight:700;margin:4px 0 2px;opacity:.9">功能型（点图标直接执行）</div>
                         <label style="display:flex!important;align-items:center;gap:5px;font-size:.85em;margin:2px 0;cursor:pointer"><input type="checkbox" id="cs_float_upload" style="margin:0" ${settings.floatUploadChat === false ? '' : 'checked'}><span style="color:#6fce6f;font-weight:600">悬浮球「上传当前聊天」</span></label>
@@ -10878,12 +10879,13 @@ try {
             saveSettingsDebounced();
             try { if (typeof saveSettings === 'function') saveSettings().catch(() => { }); } catch { }
         }
-        if (e.target && ['cs_float_enabled', 'cs_float_upload', 'cs_float_import', 'cs_menu_upload', 'cs_menu_import'].includes(e.target.id)) {
-            const k = { cs_float_enabled: 'floatEnabled', cs_float_upload: 'floatUploadChat', cs_float_import: 'floatImportChat', cs_menu_upload: 'menuUploadChat', cs_menu_import: 'menuImportChat' }[e.target.id];
+        if (e.target && ['cs_float_enabled', 'cs_float_upload', 'cs_float_import', 'cs_menu_upload', 'cs_menu_import', 'cs_branch_hud_enabled'].includes(e.target.id)) {
+            const k = { cs_float_enabled: 'floatEnabled', cs_float_upload: 'floatUploadChat', cs_float_import: 'floatImportChat', cs_menu_upload: 'menuUploadChat', cs_menu_import: 'menuImportChat', cs_branch_hud_enabled: 'branchHud' }[e.target.id];
             settings[k] = !!e.target.checked;
             saveSettingsDebounced();
             __csUpdateFloat();
             __csUpdateMenuEntries();
+            try { __csBranchHudUpdate(); } catch { }
         }
         if (e.target && e.target.id && String(e.target.id).startsWith('cs_fpg_')) {
             const k2 = String(e.target.id).slice(7); // conn/roles/wb/cfg
@@ -12018,16 +12020,7 @@ async function __csBranchHudSwitch(e, dir) {
         await __csBranchSwitchFloor(Number(id), dir, e);   // 与楼内箭头同一套内核（含"锚住楼底边"）
     } catch (err) { console.warn('[chat-sync] 悬浮条切分支失败(忽略)', err); }
 }
-// 0.13.53 快捷入口开关：翻转 branchHud（undefined/true = 开）→ 存盘 → 立即生效 → 重画快捷入口让图标状态跟着变
-function __csToggleBranchHud() {
-    try {
-        settings.branchHud = settings.branchHud === false;
-        saveSettingsDebounced();
-        try { if (typeof toastr !== 'undefined') toastr.info('楼层切换悬浮条：' + (settings.branchHud === false ? '已关闭' : '已开启')); } catch { }
-        __csBranchHudUpdate();
-        try { if (typeof window.__csUpdateFloat === 'function') window.__csUpdateFloat(); } catch { }
-    } catch (err) { console.warn('[chat-sync] 悬浮条开关失败(忽略)', err); }
-}
+// 0.13.54 开关位置：作者口径"放在 快捷入口分页里"（悬浮球菜单里那条已撤）——见面板「快捷入口」卡的 cs_branch_hud_enabled。
 (function __csBranchHudWatch() {
     const later = () => { clearTimeout(__csBranchHudTimer); __csBranchHudTimer = setTimeout(__csBranchHudUpdate, 80); };
     if (typeof jQuery !== 'undefined') {
@@ -12330,8 +12323,7 @@ function __csUpdateFloat() {
     const ACTION_DEFS = [
         { key: 'upload', ico: 'fa-cloud-arrow-up', label: '上传当前聊天', color: '#6fce6f', run: () => __csRunInstant('upload') },
         { key: 'import', ico: 'fa-cloud-arrow-down', label: '导入至当前聊天', color: '#6fbcf6', run: () => __csRunInstant('import') },
-        { key: 'hud', ico: 'fa-route', label: '楼层切换悬浮条（开/关）', color: (settings.branchHud === false ? 'rgba(150,150,150,.8)' : 'var(--SmartThemeQuoteColor)'), run: () => __csToggleBranchHud() },
-    ].filter(a => a.key === 'hud' || (a.key === 'upload' && showU) || (a.key === 'import' && showI));
+    ].filter(a => ((a.key === 'upload' && showU) || (a.key === 'import' && showI)));
     const PAGE_DEFS = CS_FLOAT_PAGES.filter((d) => csFloatPageEnabled(d.key));
     const rowCount = ACTION_DEFS.length + PAGE_DEFS.length + (ACTION_DEFS.length ? 1 : 0);
     const $items = $(`<div class="csf-body" style="overflow:hidden;height:0;background:transparent"></div>`).appendTo($box);
