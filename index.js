@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.55'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.56'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -61,6 +61,7 @@ const DEFAULT_SETTINGS = {
     autoSyncReplyWaitSec: 20, // 0.12.100 可填秒数: AI回复完无重roll判定窗口(原硬编码20s; 秒, 正整数, 用户可填 1-600)
     lastCloudSha: {},         // {云端路径: sha} 记忆
     lastLocalMTime: {},       // {云端路径: 上次同步时本地聊天文件mtime} 增量粗筛
+    lastCloudMsgSha: {},      // ★0.13.56 {云端路径: 上次同步时「只算消息」的指纹} —— ST 重存会改文件头/格式，用它认「字没变」
     syncMap: {},              // {角色名: {云路径: 本地导入后的真实文件名}} 稳定身份映射，让跨端同步收敛不复制
     uploadBundle: undefined,  // (已停用) 备份本体功能已移除(0.9.0): 打包依赖从仓库再拉代码, 作者删库后无法生成, 与防删库目的不符; 云端旧安全包仍可被导入端读取兜底
     connSlots: [],           // 连接槽位[{platform,repo,token,lastConnectAt}]: 保存配置自动去重入库, 下拉一秒切换, 可删
@@ -163,6 +164,7 @@ function csClearCaches() {
 function csSwitchBackendReset() {
     try { settings.lastCloudSha = {}; } catch { }
     try { settings.lastLocalMTime = {}; } catch { }
+    try { settings.lastCloudMsgSha = {}; } catch { }
     try { settings.cardPending = {}; } catch { }
     try { settings.__csHealSeen = {}; } catch { }
     saveSettingsDebounced();
@@ -2143,7 +2145,92 @@ async function getChatContent(fileName, charName, avatarHint) {
 //   diverged 下用户选"以本地为准/跳过云端"这些**都不许碰**（碰了会把真实的「本地新/云端新」掩盖掉）。
 function __csMarkChatSynced(p) {
     try { settings.lastLocalMTime = settings.lastLocalMTime || {}; settings.lastLocalMTime[p] = Date.now(); } catch { }
+    try { __csMarkCloudMsgShaAsync(p); } catch { }   // ★0.13.56 顺带记「只算消息」的指纹（异步尽力；失败=行为与改前逐字相同）
 }
+async function __csMarkCloudMsgShaAsync(p) {
+    try {
+        let charName = '', localFile = '';
+        const sm = settings.syncMap || {};
+        for (const nm of Object.keys(sm)) { const m = sm[nm]; if (m && m[p]) { charName = nm; localFile = String(m[p]); break; } }
+        if (!charName || !localFile) return;
+        let avatar = '';
+        try { const cs = (typeof __cardsNamed === 'function') ? __cardsNamed(charName) : null; avatar = (cs && cs[0] && cs[0].avatar) || (charName + '.png'); } catch { }
+        const fp = await __csLocalChatFp(p, localFile, charName, avatar, 'marksync-' + Date.now());
+        if (fp && fp.c) { settings.lastCloudMsgSha = settings.lastCloudMsgSha || {}; settings.lastCloudMsgSha[p] = fp.c; if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced(); }
+    } catch { }
+}
+
+// ★0.13.55b 徽章判据搬到模块顶层（原在 __renderRoleMultiList 渲染闭包内 ⇒ 不打开面板就没法验数据；
+//   搬出后：开机即挂 window.__csBadgeByMemory 供探针直驱；渲染侧照旧调用（同名解析到顶层 const）。
+//   依赖（__csChatStemOf/getChatContentInfo/parseJsonlMessages/__csLocalChatFp/__csMarkChatSynced 等）
+//   全部模块级、仅运行时调用 ⇒ 无时序问题。
+                const __localChatsCache = {};   // name|av -> Map(本地文件名 -> 行)；两个 worker 共用，每渲染每角色最多一次本地列表请求
+                const __localChatRow = async (name2, av2, stem2) => {
+                    const key = name2 + '|' + av2;
+                    // ★0.13.55c 缓存加时效 1.5s：判据搬出渲染闭包后缓存跨轮存活 ⇒ 不加时效会把"旧列表"当真（新楼层看不见）
+                    if (!__localChatsCache[key] || (Date.now() - (__localChatsCache[key].__t || 0)) > 1500) {
+                        const p0 = (async () => {
+                            const map = new Map();
+                            try {
+                                const r = await fetch('/api/characters/chats', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: av2 }) });
+                                if (r.ok) { const arr = await r.json(); if (Array.isArray(arr)) for (const x of arr) if (x && x.file_name) map.set(String(x.file_name), x); }
+                            } catch { }
+                            return map;
+                        })();
+                        try { p0.__t = Date.now(); } catch { }
+                        __localChatsCache[key] = p0;
+                    }
+                    const map = await __localChatsCache[key];
+                    for (const [fn, rowX] of map) { try { if (__csChatStemOf(fn) === stem2) return rowX; } catch { } }
+                    return null;
+                };
+                const __chatLocalNewByMemory = async (name2, av2, stem2, cpath, allowSha) => {
+                    try {
+                        const mem = settings.lastLocalMTime && cpath ? settings.lastLocalMTime[cpath] : undefined;
+                        const sha = (allowSha && cpath && settings.lastCloudSha) ? settings.lastCloudSha[cpath] : undefined;
+                        const rowX = (mem || sha) ? await __localChatRow(name2, av2, stem2) : null;   // 两种记忆都没有 ⇒ 连本地列表都不拉
+                        const stamp = rowX ? ((rowX.last_mes || '') + '|' + (rowX.file_size || '') + '|' + (rowX.chat_items === undefined ? '' : rowX.chat_items)) : '';
+                        if (mem) {
+                            if (!rowX || !rowX.last_mes) return false;
+                            const lm = Date.parse(rowX.last_mes);
+                            if (!isFinite(lm)) return false;
+                            if (!(lm > Number(mem) + 60000)) return false;   // 粗筛：文件 mtime 比"上次传上去那一刻"晚 >60 秒
+                            // ★0.13.55（作者手机实报「批量导入后 等待一会儿 又一个个变成本地新」）：rowX.last_mes 是**文件 mtime**，
+                            //   手机 ST 打开聊天就会重存文件（mtime 刷新、消息没变）⇒ 粗筛恒真；0.13.47 的指纹复核又因重存改了
+                            //   字节（头/格式）认不出"字没变" ⇒ 假「本地新」。这里 coarse→精扫：读本地文件取**最后一条消息的
+                            //   send_date**——不晚于锚点 ⇒ 没聊新楼层 ⇒ 一致（顺手刷新锚点，之后走 mtime 快路；零云请求）。
+                            try {
+                                const infoT = await getChatContentInfo(rowX.file_name, name2, av2);
+                                const msgsT = infoT ? parseJsonlMessages(infoT.text) : null;
+                                const lastT = (msgsT && msgsT.length) ? Date.parse(msgsT[msgsT.length - 1].send_date || '') : NaN;
+                                if (isFinite(lastT) && !(lastT > Number(mem) + 60000)) { __csMarkChatSynced(cpath); try { saveSettingsDebounced(); } catch { } return false; }
+                            } catch { }
+                            // ★0.13.47 指纹复核（治好"陈旧锚点 / 上传后没刷锚点"造成的假「本地新」—— 作者真机就是这形态：
+                            //   锚点停在旧时刻 + lastCloudSha 已是云端当前值 + 内容其实一致 ⇒ 主判据恒真、传完还显「本地新」）。
+                            //   与上传同口径的本地指纹（双头部 {a,b}）任一 == lastCloudSha ⇒ 判"一致"并**顺手刷新锚点**（自愈，之后走 mtime 快路）；
+                            //   不同才真显示「本地新」。没有 sha / 读不出 / 分段（allowSha=false，记忆里是清单 sha）⇒ 维持主判据（宁可不治愈也不假一致）。
+                            if (sha && rowX.file_name) {
+                                const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2, stamp);
+                                if (fp && (fp.a === sha || fp.b === sha || (settings.lastCloudMsgSha && settings.lastCloudMsgSha[cpath] && fp.c === settings.lastCloudMsgSha[cpath]))) { __csMarkChatSynced(cpath); try { saveSettingsDebounced(); } catch { } return false; }   // ★0.13.56 第三条：消息层相同 ⇒ 一致（ST 重存改头不改字也会命中）
+                            }
+                            return true;
+                        }
+                        // ★0.13.46 回退：锚点缺 + 有 lastCloudSha（allowSha 只在整文件聊天档传 true）
+                        if (!allowSha || !cpath) return false;            // 无任何记忆 / 分段聊天 ⇒ 继续不猜（与改前逐字同）
+                        if (!sha) return false;                           // 连 sha 都没有 ⇒ 不猜
+                        if (!rowX || !rowX.file_name) return false;
+                        const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2, stamp);
+                        if (!fp) return false;                            // 本地读不出/空文件 ⇒ 不猜
+                        if (fp.a === sha || fp.b === sha || (settings.lastCloudMsgSha && settings.lastCloudMsgSha[cpath] && fp.c === settings.lastCloudMsgSha[cpath])) {   // ★0.13.56 三种口径任一相同 ⇒ 一致（顺手补锚点；不写云、不改文件）
+                            __csMarkChatSynced(cpath);
+                            try { saveSettingsDebounced(); } catch { }
+                            return false;
+                        }
+                        return true;                                      // 两种口径都不同 ⇒ 本地确实比"我们上次传上去的那份"新
+                    } catch { return false; }
+                };
+                try { window.__csBadgeByMemory = __chatLocalNewByMemory; } catch { }   // ★0.13.55 探针直驱用（徽章判据本体；只读不写云）
+
 
 // ★0.13.46 存量聊天「本地新」缺锚点回退（作者真机实报）：0.13.45 之前经**批量上传**传上去的聊天只记了 lastCloudSha、
 //   没记 lastLocalMTime 锚点 ⇒ 徽章的"方向记忆"判定（最后一条消息 vs 上次同步时刻）无从下手 ⇒ 本地明明又聊了新内容也不显「本地新」。
@@ -2169,7 +2256,9 @@ async function __csLocalChatFp(cpath, localFileName, charName, avatar, stamp) {
             const enc = new TextEncoder();
             const a = await gitBlobSha(enc.encode(info.text));
             const b = await gitBlobSha(enc.encode(serializeChatJsonl(info.headerRaw || {}, parseJsonlMessages(info.text))));
-            return { a, b };
+            // ★0.13.56 c = 只算消息（不含头）—— ST 重存改头不改字时，a/b 会变、c 不变 ⇒ 徽章用它认「同一条聊天」
+            const c = await gitBlobSha(enc.encode((parseJsonlMessages(info.text) || []).map((m) => JSON.stringify(m)).join('\n')));
+            return { a, b, c };
         } catch { return null; }
     })().then((v) => { if (v === null) __csChatFpCache.delete(key); return v; });   // 读失败不缓存（下次刷新重试）
     __csChatFpCache.set(key, job);
@@ -4988,7 +5077,7 @@ function applyPersonaRemoval(pu, avatarId, lockedPersonaId) {
 // 恢复：从 Gitee sync-config/ 读最新 settings-*.json → 保留下方关键字段(避免把云端连接/令牌/syncMap覆盖掉) → POST /api/settings/save 写回(整个酒馆配置恢复)
 // M2-CF 硬坑④：CF 的 4 个新键必须进保留名单，否则「一键下载应用」恢复一份旧备份就把 CF 连接抹掉。
 //   顺带补 4 个现存缺口（设计 §3.5）：cardBind/cardPending/connSlots/gitlabBranch —— 恢复旧备份原本会丢卡绑定关系。
-const CONFIG_KEEP_KEYS = new Set(['owner','repo','token','lastCloudSha','lastLocalMTime','syncMap','backend','cfUrl','cfKey','cfName','cardBind','cardPending','connSlots','gitlabBranch']);
+const CONFIG_KEEP_KEYS = new Set(['owner','repo','token','lastCloudSha','lastLocalMTime','lastCloudMsgSha','syncMap','backend','cfUrl','cfKey','cfName','cardBind','cardPending','connSlots','gitlabBranch']);
 const CONFIG_CHUNK_MAX = 800000; // 每块字符数(安全<Gitee单文件~1MB)
 // 分块上传一段文本到 sync-config/<ts>/ part-NNN.json, 返回块数
 async function __cfgPutChunks(dirPath, fullJson) {
@@ -7708,58 +7797,6 @@ function wirePanelEvents() {
                 //   只有 lastCloudSha、没有锚点 ⇒ 原来永远不显「本地新」。回退 = 懒算本地指纹（与上传同口径）比 lastCloudSha：
                 //   不同 ⇒ 本地新；相同 ⇒ 一致（顺手补锚点）。只有"整文件聊天（云端没有分段清单）"这一档才允许走（分段时
                 //   lastCloudSha 记的是清单 sha，拿内容指纹去比会假报"本地新"）。完全无任何记忆 ⇒ 继续不猜。
-                const __localChatsCache = {};   // name|av -> Map(本地文件名 -> 行)；两个 worker 共用，每渲染每角色最多一次本地列表请求
-                const __localChatRow = async (name2, av2, stem2) => {
-                    const key = name2 + '|' + av2;
-                    if (!__localChatsCache[key]) {
-                        __localChatsCache[key] = (async () => {
-                            const map = new Map();
-                            try {
-                                const r = await fetch('/api/characters/chats', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: av2 }) });
-                                if (r.ok) { const arr = await r.json(); if (Array.isArray(arr)) for (const x of arr) if (x && x.file_name) map.set(String(x.file_name), x); }
-                            } catch { }
-                            return map;
-                        })();
-                    }
-                    const map = await __localChatsCache[key];
-                    for (const [fn, rowX] of map) { try { if (__csChatStemOf(fn) === stem2) return rowX; } catch { } }
-                    return null;
-                };
-                const __chatLocalNewByMemory = async (name2, av2, stem2, cpath, allowSha) => {
-                    try {
-                        const mem = settings.lastLocalMTime && cpath ? settings.lastLocalMTime[cpath] : undefined;
-                        const sha = (allowSha && cpath && settings.lastCloudSha) ? settings.lastCloudSha[cpath] : undefined;
-                        const rowX = (mem || sha) ? await __localChatRow(name2, av2, stem2) : null;   // 两种记忆都没有 ⇒ 连本地列表都不拉
-                        const stamp = rowX ? ((rowX.last_mes || '') + '|' + (rowX.file_size || '') + '|' + (rowX.chat_items === undefined ? '' : rowX.chat_items)) : '';
-                        if (mem) {
-                            if (!rowX || !rowX.last_mes) return false;
-                            const lm = Date.parse(rowX.last_mes);
-                            if (!isFinite(lm)) return false;
-                            if (!(lm > Number(mem) + 60000)) return false;   // 主判据：最后一条消息比"上次传上去那一刻"晚 >60 秒
-                            // ★0.13.47 指纹复核（治好"陈旧锚点 / 上传后没刷锚点"造成的假「本地新」—— 作者真机就是这形态：
-                            //   锚点停在旧时刻 + lastCloudSha 已是云端当前值 + 内容其实一致 ⇒ 主判据恒真、传完还显「本地新」）。
-                            //   与上传同口径的本地指纹（双头部 {a,b}）任一 == lastCloudSha ⇒ 判"一致"并**顺手刷新锚点**（自愈，之后走 mtime 快路）；
-                            //   不同才真显示「本地新」。没有 sha / 读不出 / 分段（allowSha=false，记忆里是清单 sha）⇒ 维持主判据（宁可不治愈也不假一致）。
-                            if (sha && rowX.file_name) {
-                                const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2, stamp);
-                                if (fp && (fp.a === sha || fp.b === sha)) { __csMarkChatSynced(cpath); try { saveSettingsDebounced(); } catch { } return false; }
-                            }
-                            return true;
-                        }
-                        // ★0.13.46 回退：锚点缺 + 有 lastCloudSha（allowSha 只在整文件聊天档传 true）
-                        if (!allowSha || !cpath) return false;            // 无任何记忆 / 分段聊天 ⇒ 继续不猜（与改前逐字同）
-                        if (!sha) return false;                           // 连 sha 都没有 ⇒ 不猜
-                        if (!rowX || !rowX.file_name) return false;
-                        const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2, stamp);
-                        if (!fp) return false;                            // 本地读不出/空文件 ⇒ 不猜
-                        if (fp.a === sha || fp.b === sha) {               // 两种头部口径任一相同 ⇒ 一致（顺手补锚点；不写云、不改文件）
-                            __csMarkChatSynced(cpath);
-                            try { saveSettingsDebounced(); } catch { }
-                            return false;
-                        }
-                        return true;                                      // 两种口径都不同 ⇒ 本地确实比"我们上次传上去的那份"新
-                    } catch { return false; }
-                };
                 let cursor2 = 0;
                 const worker2 = async () => {
                     while (cursor2 < rowsAll.length) {
@@ -12656,6 +12693,7 @@ window.__stChatSyncDebug = {
     getChatContent,
     getChatContentInfo,   // ★0.13.46：带上"服务端实际读到的行数/表头形态"的读数（探针/调试用）
     __csLocalChatFp,      // ★0.13.46：本地聊天指纹（两种头部口径 {a,b}；徽章"缺锚点回退"用的就是它 —— 探针可直驱核对约定）
+    __chatLocalNewByMemory,   // ★0.13.55b：徽章「本地新」判据本体（探针用真实数据直驱）
     listCloudWorldbooks,
     // 0.13.0 卡级身份（QA/调试直驱，供同名卡 e2e 断言）
     __cardsLoad,
