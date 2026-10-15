@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.54'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.55'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -6939,10 +6939,9 @@ function __csCompareVer(a, b) {
     return 0;
 }
 const PLUGIN_REPO_MANIFEST_API = 'https://gitee.com/api/v5/repos/satosaki/tavern-synchronization-plugin/contents/manifest.json';
-// 0.12.127 Gitee 公开仓只读令牌(与 st-kimi-reasoning-injector 同款, 同账号通用, 已验证可读本仓):
-//   Gitee contents API 匿名请求会被限流 403(实测)——0.12.64 曾改用"匿名/用户token", 匿名必触发限流,
-//   用户未配连接时权威源直接失败 → 检测不到新版(用户实报 TT 不更新)。带只读 token 避开匿名限流。
-const GITEE_READ_TOKEN = '2bf7029efdcafba86f4ed28968f85f25';
+// 0.13.55 移除 0.12.127 引入的 Gitee 只读令牌：实测该令牌已失效——带 token 请求恒 401(控制台刷红)，
+//   匿名请求 200(2026-10-16 复测)，故改走匿名；若将来匿名被限流，权威源还有 Gitee raw(源⑤，0.12.126 起
+//   与 API 同源同权威) 兜底，不影响"检测到新版"。
 // base64(可含URL-safe/换行) → 文本(TT WebView 下 raw 直链无 CORS 头被拦, 必须走 gitee API contents)
 function __b64ToText(s) {
     s = String(s).split('\r').join('').split('\n').join(' ').split(' ').join('').split('-').join('+').split('_').join('/');
@@ -6973,7 +6972,7 @@ async function __csFetchRemoteVer() {
     const M = { repo: 'SakiPr1me/st-chat-sync-release', branch: 'main' };
     const sv = String(settings.server || '');
     const sources = [
-        PLUGIN_REPO_MANIFEST_API + '?t=' + Date.now(),                           // ① Gitee API(权威, 带 gitee token)
+        PLUGIN_REPO_MANIFEST_API + '?t=' + Date.now(),                           // ① Gitee API(权威, 0.13.55 起匿名)
         `https://api.github.com/repos/${M.repo}/contents/manifest.json?t=${Date.now()}`, // ② GitHub API(权威镜像, 带 gh token/匿名)
         `https://raw.githubusercontent.com/${M.repo}/${M.branch}/manifest.json?t=${Date.now()}`, // ③ GitHub raw(CDN 可能缓存旧)
         `https://cdn.jsdelivr.net/gh/${M.repo}@${M.branch}/manifest.json`,        // ④ jsDelivr CDN(缓存较久, 仅兜底)
@@ -6986,7 +6985,6 @@ async function __csFetchRemoteVer() {
         try {
             const headers = {};
             if (url.includes('api.github.com')) { headers['Accept'] = 'application/vnd.github+json'; if (settings.token && sv.includes('github')) headers['Authorization'] = 'Bearer ' + settings.token; }
-            else if (url.includes('gitee.com/api')) { headers['Authorization'] = 'token ' + GITEE_READ_TOKEN; } // 0.12.127 带只读token避匿名限流(此前仅用户token/匿名→匿名必403)
             const r = await fetch(url, { cache: 'no-store', headers, redirect: 'follow', signal: AbortSignal.timeout(6000) });
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const text = await r.text();
