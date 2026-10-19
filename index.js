@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.56'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.57'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7266,8 +7266,8 @@ window.__csManualCheck = async function (btn) {
                         <div id="${id}_slot2" class="cs-hint" style="margin:0 0 6px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor,#333);border-radius:8px;background:rgba(128,128,128,0.08)"></div>
                         <label class="cs-label" for="${id}_platform">云平台：</label>
                         <select id="${id}_platform" class="text_pole" style="width:100%;box-sizing:border-box">
-                            <option value="cf" ${String(settings.backend || '') === 'cf' || (!settings.server && !settings.owner) ? 'selected' : ''}>自建Cloudflare（脚本一键部署 · 速度更快 · 推荐用这个；GitHub 一次传太多会撞每小时上限）</option>
-                            <option value="https://api.github.com" ${String(settings.backend || '') !== 'cf' && String(settings.server || '').includes('github') ? 'selected' : ''}>GitHub（需能访问外网·单仓库建议&lt;1GB，上限约100GB）</option>
+                            <option value="cf" ${String(settings.backend || '') === 'cf' ? 'selected' : ''}>自建Cloudflare（脚本一键部署·速度更快；国内直连，单仓库上限500M）</option>
+                            <option value="https://api.github.com" ${String(settings.backend || '') !== 'cf' && (String(settings.server || '').includes('github') || (!settings.server && !settings.owner)) ? 'selected' : ''}>GitHub（需能访问外网·推荐用这个；单仓库建议&lt;1GB，上限约100GB）</option>
                             <option value="https://gitee.com/api/v5" ${String(settings.backend || '') !== 'cf' && (String(settings.server || '').includes('gitee') || (!settings.server && settings.owner)) ? 'selected' : ''}>Gitee（国内直连·单仓库约500MB）</option>
                             <option value="https://gitlab.com/api/v4" ${String(settings.backend || '') !== 'cf' && String(settings.server || '').includes('gitlab.com') ? 'selected' : ''}>GitLab（需能访问外网·单仓库10GiB）</option>
                         </select>
