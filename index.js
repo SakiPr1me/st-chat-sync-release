@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.57'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.58'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -7185,9 +7185,33 @@ async function __csDoSelfUpdate(btn, remoteVer) {
     //   → 插件从扩展列表消失且重装报"已存在"(用户实报现象); 且原兜底 delete 试 [true,false] 而 install 硬编码 global:true,
     //   实际装 user 目录时会删掉 user 副本却装到全局 → 位置错乱。正常 git 直装形态官方 /update 即可更新, 该兜底本不该触发;
     //   update 全灭时只明确报错, 让用户手动到扩展管理删除后重装。
+    /* ★W164（作者 2026-10-25 · Gitee 匿名拉取被关后 update 全灭 ⇒ 自动走 GitHub 删除重装兜底）：
+       改前这段只弹错误提示什么都不做（0.12.119 移除了旧兜底）。现在 Gitee 本身把正常更新堵死了。
+       安全措施：一次性旗 cs_github_fallback / 整个兜底 try/catch / install 失败时弹手动重装提示。
+       设置安全性已实测（8002）：删掉插件文件夹后 settings.json 里的数据完全不变。 */
     if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新'; }
-    // 0.12.138 失败提示人性化: 点明最常见原因(VPN/代理致 Gitee 不可达——git pull 走的是插件仓库地址 Gitee)
-    toastr.error('🌐 一键云同步：更新失败(' + (lastErr_s || '网络错误') + ')。常见原因: 开了 VPN/代理时无法访问 Gitee 仓库——请关闭 VPN 后重启酒馆/重试；仍失败可到「管理扩展」手动重装。', null, { timeOut: 10000 });
+    let ghTried = false;
+    try { ghTried = localStorage.getItem('cs_github_fallback') === '1'; } catch (e) { }
+    if (!ghTried) {
+        try { localStorage.setItem('cs_github_fallback', '1'); } catch (e) { }
+        try {
+            if (btn) btn.textContent = '⏳ 从 GitHub 重装…';
+            toastr.info('Gitee 更新失败，正在从 GitHub 重装…（设置不会丢失）', '一键云同步', { timeOut: 8000 });
+            const H = getRequestHeaders();
+            const del = await fetch('/api/extensions/delete', { method: 'POST', headers: H, body: JSON.stringify({ extensionName: selfName, global: false }) });
+            if (!del.ok && del.status !== 404) throw new Error('delete HTTP ' + del.status);
+            const GH_URL = 'https://github.com/SakiPr1me/st-chat-sync-release.git';
+            const inst = await fetch('/api/extensions/install', { method: 'POST', headers: Object.assign({}, H, { 'Content-Type': 'application/json' }), body: JSON.stringify({ url: GH_URL, global: false }) });
+            if (!inst.ok) throw new Error('install HTTP ' + inst.status);
+            try { toastr.success('🌐 已从 GitHub 重装最新版 v' + (remoteVer || '') + '，即将刷新', null, { timeOut: 4000 }); } catch (e) { }
+            window.__csDoReload();
+            return;
+        } catch (fbErr) {
+            console.warn('[一键云同步] GitHub 兜底也失败：', fbErr);
+            try { localStorage.removeItem('cs_github_fallback'); } catch (e) { }
+        }
+    }
+    toastr.error('🌐 一键云同步：更新失败(' + (lastErr_s || '网络错误') + ')。Gitee 匿名克隆已被关闭。请到「管理扩展」删除本插件后用以下链接重装（设置不会丢）：<br>https://github.com/SakiPr1me/st-chat-sync-release.git', null, { escapeHtml: false, timeOut: 15000 });
 }
 // 🔍 手动检测: 四态结果直接显示在按钮上(有新版/最新/本地更高/失败), 3 秒后还原待机
 window.__csManualCheck = async function (btn) {
