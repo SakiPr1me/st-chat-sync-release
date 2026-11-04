@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.63'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.64'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -3222,6 +3222,8 @@ async function pullCurrentChat() {
             }
             return;
         }
+        // ★0.13.64：末楼分支合并（楼层数不变、只多了几个版本）单独说一句——别说成"补回 0 楼"
+        if (merged && merged.branchMerged) { toastr.success(`✅ 已把云端那楼的 ${merged.branchMerged} 个版本并进来（楼层数不变，当前显示的是云端选的那一版）`); return; }
         if (merged) { const nowN = __csFloorCount(ctx().chat); const localN = merged.localCount ?? 0; const addedN = Math.max(0, nowN - localN); toastr.success(`✅ 已从云端补回当前聊天 ${addedN} 楼（补回前本地 ${localN} 楼 → 当前 ${nowN} 楼）`); return; }
         toastr.info('当前聊天已是最新');
         return;
