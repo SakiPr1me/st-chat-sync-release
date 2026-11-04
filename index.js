@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.65'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.66'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2811,9 +2811,16 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
         if (rel && rel.relation === 'diverged' && !rel.branchOnly) return { diverged: true, diff: rel, greetConflict: !!rel.greetConflict };
         // ★0.13.60 末楼分支合并：云端这一楼多了分支（或两边各加了不同分支）⇒ 把**并集**写回本地，
         //   当前显示跟随云端那一版（导入侧口径 = 云端优先）。不再当分叉拒绝、也不会多出一楼。
-        if (rel && rel.branchOnly && (rel.relation === 'cloud_superset' || rel.relation === 'diverged')) {
+        if (rel && rel.branchOnly && (rel.relation === 'cloud_superset' || rel.relation === 'diverged' || rel.relation === 'identical')) {
             const nL = localMsgs.length;
             if (!nL) return null;
+            // ★0.13.66：文本集合一样、但**槽位数不同**（本地 8 槽 / 云端 14 槽）也要照抄云端 —— 否则"恢复槽位"这一步永远走不到
+            if (rel.relation === 'identical') {
+                const _cl = cloudMsgs[nL - 1] || {}, _ll = localMsgs[nL - 1] || {};
+                const _cs = Array.isArray(_cl.swipes) ? _cl.swipes.length : 0;
+                const _ls = Array.isArray(_ll.swipes) ? _ll.swipes.length : 0;
+                if (_cs === _ls && Number(_cl.swipe_id) === Number(_ll.swipe_id)) return null;
+            }
             const mergedB = localMsgs.slice();
             const cloudLast = cloudMsgs[nL - 1] || {};
             // ★0.13.65（作者真机：手机上 14 个分支，导入后电脑只剩 8 个）——
@@ -2822,7 +2829,7 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
             //     · 云端是超集（导入方向）⇒ **整条照抄云端那条**（swipes/swipe_id/send_date 全原样，一个槽位都不动）；
             //     · 两边各加了不同分支（diverged）⇒ 本地列表原样保留，只把"云端有、本地集合里没有"的文字**追加**到后面。
             let finalMsg;
-            if (rel.relation === 'cloud_superset' && cloudLast && Object.keys(cloudLast).length) {
+            if ((rel.relation === 'cloud_superset' || rel.relation === 'identical') && cloudLast && Object.keys(cloudLast).length) {
                 finalMsg = Object.assign({}, cloudLast);
             } else {
                 finalMsg = Object.assign({}, localMsgs[nL - 1]);
@@ -6376,7 +6383,7 @@ function __csBranchMergeInfo(a, b) {
         const aHasAllB0 = B.every((t) => setA.has(t));
         const bHasAllA0 = A.every((t) => setB.has(t));
         if (!sameDate) {
-            if (aHasAllB0 === bHasAllA0) return null;                   // 互不包含 / 完全相同但日期不同 ⇒ 不接管
+            if (!aHasAllB0 && !bHasAllA0) return null;                  // 互不包含 ⇒ 真分叉（相等/一方包含都继续）
         } else if (!A.some((t) => setB.has(t))) return null;            // 同日期：一个共同版本都没有 ⇒ 不当同一楼
         const merged = [...A];
         for (const t of B) if (!setA.has(t)) merged.push(t);
