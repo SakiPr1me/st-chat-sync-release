@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.62'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.63'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2816,8 +2816,9 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
             const union = (rel.branchMerged || []).slice();
             if (!nL || !union.length) return null;
             const mergedB = localMsgs.slice();
-            const m2 = Object.assign({}, localMsgs[nL - 1]);
             const cloudLast = cloudMsgs[nL - 1] || {};
+            // ★0.13.63：云端是超集时以云端那条为底（send_date/extra 都跟过来）；否则保留本地那条的字段
+            const m2 = Object.assign({}, (rel.relation === 'cloud_superset' && cloudLast && Object.keys(cloudLast).length) ? cloudLast : localMsgs[nL - 1]);
             m2.swipes = union;
             const cloudCur = String(cloudLast.mes == null ? '' : cloudLast.mes);
             let idxB = union.findIndex((t) => String(t) === cloudCur);
@@ -6349,15 +6350,23 @@ function __csBranchMergeInfo(a, b) {
         if (!!a.is_user !== !!b.is_user) return null;
         const da = String(a.send_date || a.create_date || '');
         const db = String(b.send_date || b.create_date || '');
-        if (!da || da !== db) return null;                              // 楼层身份不同 ⇒ 真·两条消息
         const A = __csBranchSet(a), B = __csBranchSet(b);
         if (A.length <= 1 && B.length <= 1) return null;                // 单版本对单版本、字不同 = 真改动/分叉
         const setA = new Set(A), setB = new Set(B);
-        if (!A.some((t) => setB.has(t))) return null;                   // 一个共同版本都没有 ⇒ 不当同一楼
+        // ★0.13.63（作者真机：Cascabel 末楼）——酒馆"重新生成"会**新建一条消息**（send_date 变），
+        //   但新版会把旧版那几条并进自己的 swipes ⇒ 云端 set ⊇ 本地 set、而 send_date 不同。
+        //   这一档合并是**无损的**（云端那楼已包含本地的每一个版本）：照旧当"同一楼的分支"处理。
+        //   只有"日期不同 且 互不包含"才仍旧算两条独立的消息（真分叉）。
+        const sameDate = !!da && da === db;
+        const aHasAllB0 = B.every((t) => setA.has(t));
+        const bHasAllA0 = A.every((t) => setB.has(t));
+        if (!sameDate) {
+            if (aHasAllB0 === bHasAllA0) return null;                   // 互不包含 / 完全相同但日期不同 ⇒ 不接管
+        } else if (!A.some((t) => setB.has(t))) return null;            // 同日期：一个共同版本都没有 ⇒ 不当同一楼
         const merged = [...A];
         for (const t of B) if (!setA.has(t)) merged.push(t);
-        const aHasAllB = B.every((t) => setA.has(t));
-        const bHasAllA = A.every((t) => setB.has(t));
+        const aHasAllB = aHasAllB0;
+        const bHasAllA = bHasAllA0;
         const relation = (aHasAllB && bHasAllA) ? 'identical'
             : (bHasAllA ? 'cloud_superset' : (aHasAllB ? 'local_superset' : 'diverged'));
         return { relation, merged, branchOnly: true };
