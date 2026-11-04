@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.61'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.62'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2795,6 +2795,19 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
         //   · greetConflict（两边都已有楼层 + 开场白不是同一版）⇒ 单条「导入当前聊天」会弹导入侧对话框；
         //   · 其余真分叉 ⇒ 调用方只提示、不写，也不再报"已是最新"（原来是把它混进"已最新"里）。
         //   （本函数只负责"云端⊇本地"的补楼；其余关系一律不动本地。）
+        // ★0.13.62（作者实报：导入时还是弹"本地和云端这份内容不一样（各有各的楼层）"）：
+        //   那一档的真实形态是"云端只有开场白（和本地不是同一版）、没有比本地新的楼层" ⇒ 没有可补的东西，
+        //   不该当分叉去吓人/弹对话框。只差开场白时按"云端没有新楼层"如实说。
+        // ★0.13.62b：判据改成"**云端除了开场白之外，有没有本地没有的楼**" ——
+        //   作者真机那两例是"本地 31 楼 / 云端只有 1 条开场白"：开场白不同，但云端没有任何新楼 ⇒ 没东西可补。
+        //   （原来的 greetConflict 判据只覆盖"两边都聊过"那一档，而"云端只有开场白"走的是第 0 楼宽容档，greetConflict 根本没置位。）
+        if (rel && rel.relation === 'diverged') {
+            try {
+                const localSigs = new Set(localMsgs.map(messageSignature));
+                const cloudExtra = cloudMsgs.slice(1).filter((m) => !localSigs.has(messageSignature(m)));
+                if (!cloudExtra.length) return { cloudOlder: true, diff: rel, greetOnly: true };
+            } catch { }
+        }
         if (rel && rel.relation === 'diverged' && !rel.branchOnly) return { diverged: true, diff: rel, greetConflict: !!rel.greetConflict };
         // ★0.13.60 末楼分支合并：云端这一楼多了分支（或两边各加了不同分支）⇒ 把**并集**写回本地，
         //   当前显示跟随云端那一版（导入侧口径 = 云端优先）。不再当分叉拒绝、也不会多出一楼。
@@ -3013,6 +3026,7 @@ async function pullCharacterChats(charName) {
         if (knownLocal && localNames.has(knownLocal)) {
             // 读本地 vs 云端，云端 ⊇ 本地(cloud_superset) → 把云端新楼层补进本地；otherwise 跳过
             const merged = await pullMergeCloudSuperset(avatar, knownLocal, cloud, p);
+            if (merged && merged.cloudOlder) { settings.lastCloudSha[p] = cloud.sha || cloudSha; skipped++; continue; }   // ★0.13.62：云端只有开场白 ⇒ 当"已最新"跳过
             if (merged && merged.diverged) {
                 // ★0.13.48-v2：diverged 不静默 —— 开场白冲突档单独点名（请用户逐条选）；其余真分叉也点名一句。
                 //   都不记"已比对"备忘录 ⇒（开场白冲突档）下次拉取还会提示，不会被 sha 相同悄悄跳过。
@@ -3185,6 +3199,7 @@ async function pullCurrentChat() {
         const merged = await pullMergeCloudSuperset(avatar, localName, cloud, p);
         hideBusy(); setStatus('');
         if (merged && merged.blocked) { toastr.warning('检测到可能正在生成，已暂停自动补楼（等生成结束再导入一次即可）'); return; }
+        if (merged && merged.cloudOlder) { toastr.info('云端这份只有开场白（和你本地不是同一版），没有比你新的楼层——这次没动任何一边'); return; }
         if (merged && merged.diverged) {
             // ★0.13.48-v2：不静默 ——
             //   · 开场白不是同一版（两边都已有楼层）⇒ 弹导入侧对话框（以云端为准 = 云端这份另存为本地新记录，两边都保留；以本地为准 = 保留本地不动）
@@ -3193,7 +3208,16 @@ async function pullCurrentChat() {
                 const r = await __csImportDivergedDialog(charName, p, cloud, localName, merged.diff, '⚠️ 导入当前聊天时发现聊天分叉');
                 if (r === 'skip_local') toastr.info('已保留本地这份（云端未动）');
             } else {
-                toastr.info('本地和云端这份内容不一样（各有各的楼层），这次没有自动动任何一边');
+                // ★0.13.62：把"哪边多几楼"直接写出来（原来只有一句"各有各的楼层"，看不出到底差什么）
+                try {
+                    const d0 = merged.diff || {};
+                    const lN = (d0.localTail || []).length, cN = (d0.cloudTail || []).length;
+                    const detail = (lN && cN) ? `两边从第 ${Number(d0.common || 0) + 1} 楼开始各写各的（本地多 ${lN} 楼、云端多 ${cN} 楼）`
+                        : (lN ? `云端没有比你新的楼层（本地多 ${lN} 楼）` : (cN ? `本地没有比云端新的楼层（云端多 ${cN} 楼）` : '两边楼数一样但内容不同'));
+                    toastr.info(`本地和云端这份内容不一样：${detail}。这次没有自动动任何一边`);
+                } catch {
+                    toastr.info('本地和云端这份内容不一样（各有各的楼层），这次没有自动动任何一边');
+                }
             }
             return;
         }
@@ -6394,6 +6418,7 @@ function classifyChatDiff(localMsgs, cloudMsgs) {
             localContig: core.localContig,
             greetDiff: true,                                               // 0 楼不同这个事实（对话框说明用）
             greetConflict: true,                                           // ★v2：硬冲突（两边都聊过）——任何方向都不许静默
+            tailRelation: core.relation,                                   // ★0.13.62：去掉第 0 楼之后的结构关系（local_superset = 云端没有比本地新的楼层）
         };
     }
     // v1 宽容表（仅"一方还没有楼层（纯开场白态）"档 —— 良性：按方向走，上传=用本地那版 / 导入带楼层进来=用云端那版）
