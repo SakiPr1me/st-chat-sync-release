@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.64'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.65'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2813,19 +2813,32 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
         //   当前显示跟随云端那一版（导入侧口径 = 云端优先）。不再当分叉拒绝、也不会多出一楼。
         if (rel && rel.branchOnly && (rel.relation === 'cloud_superset' || rel.relation === 'diverged')) {
             const nL = localMsgs.length;
-            const union = (rel.branchMerged || []).slice();
-            if (!nL || !union.length) return null;
+            if (!nL) return null;
             const mergedB = localMsgs.slice();
             const cloudLast = cloudMsgs[nL - 1] || {};
-            // ★0.13.63：云端是超集时以云端那条为底（send_date/extra 都跟过来）；否则保留本地那条的字段
-            const m2 = Object.assign({}, (rel.relation === 'cloud_superset' && cloudLast && Object.keys(cloudLast).length) ? cloudLast : localMsgs[nL - 1]);
-            m2.swipes = union;
-            const cloudCur = String(cloudLast.mes == null ? '' : cloudLast.mes);
-            let idxB = union.findIndex((t) => String(t) === cloudCur);
-            if (idxB < 0) idxB = Math.min(Math.max(Number(m2.swipe_id) || 0, 0), union.length - 1);
-            m2.swipe_id = idxB;
-            m2.mes = union[idxB];
-            mergedB[nL - 1] = m2;
+            // ★0.13.65（作者真机：手机上 14 个分支，导入后电脑只剩 8 个）——
+            //   酒馆的 swipes 数组**允许有重复槽位**（同一段文字揉出好几版很常见），而 0.13.60~63 用的是"按文字去重的并集"，
+            //   写回去就把重复槽位吃掉了。现在的口径：
+            //     · 云端是超集（导入方向）⇒ **整条照抄云端那条**（swipes/swipe_id/send_date 全原样，一个槽位都不动）；
+            //     · 两边各加了不同分支（diverged）⇒ 本地列表原样保留，只把"云端有、本地集合里没有"的文字**追加**到后面。
+            let finalMsg;
+            if (rel.relation === 'cloud_superset' && cloudLast && Object.keys(cloudLast).length) {
+                finalMsg = Object.assign({}, cloudLast);
+            } else {
+                finalMsg = Object.assign({}, localMsgs[nL - 1]);
+                const A = (Array.isArray(finalMsg.swipes) && finalMsg.swipes.length) ? finalMsg.swipes.map(String) : [String(finalMsg.mes == null ? '' : finalMsg.mes)];
+                const setA = new Set(A);
+                const cloudSw = (Array.isArray(cloudLast.swipes) && cloudLast.swipes.length) ? cloudLast.swipes.map(String) : [String(cloudLast.mes == null ? '' : cloudLast.mes)];
+                const out = A.concat(cloudSw.filter((t) => !setA.has(t)));
+                finalMsg.swipes = out;
+                let idxC = out.findIndex((t) => t === String(cloudLast.mes == null ? '' : cloudLast.mes));
+                if (idxC < 0) idxC = Math.min(Math.max(Number(finalMsg.swipe_id) || 0, 0), out.length - 1);
+                finalMsg.swipe_id = idxC;
+                finalMsg.mes = out[idxC];
+            }
+            const finalSw = Array.isArray(finalMsg.swipes) && finalMsg.swipes.length ? finalMsg.swipes.map(String) : [String(finalMsg.mes == null ? '' : finalMsg.mes)];
+            if (!finalSw.length) return null;
+            mergedB[nL - 1] = finalMsg;
             if (csReallyGenerating()) { console.warn('[chat-sync] 用户正在生成，放弃末楼分支写回', knownLocal); return { blocked: true }; }
             const headerObjB = parseHeader(cloud.content);
             const saveAvB = String(avatar || '').includes('.png') ? String(avatar) : String(avatar || '') + '.png';
@@ -2847,17 +2860,17 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
                 const cB = ctx();
                 if (!cB.groupId && currentChatFileName() === knownLocal && Array.isArray(cB.chat) && cB.chat[nL - 1]) {
                     const live = cB.chat[nL - 1];
-                    live.swipes = union.slice();
-                    live.swipe_id = idxB;
-                    live.mes = union[idxB];
+                    live.swipes = finalSw.slice();
+                    live.swipe_id = finalMsg.swipe_id;
+                    live.mes = finalMsg.mes;
                     const TH = window.TavernHelper;
                     if (TH && typeof TH.refreshOneMessage === 'function') { try { await TH.refreshOneMessage(nL - 1); } catch { } }
                     else if (typeof __stCompat.redisplayChat === 'function') { try { await redisplayChat({ startIndex: nL - 1, fade: false }); } catch { } }
                     else { try { await reloadCurrentChat(); } catch { } }
                 }
             } catch (e2) { console.warn('[chat-sync] 末楼分支重绘失败(忽略)', e2); }
-            console.log('[chat-sync] 末楼分支合并：共 ' + union.length + ' 个版本，当前第 ' + (idxB + 1) + ' 版');
-            return { added: 0, branchMerged: union.length, localCount: __csFloorCount(localMsgs) };
+            console.log('[chat-sync] 末楼分支合并：共 ' + finalSw.length + ' 个版本，当前第 ' + (Number(finalMsg.swipe_id) + 1) + ' 版');
+            return { added: 0, branchMerged: finalSw.length, localCount: __csFloorCount(localMsgs) };
         }
         // 只有「云端比本地多」(本地是云端子集) 才安全补回；identical/local_superset/diverged 都不动本地
         if (!rel || rel.relation !== 'cloud_superset') return null;
