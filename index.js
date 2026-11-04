@@ -43,7 +43,7 @@ try {
 } catch { window.__csSelfFolder = 'st-chat-sync'; }
 
 const extensionName = 'st_chat_sync';
-const PLUGIN_VERSION = '0.13.58'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
+const PLUGIN_VERSION = '0.13.61'; // ⚠️ 与 manifest.json version 同步升(扩展更新机制靠它), 面板顶部显示供用户自查版本
 const DEFAULT_SETTINGS = {
     owner: '',
     repo: '',
@@ -2209,19 +2209,23 @@ async function __csMarkCloudMsgShaAsync(p) {
                             //   锚点停在旧时刻 + lastCloudSha 已是云端当前值 + 内容其实一致 ⇒ 主判据恒真、传完还显「本地新」）。
                             //   与上传同口径的本地指纹（双头部 {a,b}）任一 == lastCloudSha ⇒ 判"一致"并**顺手刷新锚点**（自愈，之后走 mtime 快路）；
                             //   不同才真显示「本地新」。没有 sha / 读不出 / 分段（allowSha=false，记忆里是清单 sha）⇒ 维持主判据（宁可不治愈也不假一致）。
-                            if (sha && rowX.file_name) {
+                            // ★0.13.59：只要**任一**锚点在就拿它比（以前硬要求 lastCloudSha 在 ⇒ 只有"消息指纹"锚点的聊天被整段跳过
+                            //   ⇒ 那种聊天只要被 ST 重存一次就永久显「本地新」；作者手机/其它角色分页反复报的就是这形态）
+                            const __msgShaM = (settings.lastCloudMsgSha && settings.lastCloudMsgSha[cpath]) || '';
+                            if ((sha || __msgShaM) && rowX.file_name) {
                                 const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2, stamp);
-                                if (fp && (fp.a === sha || fp.b === sha || (settings.lastCloudMsgSha && settings.lastCloudMsgSha[cpath] && fp.c === settings.lastCloudMsgSha[cpath]))) { __csMarkChatSynced(cpath); try { saveSettingsDebounced(); } catch { } return false; }   // ★0.13.56 第三条：消息层相同 ⇒ 一致（ST 重存改头不改字也会命中）
+                                if (fp && ((sha && (fp.a === sha || fp.b === sha)) || (__msgShaM && fp.c === __msgShaM))) { __csMarkChatSynced(cpath); try { saveSettingsDebounced(); } catch { } return false; }   // ★0.13.56 第三条：消息层相同 ⇒ 一致（ST 重存改头不改字也会命中）
                             }
                             return true;
                         }
                         // ★0.13.46 回退：锚点缺 + 有 lastCloudSha（allowSha 只在整文件聊天档传 true）
                         if (!allowSha || !cpath) return false;            // 无任何记忆 / 分段聊天 ⇒ 继续不猜（与改前逐字同）
-                        if (!sha) return false;                           // 连 sha 都没有 ⇒ 不猜
+                        const __msgShaF = (settings.lastCloudMsgSha && settings.lastCloudMsgSha[cpath]) || '';
+                        if (!sha && !__msgShaF) return false;             // 两种锚点都没有 ⇒ 不猜
                         if (!rowX || !rowX.file_name) return false;
                         const fp = await __csLocalChatFp(cpath, rowX.file_name, name2, av2, stamp);
                         if (!fp) return false;                            // 本地读不出/空文件 ⇒ 不猜
-                        if (fp.a === sha || fp.b === sha || (settings.lastCloudMsgSha && settings.lastCloudMsgSha[cpath] && fp.c === settings.lastCloudMsgSha[cpath])) {   // ★0.13.56 三种口径任一相同 ⇒ 一致（顺手补锚点；不写云、不改文件）
+                        if ((sha && (fp.a === sha || fp.b === sha)) || (__msgShaF && fp.c === __msgShaF)) {   // ★0.13.56/0.13.59 任一锚点相同 ⇒ 一致（顺手补锚点；不写云、不改文件）
                             __csMarkChatSynced(cpath);
                             try { saveSettingsDebounced(); } catch { }
                             return false;
@@ -2791,7 +2795,56 @@ async function pullMergeCloudSuperset(avatar, knownLocal, cloud, cloudPath) {
         //   · greetConflict（两边都已有楼层 + 开场白不是同一版）⇒ 单条「导入当前聊天」会弹导入侧对话框；
         //   · 其余真分叉 ⇒ 调用方只提示、不写，也不再报"已是最新"（原来是把它混进"已最新"里）。
         //   （本函数只负责"云端⊇本地"的补楼；其余关系一律不动本地。）
-        if (rel && rel.relation === 'diverged') return { diverged: true, diff: rel, greetConflict: !!rel.greetConflict };
+        if (rel && rel.relation === 'diverged' && !rel.branchOnly) return { diverged: true, diff: rel, greetConflict: !!rel.greetConflict };
+        // ★0.13.60 末楼分支合并：云端这一楼多了分支（或两边各加了不同分支）⇒ 把**并集**写回本地，
+        //   当前显示跟随云端那一版（导入侧口径 = 云端优先）。不再当分叉拒绝、也不会多出一楼。
+        if (rel && rel.branchOnly && (rel.relation === 'cloud_superset' || rel.relation === 'diverged')) {
+            const nL = localMsgs.length;
+            const union = (rel.branchMerged || []).slice();
+            if (!nL || !union.length) return null;
+            const mergedB = localMsgs.slice();
+            const m2 = Object.assign({}, localMsgs[nL - 1]);
+            const cloudLast = cloudMsgs[nL - 1] || {};
+            m2.swipes = union;
+            const cloudCur = String(cloudLast.mes == null ? '' : cloudLast.mes);
+            let idxB = union.findIndex((t) => String(t) === cloudCur);
+            if (idxB < 0) idxB = Math.min(Math.max(Number(m2.swipe_id) || 0, 0), union.length - 1);
+            m2.swipe_id = idxB;
+            m2.mes = union[idxB];
+            mergedB[nL - 1] = m2;
+            if (csReallyGenerating()) { console.warn('[chat-sync] 用户正在生成，放弃末楼分支写回', knownLocal); return { blocked: true }; }
+            const headerObjB = parseHeader(cloud.content);
+            const saveAvB = String(avatar || '').includes('.png') ? String(avatar) : String(avatar || '') + '.png';
+            const resB = await fetch('/api/chats/save', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({
+                    avatar_url: saveAvB,
+                    file_name: String(knownLocal).replace(/\.jsonl$/i, ''),
+                    chat: [{ user_name: 'unused', character_name: 'unused', create_date: headerObjB.create_date || new Date().toISOString(), last_mes: headerObjB.last_mes || new Date().toISOString(), chat_metadata: headerObjB.chat_metadata || {} }].concat(mergedB),
+                    force: true,
+                }),
+            });
+            if (!resB.ok) { console.warn('[chat-sync] 末楼分支写回失败', knownLocal, resB.status); return null; }
+            settings.lastCloudSha[cloudPath] = cloud.sha;
+            __csMarkChatSynced(cloudPath);
+            // 内存 + DOM：只动末楼（分支并集 + 当前选中），其它楼一个字节不动
+            try {
+                const cB = ctx();
+                if (!cB.groupId && currentChatFileName() === knownLocal && Array.isArray(cB.chat) && cB.chat[nL - 1]) {
+                    const live = cB.chat[nL - 1];
+                    live.swipes = union.slice();
+                    live.swipe_id = idxB;
+                    live.mes = union[idxB];
+                    const TH = window.TavernHelper;
+                    if (TH && typeof TH.refreshOneMessage === 'function') { try { await TH.refreshOneMessage(nL - 1); } catch { } }
+                    else if (typeof __stCompat.redisplayChat === 'function') { try { await redisplayChat({ startIndex: nL - 1, fade: false }); } catch { } }
+                    else { try { await reloadCurrentChat(); } catch { } }
+                }
+            } catch (e2) { console.warn('[chat-sync] 末楼分支重绘失败(忽略)', e2); }
+            console.log('[chat-sync] 末楼分支合并：共 ' + union.length + ' 个版本，当前第 ' + (idxB + 1) + ' 版');
+            return { added: 0, branchMerged: union.length, localCount: __csFloorCount(localMsgs) };
+        }
         // 只有「云端比本地多」(本地是云端子集) 才安全补回；identical/local_superset/diverged 都不动本地
         if (!rel || rel.relation !== 'cloud_superset') return null;
         const sigs = new Set(localMsgs.map(messageSignature));
@@ -2996,9 +3049,11 @@ async function pullCharacterChats(charName) {
         if (result.length) {
             importedCount++;
             settings.lastCloudSha[p] = cloud.sha; // 记下这次拉取的云端 sha，下次相同则跳过
-            __csMarkChatSynced(p);   // ★0.13.47：新导入的本地文件=云端内容 ⇒ 同步点
             lastImportedFileName = result[result.length - 1]; // 取导入后实际文件名
             setLocalName(charName, p, lastImportedFileName); // 绑定 云路径↔本地导入名（收敛关键）
+            // ★0.13.59：先绑定再打同步点 —— __csMarkCloudMsgShaAsync 靠 syncMap 找本地文件，顺序反了就算不出"只算消息"的指纹，
+            //   于是导入过的聊天永远缺这一层锚点 ⇒ ST 重存文件后徽章只能拿整文件 sha 比 ⇒ 假「本地新」。
+            __csMarkChatSynced(p);   // ★0.13.47：新导入的本地文件=云端内容 ⇒ 同步点
         }
     }
     saveSettingsDebounced();
@@ -3066,7 +3121,14 @@ async function pushCurrentChat() {
         finally { window.__csConflictBusy = false; }
         if (decision === 'skip') { __csMarkChatSynced(p); saveSettingsDebounced(); toastr.info(`当前聊天「${localName}」已是最新，无需上传`); return; }   // ★0.13.47：判一致=同步点（原来没记锚点 ⇒ 之后徽章恒显"本地新"）
         // ★0.13.47 纪律：skip_cloud（云端更新）**不记锚点** —— 记了会把"云端新"也一起掩盖成"一致";cancel 同理
-        if (String(decision).startsWith('skip_cloud')) { const dn = Number(String(decision).split(':')[1] || 0); toastr.info(`检测到云端比本地多 ${dn} 层，本次上传已取消——需要云端新楼请点「导入当前聊天」拉回`); return; }
+        if (String(decision).startsWith('skip_cloud')) {
+            const dn = Number(String(decision).split(':')[1] || 0);
+            // ★0.13.60：末楼"只是多了几个分支"时 cloudTail 是 0 层 ⇒ 别再写"多 0 层"
+            toastr.info(dn > 0
+                ? `检测到云端比本地多 ${dn} 层，本次上传已取消——需要云端新楼请点「导入当前聊天」拉回`
+                : '云端的最新一楼比你多了几个分支（同一楼的不同版本），本次上传已取消——要拿回来请点「导入当前聊天」');
+            return;
+        }
         if (decision === 'cancel') { toastr.info('已取消上传'); return; }
     }
     if (!__csTryBusy()) { toastr.warning('已有同步在进行中，本次跳过，稍后再试'); return; }
@@ -4016,7 +4078,7 @@ async function deleteChatsBothSides(charName, fileNames, avatarHint) {
     if (!Array.isArray(fileNames) || !fileNames.length) return null;
     // 0.12.133 逐条进度(每条涉及本地+云端多次请求, 可能耗时): 让用户知道删到第几条
     try { showBusy(0, fileNames.length, `正在删除「${charName}」的聊天`); } catch { }
-    const avatar = getAvatarFor(charName);
+    const avatar = getAvatarFor(charName, avatarHint);   // ★0.13.59：调用方给了卡面就按卡面精确定位（同名卡不会删错/删不掉）
     const base = `sync/${charName}/chats/`;
     const ok = [], fail = []; const failReasons = [];
     const affectedStems = []; // 0.12.42: 记录所有被删文件名 → 最终按它精确剔除清单
@@ -4037,21 +4099,22 @@ async function deleteChatsBothSides(charName, fileNames, avatarHint) {
             if (!isCloudOnly) {
                 // 正在打开的聊天跳过(实测: API 删掉后酒馆自动保存又把内存版写回磁盘 → 提示先切走)
                 if (charName === (currentCharName() || '') && currentChatFileName() === fn) { fail.push(fn); failReasons.push({ name: fn, reason: '正在打开，先切换到别的聊天再删' }); continue; }
+                // ★0.13.59 本地删除一律"发完请求再回读核验"：以前 HTTP 400（找不到头像/文件）被当成"幂等跳过"，
+                //   于是名字取错时文件其实没删、界面还报"成功"（作者实报「删除选中没用」的根因就在这里）。
+                const __stillLocal = async () => {
+                    try {
+                        const rr = await fetch('/api/chats/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar || (charName + '.png'), ch_name: charName, file_name: stem }) });
+                        const jj = await rr.json();
+                        return Array.isArray(jj) && jj.length > 0;
+                    } catch { return false; }
+                };
                 const cIdxQa = getContext().characters.findIndex((x) => x && x.name === charName);
-                if (cIdxQa >= 0 && typeof deleteCharacterChatByName === 'function') {
-                    await deleteCharacterChatByName(cIdxQa, stem).catch(() => { });
-                    const stillLocal = await (async () => {
-                        try {
-                            const rr = await fetch('/api/chats/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar || charName + '.png', file_name: stem }) });
-                            const jj = await rr.json();
-                            return Array.isArray(jj) && jj.length > 0;
-                        } catch { return false; }
-                    })();
-                    if (stillLocal) { fail.push(fn); failReasons.push({ name: fn, reason: '本地删除未生效' }); continue; }
-                } else {
-                    const r = await fetch('/api/chats/delete', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar, chatfile: fn }) });
-                    if (!r.ok && r.status !== 400) { fail.push(fn); failReasons.push({ name: fn, reason: '本地删除 HTTP ' + r.status }); continue; }
+                if (cIdxQa >= 0 && typeof deleteCharacterChatByName === 'function') await deleteCharacterChatByName(cIdxQa, stem).catch(() => { });
+                if (await __stillLocal()) {
+                    // 退一步直接用官方接口删（角色索引找不到时也能按头像目录删）
+                    await fetch('/api/chats/delete', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar || (charName + '.png'), chatfile: fn }) }).catch(() => { });
                 }
+                if (await __stillLocal()) { fail.push(fn); failReasons.push({ name: fn, reason: '本地删除未生效（没找到这张卡的头像或文件）' }); continue; }
             }
             // ═══ 云端删除(0.12.41 补: 此前只删本地不删云→删不干净/还能拉取/再删报File not found) ═══
             // 分段+manifest+meta(如存在)
@@ -6239,6 +6302,43 @@ function messageSignature(m) {
     const date = m.send_date !== undefined ? String(m.send_date) : (m.create_date !== undefined ? String(m.create_date) : '');
     return kind + '|' + date + '|' + (m.swipe_id !== undefined ? String(m.swipe_id) : '') + '|' + jsonStableString(mes);
 }
+// ★0.13.60 分支口径：同一楼的多个 swipe 版本 = 同一楼的不同分支，**不是两条消息**。
+//   作者实报：手机在最新一楼多揉几个分支 → 上传选"覆盖" → 电脑端「导入当前聊天」被判「各有各的楼层，这次没有自动动任何一边」。
+//   根因：messageSignature 把 swipe_id + 当前 mes 算进签名 ⇒ 同一楼选了不同分支 = 两条不同消息 ⇒ 分叉。
+//   （酒馆只允许"最后一楼"继续开分支，所以新增分支只会出现在末楼 ⇒ 这里只处理末楼那一对。）
+function __csBranchSet(m) {
+    try {
+        const sw = (m && Array.isArray(m.swipes)) ? m.swipes : null;
+        const raw = (sw && sw.length) ? sw : [m ? m.mes : ''];
+        const out = [];
+        for (const x of raw) { const t = String(x == null ? '' : x); if (!out.includes(t)) out.push(t); }
+        return out;
+    } catch { return []; }
+}
+// 两楼是否"同一楼、只是分支集合不同"：同 is_user + 同 send_date，且版本集合有交集。
+//   null = 不是同一楼（原判定接手）；否则 { relation, merged }
+//   relation：identical（集合相同，只是当前选中不同）/ cloud_superset（云端 ⊇ 本地）/ local_superset（本地 ⊇ 云端）/ diverged（两边各加了不同分支）
+function __csBranchMergeInfo(a, b) {
+    try {
+        if (!a || !b) return null;
+        if (messageSignature(a) === messageSignature(b)) return null;   // 逐字一样 ⇒ 不用接管
+        if (!!a.is_user !== !!b.is_user) return null;
+        const da = String(a.send_date || a.create_date || '');
+        const db = String(b.send_date || b.create_date || '');
+        if (!da || da !== db) return null;                              // 楼层身份不同 ⇒ 真·两条消息
+        const A = __csBranchSet(a), B = __csBranchSet(b);
+        if (A.length <= 1 && B.length <= 1) return null;                // 单版本对单版本、字不同 = 真改动/分叉
+        const setA = new Set(A), setB = new Set(B);
+        if (!A.some((t) => setB.has(t))) return null;                   // 一个共同版本都没有 ⇒ 不当同一楼
+        const merged = [...A];
+        for (const t of B) if (!setA.has(t)) merged.push(t);
+        const aHasAllB = B.every((t) => setA.has(t));
+        const bHasAllA = A.every((t) => setB.has(t));
+        const relation = (aHasAllB && bHasAllA) ? 'identical'
+            : (bHasAllA ? 'cloud_superset' : (aHasAllB ? 'local_superset' : 'diverged'));
+        return { relation, merged, branchOnly: true };
+    } catch { return null; }
+}
 // 两个消息列表是否「完全一致」（逐条签名比对，顺序敏感）。用于内容级增量判断（是否已同步）。
 function sameMessageSequence(a, b) {
     const A = (a || []).map(messageSignature);
@@ -6258,6 +6358,18 @@ function classifyChatDiff(localMsgs, cloudMsgs) {
     const LM = Array.isArray(localMsgs) ? localMsgs : [];
     const CM = Array.isArray(cloudMsgs) ? cloudMsgs : [];
     const base = __classifyChatDiffCore(LM, CM);
+    // ★0.13.60 末楼"只是分支不同"：同一楼的多个 swipe 版本 ≠ 分叉（见 __csBranchMergeInfo 注释）
+    try {
+        const nB = LM.length, mB = CM.length;
+        if (nB === mB && nB >= 1) {
+            let prefixOk = true;
+            for (let i = 0; i < nB - 1; i++) { if (messageSignature(LM[i]) !== messageSignature(CM[i])) { prefixOk = false; break; } }
+            if (prefixOk) {
+                const bi = __csBranchMergeInfo(LM[nB - 1], CM[nB - 1]);
+                if (bi) return { relation: bi.relation, common: nB - 1, localTail: [], cloudTail: [], localCount: nB, cloudCount: mB, branchOnly: true, branchMerged: bi.merged, greetDiff: false };
+            }
+        }
+    } catch { }
     const L0 = LM[0], C0 = CM[0];
     if (L0 === undefined || C0 === undefined) return base;                 // 任一侧 0 条 ⇒ 逐字走原算法（0 楼保护/现行为不动）
     if (messageSignature(L0) === messageSignature(C0)) return base;        // 第 0 楼相同 ⇒ 与改前**逐字相同**
@@ -7190,6 +7302,14 @@ async function __csDoSelfUpdate(btn, remoteVer) {
        安全措施：一次性旗 cs_github_fallback / 整个兜底 try/catch / install 失败时弹手动重装提示。
        设置安全性已实测（8002）：删掉插件文件夹后 settings.json 里的数据完全不变。 */
     if (btn) { btn.disabled = false; btn.textContent = '⬆ 可更新'; }
+    /* ★W164b（作者报"手机端插件消失"）：TT/手机上禁用此兜底 —— TT 的 delete/install 接口
+       会把 third-party/ 前缀剥掉 ⇒ 删错路径/装错路径 ⇒ 插件从 third-party/ 目录消失。 */
+    const isTT = !!(window.__TAURITAVERN__ || window.__TAURITAVERN_MAIN_READY__);
+    const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+    if (isTT || isMobile) {
+        toastr.error('🌐 一键云同步：更新失败(' + (lastErr_s || '网络错误') + ')。Gitee 匿名克隆已被关闭，自动更新暂不支持 TT/手机。请用电脑浏览器打开酒馆 →「管理扩展」删除本插件后用以下链接重装（设置不会丢）：<br>https://github.com/SakiPr1me/st-chat-sync-release.git', null, { escapeHtml: false, timeOut: 20000 });
+        return;
+    }
     let ghTried = false;
     try { ghTried = localStorage.getItem('cs_github_fallback') === '1'; } catch (e) { }
     if (!ghTried) {
@@ -8942,19 +9062,26 @@ function wirePanelEvents() {
     })();
     $('cs_cln_del')?.addEventListener('click', async () => {
         const sel = $('cs_cln_char'); const st = $('cs_cln_status');
-        const charName = sel && sel.value;
+        // ★0.13.59：下拉值是「卡键」(L:<卡面> / C:<名>)，不是角色名 —— 直接当名字用会让本地删除拿不到头像（静默不删还报成功）
+        const kkDel = sel ? __parseCardKey(sel.value) : null;
+        const charName = kkDel ? kkDel.name : (sel ? sel.value : '');
+        const avatarDel = (kkDel && kkDel.kind === 'local') ? (kkDel.avatar || '') : (window.__clnAvatar || '');
         const chosen = [...document.querySelectorAll('input[name="cs_cln_sel"]:checked')].map((c) => c.value);
         if (!charName) { if (st) st.textContent = '请先选择角色'; return; }
         if (!chosen.length) { if (st) st.textContent = '请先勾选要删除的聊天'; return; }
         const okc = await csConfirm('⚠ 永久删除聊天记录', `将删除「${escapeHtml(charName)}」的 <b>${chosen.length}</b> 条聊天，<b>本地和云端一起删，删了就找不回来</b>：<br>${escapeHtml(csShortList(chosen, 8))}`);
         if (!okc) { if (st) st.textContent = '已取消'; return; }
         if (!__csTryBusy()) { if (st) st.textContent = '已有同步在进行中，稍后再试'; return; }
+        let msg = '';
         try {
             if (st) st.textContent = '删除中…';
-            const r = await deleteChatsBothSides(charName, chosen, window.__clnAvatar || '');
-            if (st) st.textContent = `删除完成：成功 ${r ? r.ok : 0} / 共 ${chosen.length}${r && r.fail ? `，失败 ${r.fail}（${csShortList(r.failReasons.map(x => x.name + ':' + x.reason))}）` : ''}`;
+            const r = await deleteChatsBothSides(charName, chosen, avatarDel);
+            msg = `删除完成：成功 ${r ? r.ok : 0} / 共 ${chosen.length}${r && r.fail ? `，失败 ${r.fail}（${csShortList(r.failReasons.map(x => x.name + ':' + x.reason))}）` : ''}`;
+        } catch (e) {
+            msg = '删除失败：' + ((e && e.message) || String(e));
         } finally { __csReleaseBusy(); }
-        await __renderCleanerList();
+        try { await __renderCleanerList(); } catch { }   // 重画会把状态行盖成"本地视图：N 条"
+        if (st && msg) st.textContent = msg;             // ★画完再写一遍，否则结果（尤其失败原因）用户根本看不见
     });
     // 面板打开时初始化角色下拉并自动列一次
     __fillCleanerChars().then(() => { if ($('cs_cln_char') && $('cs_cln_char').value) __renderCleanerList(); }).catch(() => { });
@@ -10944,6 +11071,8 @@ try {
             saveSettingsDebounced();
             __csUpdateFloat();
             __csUpdateMenuEntries();
+            try { __csHealStuckSwipeHide(); } catch { }
+            try { __csBranchSwipeSweep(); } catch { }   // ★0.13.60 拨这个开关＝立刻重扫楼内箭头（不再"等它自己冒出来"）
             try { __csBranchHudUpdate(); } catch { }
         }
         if (e.target && e.target.id && String(e.target.id).startsWith('cs_fpg_')) {
@@ -11677,9 +11806,12 @@ const CHAT_SYNC_CSS = `
    ① 原生只给最后一楼显示（style.css:1351 的 body:not(.swipeAllMessages) 那条 + .mes:not(.swipes_visible) 那条）⇒ 这里只把"我们标记的非最后一楼"从隐藏里放出来；
    ② body:not(.hideAllSwipeButtons) 前缀 = 生成中/酒馆主动藏箭头时本规则自动失效（跟随原生、fail-closed）；
    ③ opacity 需要 !important 是因为原生隐藏规则就用了 !important（opacity:0 !important）；.swipes-counter 的 hover 亮起按原生数值(0.7)补回。 */
-body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) :is(.swipe_left, .swipe_right, .swipes-counter) { opacity:.3 !important; visibility:visible; pointer-events:auto; interactivity:auto; }
-body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-counter.swipe-picker-enabled:hover,
-body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-counter.swipe-picker-enabled:focus-visible { opacity:.7 !important; }
+/* ★0.13.61 只跟「真的在生成」走（body.cs-gen-active = 插件自己监听生成事件维护）：
+   酒馆的 hideAllSwipeButtons 一旦卡住（生成报错/中断后没摘）会把原生箭头/我们补的箭头/悬浮条一起藏死，
+   那不该连累我们自己的控件 —— 我们只在「确实在生成」时藏。 */
+body:not(.cs-gen-active) .mes.cs-branch-swipe:not(.last_mes) :is(.swipe_left, .swipe_right, .swipes-counter) { opacity:.3 !important; visibility:visible; pointer-events:auto; interactivity:auto; }
+body:not(.cs-gen-active) .mes.cs-branch-swipe:not(.last_mes) .swipes-counter.swipe-picker-enabled:hover,
+body:not(.cs-gen-active) .mes.cs-branch-swipe:not(.last_mes) .swipes-counter.swipe-picker-enabled:focus-visible { opacity:.7 !important; }
 /* ★0.13.50 中间楼底部预留：三件套聚到右下角后，正文最后一行可能贴到它们（原生靠"最后一楼的底部预留"避开，中间楼没有）
    ⇒ 按主题给最后一楼的同款量(50px)留白；只加空白，不改颜色/尺寸。选择器用 #chat 前缀压过主题的 documentstyle 规则。 */
 #chat .mes.cs-branch-swipe:not(.last_mes) .mes_block { padding-bottom: 50px; }
@@ -11696,7 +11828,7 @@ body:not(.hideAllSwipeButtons) .mes.cs-branch-swipe:not(.last_mes) .swipes-count
   color: var(--SmartThemeBodyColor,#eee); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
   box-shadow:0 4px 14px rgba(0,0,0,.35); opacity:.9; transition:opacity .15s ease; user-select:none; -webkit-user-select:none; }
 #cs_branch_hud.cs-hud-off { opacity:.32; pointer-events:none; }
-body.hideAllSwipeButtons #cs_branch_hud { display:none; }
+body.cs-gen-active #cs_branch_hud { display:none; }   /* ★0.13.61 同上：只跟真生成走，不再被酒馆卡住的类连累 */
 #cs_branch_hud .cs-hud-btn { width:13px; height:13px; font-size:10px; line-height:1; display:flex; align-items:center; justify-content:center;
   cursor:pointer; border-radius:50%; padding:10px; margin:-10px; box-sizing:content-box; opacity:.78; }
 #cs_branch_hud .cs-hud-btn:hover, #cs_branch_hud .cs-hud-btn:focus-visible { opacity:1; background: color-mix(in srgb, var(--SmartThemeQuoteColor,#f0a35e) 20%, transparent); }
@@ -11737,14 +11869,18 @@ function __clearGenWatchdog() {
 }
 function __genStart() {
     __csGenerating = true;
+    __csChatActAt = Date.now();
+    try { document.body.classList.add('cs-gen-active'); } catch { }   // ★0.13.61：我们自己的"在生成"标记（只影响本插件控件）
     __clearGenWatchdog();
     __csGenWatchdog = setTimeout(() => {
         if (__csGenerating) { console.warn('[chat-sync] 生成标志 watchdog 兜底清除(疑似上游 GENERATION_ENDED 未触发)'); __csGenerating = false; }
+        try { document.body.classList.remove('cs-gen-active'); } catch { }
         __csGenWatchdog = null;
     }, __CS_GEN_WATCHDOG_MS);
 }
 function __genEnd() {
     __csGenerating = false;
+    try { document.body.classList.remove('cs-gen-active'); } catch { }
     __clearGenWatchdog();
 }
 eventSource.on(event_types.GENERATION_STARTED, __genStart);
@@ -11752,6 +11888,7 @@ eventSource.on(event_types.GENERATION_STARTED, __genStart);
 eventSource.on(event_types.GENERATION_STARTED, () => { if (window.__csAutoReplyT) { clearTimeout(window.__csAutoReplyT); window.__csAutoReplyT = null; } });
 eventSource.on(event_types.GENERATION_ENDED, () => {
     __genEnd();
+    try { __csHealStuckSwipeHide(true); } catch { }   // ★0.13.61 生成一结束就把酒馆可能卡住的"隐藏全部滑动按钮"治掉（原生箭头也跟着回来）
     if (!shouldAuto() || !settings.autoSyncOnReply || !currentCharName()) return;
     if (window.__csAutoReplyT) clearTimeout(window.__csAutoReplyT);
     // 挂起N秒(0.12.100 可填, 默认20): 期间若又重roll(新的STARTED)则取消; N秒内没有 → 上传当前聊天
@@ -11933,7 +12070,60 @@ function __csBranchSwipeUnplace(el) {
     } catch { }
 }
 
+// ★0.13.60 卡住的 hideAllSwipeButtons 自愈（作者实报：左右箭头和左下角悬浮条一起不见了，**原生的也没了**，刷新后才回来）：
+//   酒馆 sendMessageAsUser 是 hideSwipeButtons() → await Generate() → showSwipeButtons()；
+//   Generate 一旦**抛错**（中断/429/上游报错/页面被切走），showSwipeButtons() 那一步就被跳过
+//   ⇒ body 永久带着 hideAllSwipeButtons ⇒ 原生箭头、我们补的中间楼箭头、悬浮条**全被 CSS 藏掉**。
+//   只在"停止按钮不可见（确实没在生成）且已经卡住 >3s"时才清（真在生成时一个字节都不碰）。
+let __csHideAllSince = 0;
+// ★0.13.61b 「真的在生成」不能只看酒馆事件（GENERATION_ENDED 会漏，__csGenerating 可能卡死 15 分钟）：
+//   停止按钮可见 / body 上的 generating|swiping 标记 + **最近 15 秒内聊天 DOM 还有动静** ⇒ 才算活着。
+//   卡住的请求（报错/中断/上游不回）没有动静 ⇒ 15 秒后不再当作"在生成"，我们的箭头/悬浮条/酒馆的类都会放开。
+let __csChatActAt = 0;
+function __csGenAlive() {
+    try {
+        const stop = document.getElementById('mes_stop');
+        const stopVisible = !!(stop && getComputedStyle(stop).display !== 'none');
+        const ds = (document.body && document.body.dataset) || {};
+        const live = stopVisible || ds.generating === 'true' || ds.swiping === 'true';
+        if (!live) return false;
+        return (Date.now() - (__csChatActAt || 0)) < 15000;
+    } catch { return false; }
+}
+// 点击守卫：停止按钮还亮着就大概率在生成 ⇒ 不动（避免 swipe_picker 绕过酒馆的并发保护）；
+//   但"亮了超过 60 秒一点动静都没有" ⇒ 认定死了，允许用户自己点。
+function __csBranchClickBlocked() {
+    try {
+        const stop = document.getElementById('mes_stop');
+        const stopVisible = !!(stop && getComputedStyle(stop).display !== 'none');
+        if (!stopVisible) return false;
+        return (Date.now() - (__csChatActAt || 0)) < 60000;
+    } catch { return false; }
+}
+function __csHealStuckSwipeHide(force) {
+    try {
+        const body = document.body;
+        if (!body || !body.classList.contains('hideAllSwipeButtons')) { __csHideAllSince = 0; return; }
+        if (!force) {
+            const stop = document.getElementById('mes_stop');
+            const stopVisible = !!(stop && getComputedStyle(stop).display !== 'none');
+            if (stopVisible) {
+                if (__csGenAlive()) { __csHideAllSince = 0; return; }     // 真在生成 ⇒ 不动
+                // ★0.13.61b 停止按钮亮着但 15 秒没有任何动静 ⇒ 请求已经死了，照治（否则箭头永远不回来）
+            }
+            const now = Date.now();
+            if (!__csHideAllSince) __csHideAllSince = now;
+            if (now - __csHideAllSince < 3000) return;                    // 给酒馆 3 秒自己收尾
+        }
+        const SHOW = (typeof __stCompat !== 'undefined' && __stCompat && typeof __stCompat.showSwipeButtons === 'function') ? __stCompat.showSwipeButtons : null;
+        if (SHOW) { try { SHOW(); } catch { } }
+        if (document.body.classList.contains('hideAllSwipeButtons')) document.body.classList.remove('hideAllSwipeButtons');
+        __csHideAllSince = 0;
+        console.warn('[chat-sync] 酒馆的「隐藏全部滑动按钮」卡住了（生成已结束但没摘），已自愈');
+    } catch { }
+}
 function __csBranchSwipeSweep() {
+    try { __csHealStuckSwipeHide(); } catch { }
     try {
         const c = ctx();
         const chatArr = c && Array.isArray(c.chat) ? c.chat : null;
@@ -11962,6 +12152,7 @@ function __csBranchSwipeSweep() {
 // 点击 → 原生 swipe()（左右循环；forceSwipeId 自己归一到 [0, n-1]）
 // 共用切版内核（楼内箭头与常驻悬浮条同一套：复核 → 原生 swipe() → 锚住楼底边）
 async function __csBranchSwitchFloor(id, dir, e) {
+    if (__csBranchClickBlocked()) return;   // ★0.13.61b 还在生成（或刚停不久）⇒ 不动，避免打断/写坏
     const c = ctx();
     const chatArr = c && Array.isArray(c.chat) ? c.chat : null;
     if (!chatArr || !__csBranchSwipeOk(chatArr, id)) return;    // 点下去那一刻复核（可能拿到了过期标记/目标：刚被 ST 变成最后一楼等）
@@ -12043,6 +12234,8 @@ function __csBranchHudTarget() {
 }
 function __csBranchHudUpdate() {
     try {
+        try { __csHealStuckSwipeHide(); } catch { }
+        try { document.body.classList.toggle('cs-gen-active', __csGenAlive()); } catch { }   // ★0.13.61/61b：只跟"真活着"走（生成事件会漏，停止按钮也可能是死的）
         __csBranchHudEnsure();
         const hud = __csBranchHudEl();
         if (!hud) return;
@@ -12100,7 +12293,7 @@ async function __csBranchHudSwitch(e, dir) {
 (function __csWatchBranchSwipes() {
     let timer = null;
     const run = () => { try { __csBranchSwipeSweep(); } catch { } };
-    const later = () => { clearTimeout(timer); timer = setTimeout(run, 120); };
+    const later = () => { __csChatActAt = Date.now(); clearTimeout(timer); timer = setTimeout(run, 120); };   // ★0.13.61b 有动静=还活着
     if (typeof jQuery !== 'undefined') {
         jQuery(() => {
             try {
